@@ -6,7 +6,10 @@
 // exists and integrates this registry with the entity allocator.
 package component
 
-import "unsafe"
+import (
+	"reflect"
+	"unsafe"
+)
 
 // Hooks holds optional lifecycle callbacks for a component type.
 // All hooks are optional; nil means use default semantics.
@@ -32,6 +35,11 @@ type TypeInfo struct {
 	Name string
 	// Hooks is a copy of the hooks struct registered for this type.
 	Hooks Hooks
+	// Type is the reflect.Type of the registered component.
+	// Used by the table layer to construct typed slice columns via
+	// reflect.SliceOf(info.Type), ensuring the GC traces pointer-containing
+	// components correctly.
+	Type reflect.Type
 
 	// TODO(phase-1.5): add Component flecs.ID once the World assigns entity IDs to components.
 }

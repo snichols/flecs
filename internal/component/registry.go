@@ -37,6 +37,7 @@ func Register[T any](r *Registry) *TypeInfo {
 		Size:  unsafe.Sizeof(zero),
 		Align: unsafe.Alignof(zero),
 		Name:  t.String(),
+		Type:  t,
 	}
 	r.m[t] = info
 	r.order = append(r.order, t)

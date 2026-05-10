@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/snichols/flecs"
+	"github.com/snichols/flecs/internal/storage/table"
 )
 
 // fastForwardGen is a test helper that modifies the dense vector and page
@@ -326,6 +327,34 @@ func TestGetDeadAndStaleEntity(t *testing.T) {
 	}
 	if idx.Get(newID) == nil {
 		t.Fatal("Get returned nil for newly allocated entity")
+	}
+}
+
+func TestRecordTableField(t *testing.T) {
+	idx := New()
+	e := idx.Alloc()
+
+	rec := idx.Get(e)
+	if rec == nil {
+		t.Fatal("Get returned nil for allocated entity")
+	}
+	if rec.Table != nil {
+		t.Fatal("Table should be nil before assignment")
+	}
+
+	// Assign a fake table pointer (zero-value pointer suffices for field storage).
+	fakeTable := (*table.Table)(nil)
+	rec.Table = fakeTable
+
+	rec2 := idx.Get(e)
+	if rec2.Table != fakeTable {
+		t.Fatal("Record.Table not retained after Get")
+	}
+
+	// Free must zero the Table field.
+	idx.Free(e)
+	if rec.Table != nil {
+		t.Fatal("Free did not zero Record.Table")
 	}
 }
 

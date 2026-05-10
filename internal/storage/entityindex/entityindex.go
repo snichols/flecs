@@ -11,6 +11,7 @@ package entityindex
 
 import (
 	"github.com/snichols/flecs"
+	"github.com/snichols/flecs/internal/storage/table"
 )
 
 // entityPageSize is the number of records per page, mirroring
@@ -21,8 +22,6 @@ const entityPageSize = 64
 const entityPageMask = entityPageSize - 1
 
 // Record is the per-entity location record stored in the entity index.
-//
-// TODO(phase-1.4): add Table *table.Table field once the table package exists.
 type Record struct {
 	// Row is the row index within the entity's table component array.
 	Row uint32
@@ -31,6 +30,9 @@ type Record struct {
 	// allocated, or has been freed). The generation of the alive entity is
 	// encoded in dense[Dense] itself, not in this struct.
 	Dense uint32
+	// Table is the archetype table this entity currently lives in.
+	// Nil until the entity is placed into a table (Phase 1.5+).
+	Table *table.Table
 }
 
 // page is a fixed-size block of entity records, allocated lazily.
@@ -170,6 +172,7 @@ func (idx *Index) Free(id flecs.ID) bool {
 
 	idx.aliveCount--
 	r.Dense = 0 // mark as dead; tryGetRecord returns nil from now on
+	r.Table = nil
 
 	// Enqueue the gen-bumped ID for FIFO recycling.
 	idx.recycle = append(idx.recycle, flecs.MakeEntity(rawIdx, gen+1))
