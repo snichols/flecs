@@ -354,3 +354,132 @@ func TestTableSetMissingIDPanic(t *testing.T) {
 	p := Position{}
 	tbl.Set(0, flecs.ID(99), unsafe.Pointer(&p))
 }
+
+// ── Edge cache ────────────────────────────────────────────────────────────────
+
+func TestEdgeCacheMissOnFreshTable(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	if dst, ok := tbl.NextOnAdd(velID); ok || dst != nil {
+		t.Fatalf("NextOnAdd on fresh table: got (%p, %v), want (nil, false)", dst, ok)
+	}
+	if dst, ok := tbl.NextOnRemove(posID); ok || dst != nil {
+		t.Fatalf("NextOnRemove on fresh table: got (%p, %v), want (nil, false)", dst, ok)
+	}
+	if n := table.EdgeCount(tbl); n != 0 {
+		t.Fatalf("EdgeCount on fresh table: got %d, want 0", n)
+	}
+}
+
+func TestCacheAddEdgeHit(t *testing.T) {
+	src := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	dst := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+
+	src.CacheAddEdge(velID, dst)
+
+	got, ok := src.NextOnAdd(velID)
+	if !ok || got != dst {
+		t.Fatalf("NextOnAdd after CacheAddEdge: got (%p, %v), want (%p, true)", got, ok, dst)
+	}
+	if n := table.EdgeCount(src); n != 1 {
+		t.Fatalf("EdgeCount: got %d, want 1", n)
+	}
+}
+
+func TestCacheRemoveEdgeHit(t *testing.T) {
+	src := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+	dst := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+
+	src.CacheRemoveEdge(velID, dst)
+
+	got, ok := src.NextOnRemove(velID)
+	if !ok || got != dst {
+		t.Fatalf("NextOnRemove after CacheRemoveEdge: got (%p, %v), want (%p, true)", got, ok, dst)
+	}
+	if n := table.EdgeCount(src); n != 1 {
+		t.Fatalf("EdgeCount: got %d, want 1", n)
+	}
+}
+
+func TestCacheAddEdgeIdempotent(t *testing.T) {
+	src := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	dst := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+
+	src.CacheAddEdge(velID, dst)
+	// Same dst again: must not panic.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("idempotent CacheAddEdge panicked: %v", r)
+			}
+		}()
+		src.CacheAddEdge(velID, dst)
+	}()
+}
+
+func TestCacheAddEdgeConflictPanics(t *testing.T) {
+	src := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	dst1 := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+	dst2 := table.New([]flecs.ID{posID, strID}, []*component.TypeInfo{posInfo(), strInfo()})
+
+	src.CacheAddEdge(velID, dst1)
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		src.CacheAddEdge(velID, dst2) // conflict
+	}()
+	if !panicked {
+		t.Fatal("CacheAddEdge with conflicting dst should have panicked")
+	}
+}
+
+func TestCacheRemoveEdgeIdempotent(t *testing.T) {
+	src := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+	dst := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+
+	src.CacheRemoveEdge(velID, dst)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("idempotent CacheRemoveEdge panicked: %v", r)
+			}
+		}()
+		src.CacheRemoveEdge(velID, dst)
+	}()
+}
+
+func TestCacheRemoveEdgeConflictPanics(t *testing.T) {
+	src := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+	dst1 := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	dst2 := table.New([]flecs.ID{velID}, []*component.TypeInfo{velInfo()})
+
+	src.CacheRemoveEdge(velID, dst1)
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		src.CacheRemoveEdge(velID, dst2) // conflict
+	}()
+	if !panicked {
+		t.Fatal("CacheRemoveEdge with conflicting dst should have panicked")
+	}
+}
+
+func TestEdgeCountBothMaps(t *testing.T) {
+	src := table.New([]flecs.ID{posID, velID}, []*component.TypeInfo{posInfo(), velInfo()})
+	dstAdd := table.New([]flecs.ID{posID, velID, strID}, []*component.TypeInfo{posInfo(), velInfo(), strInfo()})
+	dstRem := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+
+	src.CacheAddEdge(strID, dstAdd)
+	src.CacheRemoveEdge(velID, dstRem)
+
+	if n := table.EdgeCount(src); n != 2 {
+		t.Fatalf("EdgeCount: got %d, want 2", n)
+	}
+}
