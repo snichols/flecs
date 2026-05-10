@@ -629,8 +629,8 @@ func TestCacheAddEdgeIdempotent(t *testing.T) {
 				panicked = true
 			}
 		}()
-		posTable.CacheAddEdge(velID, velTable)  // first: fine
-		posTable.CacheAddEdge(velID, posTable)  // conflict: should panic
+		posTable.CacheAddEdge(velID, velTable) // first: fine
+		posTable.CacheAddEdge(velID, posTable) // conflict: should panic
 	}()
 	if !panicked {
 		t.Fatal("CacheAddEdge with conflicting dst should have panicked")
