@@ -1,11 +1,16 @@
 package component
 
 import (
+	"fmt"
 	"reflect"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/ids"
 )
+
+// tagType is the sentinel reflect.Type used for raw entity or pair IDs registered
+// via EnsureID. Choosing struct{} keeps Size==0 and produces a nil table column.
+var tagType = reflect.TypeFor[struct{}]()
 
 // Registry maps reflect.Type values to their *TypeInfo metadata and maintains
 // insertion order for deterministic iteration. It also indexes by component
@@ -102,4 +107,56 @@ func (r *Registry) Each(fn func(reflect.Type, *TypeInfo)) {
 // Count returns the number of registered types.
 func (r *Registry) Count() int {
 	return len(r.order)
+}
+
+// EnsureID guarantees that id has an associated TypeInfo in the registry.
+// If id is already associated with a TypeInfo, that TypeInfo is returned unchanged.
+// Otherwise, a zero-size tag TypeInfo is created and associated with id.
+//
+// This is used by AddID to support raw entity IDs and unregistered pair IDs as tags.
+// A tag TypeInfo has Size==0 and no data column in the table layer, matching
+// the behaviour of zero-size components.
+func (r *Registry) EnsureID(id ids.ID) *TypeInfo {
+	if info, ok := r.byID[id]; ok {
+		return info
+	}
+	info := &TypeInfo{
+		Size:  0,
+		Align: 0,
+		Name:  "tag",
+		Type:  tagType,
+	}
+	r.AssociateID(info, id)
+	return info
+}
+
+// RegisterPairData ensures that pairID is associated with a per-pair TypeInfo
+// whose metadata (Size, Align, Type, Hooks) matches T's base TypeInfo, but with
+// a pointer-distinct instance and Name "pair(<base-name>)".
+//
+// Per-pair TypeInfo copies are required because AssociateID panics on associating
+// multiple IDs with one TypeInfo, and LookupByType[T] returns one ID per Go type.
+// Many pair IDs may share the same data type T by holding separate but
+// value-equivalent TypeInfos. The base T TypeInfo and its component ID are unmodified.
+//
+// Idempotent when called with the same T and pairID: returns the existing TypeInfo.
+// Panics if pairID is already associated with a different Go type than T.
+func RegisterPairData[T any](r *Registry, pairID ids.ID) *TypeInfo {
+	base := Register[T](r)
+	if existing, ok := r.byID[pairID]; ok {
+		if existing.Type != base.Type {
+			panic(fmt.Sprintf("component: RegisterPairData: pair ID already associated with type %v; cannot associate with %v",
+				existing.Type, base.Type))
+		}
+		return existing
+	}
+	pairInfo := &TypeInfo{
+		Size:  base.Size,
+		Align: base.Align,
+		Name:  "pair(" + base.Name + ")",
+		Hooks: base.Hooks,
+		Type:  base.Type,
+	}
+	r.AssociateID(pairInfo, pairID)
+	return pairInfo
 }

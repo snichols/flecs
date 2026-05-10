@@ -294,3 +294,135 @@ func TestLookupByIDNotFound(t *testing.T) {
 		t.Fatal("LookupByID returned non-nil for unknown ID")
 	}
 }
+
+// ── EnsureID ──────────────────────────────────────────────────────────────────
+
+func TestEnsureIDCreatesZeroSizeTypeInfo(t *testing.T) {
+	r := component.NewRegistry()
+	const rawID ids.ID = 42
+	info := r.EnsureID(rawID)
+
+	if info == nil {
+		t.Fatal("EnsureID returned nil")
+	}
+	if info.Size != 0 {
+		t.Errorf("EnsureID TypeInfo Size want 0, got %d", info.Size)
+	}
+	if info.Component != rawID {
+		t.Errorf("EnsureID TypeInfo Component want %d, got %d", rawID, info.Component)
+	}
+	// LookupByID must find it.
+	found, ok := r.LookupByID(rawID)
+	if !ok {
+		t.Fatal("LookupByID returned false for EnsureID'd id")
+	}
+	if found != info {
+		t.Fatal("LookupByID returned a different *TypeInfo than EnsureID")
+	}
+}
+
+func TestEnsureIDIdempotent(t *testing.T) {
+	r := component.NewRegistry()
+	const rawID ids.ID = 7
+	a := r.EnsureID(rawID)
+	b := r.EnsureID(rawID)
+	if a != b {
+		t.Fatal("EnsureID not idempotent: returned different pointers")
+	}
+}
+
+func TestEnsureIDReturnsExistingTypeInfo(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+	const posID ids.ID = 55
+	r.AssociateID(info, posID)
+
+	got := r.EnsureID(posID)
+	if got != info {
+		t.Fatal("EnsureID did not return the existing TypeInfo for a registered ID")
+	}
+}
+
+// ── RegisterPairData ──────────────────────────────────────────────────────────
+
+func TestRegisterPairDataBasic(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 1000
+	info := component.RegisterPairData[Position](r, pairID)
+
+	if info == nil {
+		t.Fatal("RegisterPairData returned nil")
+	}
+	if info.Size != unsafe.Sizeof(Position{}) {
+		t.Errorf("RegisterPairData Size want %d, got %d", unsafe.Sizeof(Position{}), info.Size)
+	}
+	if info.Type != reflect.TypeFor[Position]() {
+		t.Errorf("RegisterPairData Type mismatch")
+	}
+	if info.Component != pairID {
+		t.Errorf("RegisterPairData Component want %d, got %d", pairID, info.Component)
+	}
+	if len(info.Name) == 0 {
+		t.Error("RegisterPairData Name is empty")
+	}
+
+	// LookupByID must find it.
+	found, ok := r.LookupByID(pairID)
+	if !ok {
+		t.Fatal("LookupByID returned false for pair-registered ID")
+	}
+	if found != info {
+		t.Fatal("LookupByID returned a different *TypeInfo than RegisterPairData")
+	}
+}
+
+func TestRegisterPairDataPointerDistinct(t *testing.T) {
+	// The per-pair TypeInfo must be pointer-distinct from the base T TypeInfo.
+	r := component.NewRegistry()
+	base := component.Register[Position](r)
+	const pairID ids.ID = 2000
+	pairInfo := component.RegisterPairData[Position](r, pairID)
+	if base == pairInfo {
+		t.Fatal("RegisterPairData returned the same *TypeInfo as Register (must be pointer-distinct)")
+	}
+}
+
+func TestRegisterPairDataIdempotent(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 3000
+	a := component.RegisterPairData[Position](r, pairID)
+	b := component.RegisterPairData[Position](r, pairID)
+	if a != b {
+		t.Fatal("RegisterPairData not idempotent: returned different pointers for same (T, pairID)")
+	}
+}
+
+func TestRegisterPairDataConflictPanics(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 4000
+	component.RegisterPairData[Position](r, pairID)
+
+	type Other struct{ Z float64 }
+
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Fatal("RegisterPairData with conflicting type should panic, got none")
+		}
+	}()
+	component.RegisterPairData[Other](r, pairID) // same pairID, different type → panic
+}
+
+func TestRegisterPairDataBaseTypeInfoUnmodified(t *testing.T) {
+	// Registering pair data must not change the base T TypeInfo's Component field.
+	r := component.NewRegistry()
+	base := component.Register[Position](r)
+	const compID ids.ID = 5000
+	r.AssociateID(base, compID)
+
+	const pairID ids.ID = 6000
+	component.RegisterPairData[Position](r, pairID)
+
+	if base.Component != compID {
+		t.Errorf("base TypeInfo.Component changed: want %d, got %d", compID, base.Component)
+	}
+}
