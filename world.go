@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
+	"github.com/snichols/flecs/internal/storage/componentindex"
 	"github.com/snichols/flecs/internal/storage/entityindex"
 	"github.com/snichols/flecs/internal/storage/table"
 )
@@ -25,21 +26,26 @@ import (
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	index    *entityindex.Index
-	registry *component.Registry
-	tables   map[string]*table.Table // sigKey(sorted []ID) → table
-	empty    *table.Table            // canonical empty-signature table for new entities
+	index     *entityindex.Index
+	registry  *component.Registry
+	tables    map[string]*table.Table // sigKey(sorted []ID) → table
+	empty     *table.Table            // canonical empty-signature table for new entities
+	compIndex *componentindex.Index   // reverse map: component ID → tables containing it
 }
 
 // New initializes and returns an empty World.
 func New() *World {
 	w := &World{
-		index:    entityindex.New(),
-		registry: component.NewRegistry(),
-		tables:   make(map[string]*table.Table),
+		index:     entityindex.New(),
+		registry:  component.NewRegistry(),
+		tables:    make(map[string]*table.Table),
+		compIndex: componentindex.New(),
 	}
 	w.empty = table.New([]ID{}, []*component.TypeInfo{})
 	w.tables[sigKey(nil)] = w.empty
+	for _, id := range w.empty.Type() {
+		w.compIndex.Register(id, w.empty)
+	}
 	return w
 }
 
@@ -243,6 +249,9 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			}
 			newTable = table.New(newSig, types)
 			w.tables[key] = newTable
+			for _, id := range newTable.Type() {
+				w.compIndex.Register(id, newTable)
+			}
 		}
 		// Cache the result for future single-component transitions from oldTable.
 		if oldTable != nil {
@@ -295,6 +304,20 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	// Update the migrating entity's record to point at the new location.
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
+}
+
+// TablesFor returns a snapshot of all archetype tables that contain
+// componentID, in registration order. Returns an empty (non-nil) slice when no
+// tables are registered for componentID.
+func (w *World) TablesFor(componentID ID) []*table.Table {
+	return w.compIndex.TablesFor(componentID)
+}
+
+// EachTableFor calls fn for every archetype table containing componentID, in
+// registration order. fn returns false to stop iteration early. No allocation
+// is performed; this is the hot path for Phase 3 query iteration.
+func (w *World) EachTableFor(componentID ID, fn func(*table.Table) bool) {
+	w.compIndex.Each(componentID, fn)
 }
 
 // sigKey encodes a sorted []ID as a string map key.

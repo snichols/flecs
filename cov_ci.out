@@ -1,0 +1,12 @@
+mode: set
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:27.19,29.2 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:34.64,36.32 2 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:36.32,37.20 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:37.20,39.4 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:41.2,41.38 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:47.64,52.2 4 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:60.72,61.39 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:61.39,62.13 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:62.13,64.4 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:69.49,71.2 1 1
+github.com/snichols/flecs/internal/storage/componentindex/componentindex.go:75.41,77.2 1 1
