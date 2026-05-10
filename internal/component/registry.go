@@ -3,20 +3,25 @@ package component
 import (
 	"reflect"
 	"unsafe"
+
+	"github.com/snichols/flecs/internal/ids"
 )
 
 // Registry maps reflect.Type values to their *TypeInfo metadata and maintains
-// insertion order for deterministic iteration.
+// insertion order for deterministic iteration. It also indexes by component
+// entity ID for reverse lookups.
 // The registry is single-threaded by contract; concurrent access is not supported.
 type Registry struct {
 	m     map[reflect.Type]*TypeInfo
 	order []reflect.Type
+	byID  map[ids.ID]*TypeInfo
 }
 
 // NewRegistry returns a new, empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		m: make(map[reflect.Type]*TypeInfo),
+		m:    make(map[reflect.Type]*TypeInfo),
+		byID: make(map[ids.ID]*TypeInfo),
 	}
 }
 
@@ -62,6 +67,27 @@ func LookupByType[T any](r *Registry) (*TypeInfo, bool) {
 // LookupByReflectType returns the *TypeInfo for t, or (nil, false) if t is not registered.
 func (r *Registry) LookupByReflectType(t reflect.Type) (*TypeInfo, bool) {
 	info, ok := r.m[t]
+	return info, ok
+}
+
+// AssociateID sets info.Component to id and indexes info by id in the byID map.
+// Panics if id == 0 or if a different *TypeInfo is already associated with that id.
+// Idempotent when called with the same info and same id.
+func (r *Registry) AssociateID(info *TypeInfo, id ids.ID) {
+	if id == 0 {
+		panic("component: AssociateID called with zero ID")
+	}
+	if existing, ok := r.byID[id]; ok && existing != info {
+		panic("component: AssociateID: id already associated with a different TypeInfo")
+	}
+	info.Component = id
+	r.byID[id] = info
+}
+
+// LookupByID returns the *TypeInfo associated with the given component entity ID,
+// or (nil, false) if no type has been associated with that ID.
+func (r *Registry) LookupByID(id ids.ID) (*TypeInfo, bool) {
+	info, ok := r.byID[id]
 	return info, ok
 }
 

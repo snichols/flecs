@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
+	"github.com/snichols/flecs/internal/ids"
 )
 
 type Position struct{ X, Y float32 }
@@ -221,5 +222,75 @@ func TestCount(t *testing.T) {
 	component.Register[Velocity](r)
 	if r.Count() != 2 {
 		t.Errorf("Count = %d after two Registers, want 2", r.Count())
+	}
+}
+
+func TestAssociateIDBasic(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+
+	const testID ids.ID = 42
+	r.AssociateID(info, testID)
+
+	if info.Component != testID {
+		t.Fatalf("Component field want %d, got %d", testID, info.Component)
+	}
+
+	found, ok := r.LookupByID(testID)
+	if !ok {
+		t.Fatal("LookupByID returned false for associated ID")
+	}
+	if found != info {
+		t.Fatal("LookupByID returned a different *TypeInfo")
+	}
+}
+
+func TestAssociateIDIdempotent(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+	const testID ids.ID = 7
+	r.AssociateID(info, testID)
+	r.AssociateID(info, testID) // same call — must not panic
+	if info.Component != testID {
+		t.Fatalf("Component field changed after idempotent call: got %d", info.Component)
+	}
+}
+
+func TestAssociateIDZeroPanics(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for zero ID, got none")
+		}
+	}()
+	r.AssociateID(info, 0)
+}
+
+func TestAssociateIDConflictPanics(t *testing.T) {
+	r := component.NewRegistry()
+	info1 := component.Register[Position](r)
+
+	type Other struct{ Z float32 }
+	info2 := component.Register[Other](r)
+
+	const testID ids.ID = 5
+	r.AssociateID(info1, testID)
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Fatal("expected panic for conflicting TypeInfo, got none")
+		}
+	}()
+	r.AssociateID(info2, testID)
+}
+
+func TestLookupByIDNotFound(t *testing.T) {
+	r := component.NewRegistry()
+	found, ok := r.LookupByID(99)
+	if ok {
+		t.Fatal("LookupByID returned true for unknown ID")
+	}
+	if found != nil {
+		t.Fatal("LookupByID returned non-nil for unknown ID")
 	}
 }

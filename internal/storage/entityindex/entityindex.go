@@ -10,7 +10,7 @@
 package entityindex
 
 import (
-	"github.com/snichols/flecs"
+	"github.com/snichols/flecs/internal/ids"
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
@@ -53,17 +53,17 @@ type page [entityPageSize]Record
 // their generations already bumped by 1. Alloc drains the queue before
 // allocating a fresh index.
 type Index struct {
-	dense      []flecs.ID // dense[0] = sentinel; [1:aliveCount] = alive entities
-	recycle    []flecs.ID // FIFO queue of recycled IDs (gen already bumped)
-	pages      []*page    // sparse: pages[id>>6] is *[64]Record
-	aliveCount int        // length of alive section including sentinel at [0]
-	maxID      uint32     // highest raw entity index ever issued
+	dense      []ids.ID // dense[0] = sentinel; [1:aliveCount] = alive entities
+	recycle    []ids.ID // FIFO queue of recycled IDs (gen already bumped)
+	pages      []*page  // sparse: pages[id>>6] is *[64]Record
+	aliveCount int      // length of alive section including sentinel at [0]
+	maxID      uint32   // highest raw entity index ever issued
 }
 
 // New returns an initialized, empty entity index.
 func New() *Index {
 	return &Index{
-		dense:      make([]flecs.ID, 1), // dense[0] = sentinel ID(0)
+		dense:      make([]ids.ID, 1), // dense[0] = sentinel ID(0)
 		aliveCount: 1,
 	}
 }
@@ -104,7 +104,7 @@ func (idx *Index) tryGetRecord(rawIdx uint32) *Record {
 // is permanently reserved as the null/invalid entity sentinel, matching ECS
 // convention). The returned ID encodes the raw index in the lower 32 bits and
 // the generation counter in the upper 32 bits.
-func (idx *Index) Alloc() flecs.ID {
+func (idx *Index) Alloc() ids.ID {
 	if len(idx.recycle) > 0 {
 		// Recycle: pop oldest freed ID (FIFO).
 		rID := idx.recycle[0]
@@ -123,7 +123,7 @@ func (idx *Index) Alloc() flecs.ID {
 
 	// Fresh allocation.
 	idx.maxID++
-	id := flecs.MakeEntity(idx.maxID, 0)
+	id := ids.MakeEntity(idx.maxID, 0)
 	idx.dense = append(idx.dense, id)
 
 	p := idx.ensurePage(idx.maxID)
@@ -144,7 +144,7 @@ func (idx *Index) Alloc() flecs.ID {
 // If the entity's generation is already math.MaxUint32, Free panics. Wrapping
 // silently would produce duplicate live IDs after 2^32 frees of the same slot;
 // panicking is safer for this practically-impossible case.
-func (idx *Index) Free(id flecs.ID) bool {
+func (idx *Index) Free(id ids.ID) bool {
 	rawIdx := id.Index()
 	r := idx.tryGetRecord(rawIdx)
 	if r == nil {
@@ -175,7 +175,7 @@ func (idx *Index) Free(id flecs.ID) bool {
 	r.Table = nil
 
 	// Enqueue the gen-bumped ID for FIFO recycling.
-	idx.recycle = append(idx.recycle, flecs.MakeEntity(rawIdx, gen+1))
+	idx.recycle = append(idx.recycle, ids.MakeEntity(rawIdx, gen+1))
 	return true
 }
 
@@ -184,7 +184,7 @@ func (idx *Index) Free(id flecs.ID) bool {
 // An ID is alive if and only if its raw index has an alive record AND the ID
 // stored in dense at that record's Dense position matches id (same generation).
 // Index 0 and any never-allocated or freed ID return false.
-func (idx *Index) IsAlive(id flecs.ID) bool {
+func (idx *Index) IsAlive(id ids.ID) bool {
 	rawIdx := id.Index()
 	if rawIdx == 0 {
 		return false
@@ -205,7 +205,7 @@ func (idx *Index) IsAlive(id flecs.ID) bool {
 // updates the slice header, leaving existing *page values unchanged. A pointer
 // obtained via Get is therefore safe to hold across any number of Alloc/Free
 // calls that do not affect that specific page.
-func (idx *Index) Get(id flecs.ID) *Record {
+func (idx *Index) Get(id ids.ID) *Record {
 	rawIdx := id.Index()
 	if rawIdx == 0 {
 		return nil
@@ -230,7 +230,7 @@ func (idx *Index) Count() int {
 // Callbacks must not call Alloc or Free during iteration. Doing so modifies the
 // dense slice in ways that may skip or double-visit entries. If early exit is
 // needed, use a separate boolean flag inside fn.
-func (idx *Index) Each(fn func(id flecs.ID, rec *Record)) {
+func (idx *Index) Each(fn func(id ids.ID, rec *Record)) {
 	for i := 1; i < idx.aliveCount; i++ {
 		id := idx.dense[i]
 		rawIdx := id.Index()

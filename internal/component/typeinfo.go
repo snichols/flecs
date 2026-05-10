@@ -1,15 +1,19 @@
 // Package component implements the component metadata layer for the flecs Go port.
 // It provides TypeInfo (size, alignment, name, lifecycle hooks) and a Registry
 // keyed by reflect.Type.
-//
-// Component IDs are not issued here; that work lands in Phase 1.5 when World
-// exists and integrates this registry with the entity allocator.
 package component
 
 import (
 	"reflect"
 	"unsafe"
+
+	"github.com/snichols/flecs/internal/ids"
 )
+
+// EntityCallback is invoked by the World on lifecycle events.
+// The World is passed as any to avoid an import cycle; callers in the flecs
+// package type-assert it back to *flecs.World.
+type EntityCallback func(world any, entity ids.ID, ptr unsafe.Pointer)
 
 // Hooks holds optional lifecycle callbacks for a component type.
 // All hooks are optional; nil means use default semantics.
@@ -19,7 +23,18 @@ type Hooks struct {
 	// (runtime.memmove equivalent). Reserved for future use.
 	Move func(dst, src unsafe.Pointer)
 
-	// Reserved for OnAdd/OnSet/OnRemove — wired in Phase 1.5 when World exists.
+	// OnAdd is called when the component is added to an entity.
+	// Wired by the World in Phase 5 (observers); field exists here so Phase 5
+	// does not need to touch every call site.
+	OnAdd EntityCallback
+
+	// OnSet is called when the component value is set on an entity.
+	// Wired by the World in Phase 5 (observers).
+	OnSet EntityCallback
+
+	// OnRemove is called when the component is removed from an entity.
+	// Wired by the World in Phase 5 (observers).
+	OnRemove EntityCallback
 }
 
 // TypeInfo describes a Go type registered as a component.
@@ -40,6 +55,7 @@ type TypeInfo struct {
 	// reflect.SliceOf(info.Type), ensuring the GC traces pointer-containing
 	// components correctly.
 	Type reflect.Type
-
-	// TODO(phase-1.5): add Component flecs.ID once the World assigns entity IDs to components.
+	// Component is the entity ID assigned to this type when it is registered
+	// as a component-entity by the World. Zero means not yet associated.
+	Component ids.ID
 }
