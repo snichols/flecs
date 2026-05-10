@@ -30,6 +30,11 @@ type Table struct {
 	columns  []*Column      // columns[i] corresponds to sig[i]; nil for tags (Size==0)
 	entities []ids.ID       // parallel entity-ID column
 	colIndex map[ids.ID]int // O(1) id-to-index lookup
+	// addEdges and removeEdges are lazily allocated on first CacheAddEdge /
+	// CacheRemoveEdge call. Tables that are never migrated through pay no
+	// map-header overhead.
+	addEdges    map[ids.ID]*Table // (this, +id) → destination table
+	removeEdges map[ids.ID]*Table // (this, -id) → destination table
 }
 
 // New constructs a Table for the given sorted component-id signature.
@@ -154,4 +159,54 @@ func (t *Table) Get(row int, id ids.ID) unsafe.Pointer {
 		return nil // tag
 	}
 	return col.PtrAt(row)
+}
+
+// NextOnAdd returns the cached destination table for adding id to this table's
+// signature, and true if the edge is cached. Returns (nil, false) on a miss.
+// Not goroutine-safe; matches the Phase 1 single-threaded World invariant.
+func (t *Table) NextOnAdd(id ids.ID) (*Table, bool) {
+	if t.addEdges == nil {
+		return nil, false
+	}
+	dst, ok := t.addEdges[id]
+	return dst, ok
+}
+
+// NextOnRemove returns the cached destination table for removing id from this
+// table's signature, and true if the edge is cached. Returns (nil, false) on a miss.
+// Not goroutine-safe; matches the Phase 1 single-threaded World invariant.
+func (t *Table) NextOnRemove(id ids.ID) (*Table, bool) {
+	if t.removeEdges == nil {
+		return nil, false
+	}
+	dst, ok := t.removeEdges[id]
+	return dst, ok
+}
+
+// CacheAddEdge records that adding id to this table's signature leads to dst.
+// Idempotent if dst is the same pointer. Panics if a different *Table is already
+// cached for (t, +id) — this indicates a correctness bug upstream.
+// Not goroutine-safe; matches the Phase 1 single-threaded World invariant.
+func (t *Table) CacheAddEdge(id ids.ID, dst *Table) {
+	if t.addEdges == nil {
+		t.addEdges = make(map[ids.ID]*Table)
+	}
+	if existing, ok := t.addEdges[id]; ok && existing != dst {
+		panic("table: CacheAddEdge: conflicting destination for same (table, id)")
+	}
+	t.addEdges[id] = dst
+}
+
+// CacheRemoveEdge records that removing id from this table's signature leads to dst.
+// Idempotent if dst is the same pointer. Panics if a different *Table is already
+// cached for (t, -id) — this indicates a correctness bug upstream.
+// Not goroutine-safe; matches the Phase 1 single-threaded World invariant.
+func (t *Table) CacheRemoveEdge(id ids.ID, dst *Table) {
+	if t.removeEdges == nil {
+		t.removeEdges = make(map[ids.ID]*Table)
+	}
+	if existing, ok := t.removeEdges[id]; ok && existing != dst {
+		panic("table: CacheRemoveEdge: conflicting destination for same (table, id)")
+	}
+	t.removeEdges[id] = dst
 }

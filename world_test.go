@@ -438,3 +438,201 @@ func TestSetUsesUnsafePointerCorrectly(t *testing.T) {
 	}
 	_ = unsafe.Sizeof(p) // just ensure unsafe import is used
 }
+
+// ── Edge cache ────────────────────────────────────────────────────────────────
+
+// TestEdgeCacheHitOnSecondMigration verifies that after the first Set[Position]
+// populates the add-edge on the empty table, the second Set[Position] on a
+// different entity finds the cached edge and produces correct values.
+func TestEdgeCacheHitOnSecondMigration(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	e1 := w.NewEntity()
+	emptyTable := flecs.TableOf(w, e1)
+	flecs.Set(w, e1, Position{1, 2})
+	posTable := flecs.TableOf(w, e1)
+
+	// After first migration the empty table must have an add-edge for posID.
+	dst, ok := emptyTable.NextOnAdd(posID)
+	if !ok {
+		t.Fatal("add-edge not cached after first Set[Position]")
+	}
+	if dst != posTable {
+		t.Fatal("cached add-edge points to wrong table")
+	}
+
+	// Second entity migrates via the cache path.
+	e2 := w.NewEntity()
+	flecs.Set(w, e2, Position{3, 4})
+	if flecs.TableOf(w, e2) != posTable {
+		t.Fatal("e2 not in same table as e1 after cache-hit migration")
+	}
+
+	got1, _ := flecs.Get[Position](w, e1)
+	got2, _ := flecs.Get[Position](w, e2)
+	if got1 != (Position{1, 2}) || got2 != (Position{3, 4}) {
+		t.Fatalf("values wrong after cache-hit migration: e1=%+v e2=%+v", got1, got2)
+	}
+}
+
+// TestEdgeCacheRoundTrip verifies that both the add-edge (empty +P→[P]) and
+// the remove-edge ([P] -P→empty) are cached after a Set followed by Remove.
+func TestEdgeCacheRoundTrip(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	e := w.NewEntity()
+	emptyTable := flecs.TableOf(w, e)
+
+	flecs.Set(w, e, Position{1, 2})
+	posTable := flecs.TableOf(w, e)
+
+	flecs.Remove[Position](w, e)
+	backTable := flecs.TableOf(w, e)
+
+	addDst, addOK := emptyTable.NextOnAdd(posID)
+	if !addOK || addDst != posTable {
+		t.Fatalf("add-edge wrong: ok=%v dst=%p want=%p", addOK, addDst, posTable)
+	}
+
+	remDst, remOK := posTable.NextOnRemove(posID)
+	if !remOK || remDst != backTable {
+		t.Fatalf("remove-edge wrong: ok=%v dst=%p want=%p", remOK, remDst, backTable)
+	}
+
+	// Subsequent Set must hit the cached add-edge.
+	flecs.Set(w, e, Position{5, 6})
+	if flecs.TableOf(w, e) != posTable {
+		t.Fatal("second Set did not land in cached [P] table")
+	}
+}
+
+// TestEdgeCacheDistinctComponents verifies that Set[Position] and Set[Velocity]
+// produce two distinct add-edges on the empty table.
+func TestEdgeCacheDistinctComponents(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
+
+	ep := w.NewEntity()
+	emptyTable := flecs.TableOf(w, ep)
+	flecs.Set(w, ep, Position{1, 0})
+	posTable := flecs.TableOf(w, ep)
+
+	ev := w.NewEntity()
+	flecs.Set(w, ev, Velocity{0, 1})
+	velTable := flecs.TableOf(w, ev)
+
+	pdst, pok := emptyTable.NextOnAdd(posID)
+	vdst, vok := emptyTable.NextOnAdd(velID)
+
+	if !pok || pdst != posTable {
+		t.Fatalf("Position add-edge wrong: ok=%v dst=%p want=%p", pok, pdst, posTable)
+	}
+	if !vok || vdst != velTable {
+		t.Fatalf("Velocity add-edge wrong: ok=%v dst=%p want=%p", vok, vdst, velTable)
+	}
+	if posTable == velTable {
+		t.Fatal("Position and Velocity should have distinct destination tables")
+	}
+}
+
+// TestEdgeCacheTagComponent verifies that Set of a zero-size tag component
+// still populates an add-edge on the source table.
+func TestEdgeCacheTagComponent(t *testing.T) {
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+
+	e := w.NewEntity()
+	emptyTable := flecs.TableOf(w, e)
+	flecs.Set(w, e, Tag{})
+	tagTable := flecs.TableOf(w, e)
+
+	dst, ok := emptyTable.NextOnAdd(tagID)
+	if !ok || dst != tagTable {
+		t.Fatalf("tag add-edge wrong: ok=%v dst=%p want=%p", ok, dst, tagTable)
+	}
+}
+
+// TestEdgeCacheNoLeak verifies that migrating empty→[P]→[P,V] puts the +P edge
+// on the empty table and the +V edge on the [P] table — not a spurious +V on
+// the empty table or a compound edge anywhere.
+func TestEdgeCacheNoLeak(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
+
+	e := w.NewEntity()
+	emptyTable := flecs.TableOf(w, e)
+
+	flecs.Set(w, e, Position{1, 0})
+	posTable := flecs.TableOf(w, e)
+
+	flecs.Set(w, e, Velocity{0, 1})
+	pvTable := flecs.TableOf(w, e)
+
+	if _, ok := emptyTable.NextOnAdd(posID); !ok {
+		t.Fatal("empty table missing +P→[P] edge")
+	}
+	if dst, ok := emptyTable.NextOnAdd(velID); ok {
+		t.Fatalf("empty table has spurious +V edge pointing to %p", dst)
+	}
+
+	pvDst, pvOK := posTable.NextOnAdd(velID)
+	if !pvOK || pvDst != pvTable {
+		t.Fatalf("[P] table +V edge wrong: ok=%v dst=%p want=%p", pvOK, pvDst, pvTable)
+	}
+}
+
+// TestCacheAddEdgeIdempotent verifies that CacheAddEdge is idempotent for the
+// same dst and panics when a conflicting dst is given for the same (table, id).
+func TestCacheAddEdgeIdempotent(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
+
+	// Set up two destination tables by migrating entities.
+	ep := w.NewEntity()
+	flecs.Set(w, ep, Position{})
+	posTable := flecs.TableOf(w, ep)
+
+	ev := w.NewEntity()
+	flecs.Set(w, ev, Velocity{})
+	velTable := flecs.TableOf(w, ev)
+
+	// emptyTable already has +posID→posTable cached by the above Set calls.
+	emptyTable := flecs.TableOf(w, w.NewEntity())
+	dst, ok := emptyTable.NextOnAdd(posID)
+	if !ok {
+		t.Fatal("add-edge should be populated after Set[Position]")
+	}
+
+	// Idempotent: caching same dst again must not panic.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("idempotent CacheAddEdge panicked: %v", r)
+			}
+		}()
+		emptyTable.CacheAddEdge(posID, dst)
+	}()
+
+	// Conflict: posTable has no edge for velID yet; cache two different dsts → panic.
+	if posTable == velTable {
+		t.Skip("pos and vel tables are the same pointer — cannot test conflict")
+	}
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		posTable.CacheAddEdge(velID, velTable)  // first: fine
+		posTable.CacheAddEdge(velID, posTable)  // conflict: should panic
+	}()
+	if !panicked {
+		t.Fatal("CacheAddEdge with conflicting dst should have panicked")
+	}
+}

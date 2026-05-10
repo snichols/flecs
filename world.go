@@ -213,19 +213,46 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	}
 
 	// Look up or create the destination table.
-	key := sigKey(newSig)
-	newTable, exists := w.tables[key]
-	if !exists {
-		types := make([]*component.TypeInfo, len(newSig))
-		for i, id := range newSig {
-			info, ok := w.registry.LookupByID(id)
-			if !ok {
-				panic("flecs: migrate: component ID not registered")
-			}
-			types[i] = info
+	// For single-component transitions, consult the edge cache first to avoid
+	// the sigKey encode + map lookup on repeated migrations of the same shape.
+	var newTable *table.Table
+
+	switch {
+	case removeID != 0 && addID == 0 && oldTable != nil:
+		if dst, ok := oldTable.NextOnRemove(removeID); ok {
+			newTable = dst
 		}
-		newTable = table.New(newSig, types)
-		w.tables[key] = newTable
+	case addID != 0 && removeID == 0 && oldTable != nil:
+		if dst, ok := oldTable.NextOnAdd(addID); ok {
+			newTable = dst
+		}
+	}
+
+	if newTable == nil {
+		key := sigKey(newSig)
+		var exists bool
+		newTable, exists = w.tables[key]
+		if !exists {
+			types := make([]*component.TypeInfo, len(newSig))
+			for i, id := range newSig {
+				info, ok := w.registry.LookupByID(id)
+				if !ok {
+					panic("flecs: migrate: component ID not registered")
+				}
+				types[i] = info
+			}
+			newTable = table.New(newSig, types)
+			w.tables[key] = newTable
+		}
+		// Cache the result for future single-component transitions from oldTable.
+		if oldTable != nil {
+			switch {
+			case removeID != 0 && addID == 0:
+				oldTable.CacheRemoveEdge(removeID, newTable)
+			case addID != 0 && removeID == 0:
+				oldTable.CacheAddEdge(addID, newTable)
+			}
+		}
 	}
 
 	// Append a new zero-initialized row for e in the destination table.
