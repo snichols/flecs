@@ -31,7 +31,8 @@ type World struct {
 	tables    map[string]*table.Table // sigKey(sorted []ID) → table
 	empty     *table.Table            // canonical empty-signature table for new entities
 	compIndex *componentindex.Index   // reverse map: component ID → tables containing it
-	childOfID ID                      // built-in ChildOf relationship entity (index 1; user entities start at 2)
+	childOfID ID                      // built-in ChildOf relationship entity (index 1)
+	isAID     ID                      // built-in IsA relationship entity (index 2; user entities start at index 3)
 }
 
 // New initializes and returns an empty World.
@@ -39,7 +40,8 @@ type World struct {
 // Built-in entity allocation order:
 //   - Index 0: null sentinel (never issued by Alloc)
 //   - Index 1: ChildOf built-in relationship entity
-//   - Index 2+: user entities (NewEntity)
+//   - Index 2: IsA built-in relationship entity
+//   - Index 3+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -58,6 +60,12 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(childOf))
 	w.childOfID = childOf
+	// Allocate the built-in IsA relationship entity (gets index 2).
+	isA := w.index.Alloc()
+	rec = w.index.Get(isA)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(isA))
+	w.isAID = isA
 	return w
 }
 
@@ -176,9 +184,10 @@ func Set[T any](w *World, e ID, v T) {
 	w.migrate(e, cid, 0, unsafe.Pointer(&v))
 }
 
-// Get returns the value of component T on entity e.
-// Returns (zero, false) if T is not registered, e is not alive, or e lacks T.
-// Does NOT auto-register T: a Get on an unregistered type is a not-found, not a side effect.
+// Get returns the value of component T on entity e. Checks the entity's own
+// table first (Owns semantics); on a miss, walks the IsA chain transitively.
+// Returns (zero, false) if T is not registered, e is not alive, or no IsA
+// path yields T. Does NOT auto-register T.
 func Get[T any](w *World, e ID) (T, bool) {
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
@@ -190,18 +199,19 @@ func Get[T any](w *World, e ID) (T, bool) {
 		return zero, false
 	}
 	t := rec.Table
-	if t == nil || !t.HasComponent(info.Component) {
-		return zero, false
+	if t != nil && t.HasComponent(info.Component) {
+		ptr := t.Get(int(rec.Row), info.Component)
+		if ptr == nil {
+			return zero, true
+		}
+		return *(*T)(ptr), true
 	}
-	ptr := t.Get(int(rec.Row), info.Component)
-	if ptr == nil {
-		// Tag component (Size==0): entity has it but there is no data.
-		return zero, true
-	}
-	return *(*T)(ptr), true
+	// Local miss: walk the IsA chain.
+	seen := map[ID]struct{}{e: {}}
+	return getViaIsA[T](w, e, info.Component, seen)
 }
 
-// Has reports whether entity e has component T.
+// Has reports whether entity e has component T — locally or via an IsA chain.
 // Auto-registers T so the answer is meaningful; an unregistered type yields false.
 func Has[T any](w *World, e ID) bool {
 	cid := RegisterComponent[T](w)
@@ -210,7 +220,23 @@ func Has[T any](w *World, e ID) bool {
 		return false
 	}
 	t := rec.Table
-	return t != nil && t.HasComponent(cid)
+	if t != nil && t.HasComponent(cid) {
+		return true
+	}
+	seen := map[ID]struct{}{e: {}}
+	return hasViaIsA(w, e, cid, seen)
+}
+
+// Owns reports whether entity e locally owns component T — T is present in
+// e's own archetype table rather than inherited via an IsA chain.
+// Auto-registers T (matches Has[T] policy). Returns false if e is not alive.
+func Owns[T any](w *World, e ID) bool {
+	cid := RegisterComponent[T](w)
+	rec := w.index.Get(e)
+	if rec == nil {
+		return false
+	}
+	return rec.Table != nil && rec.Table.HasComponent(cid)
 }
 
 // Remove removes component T from entity e.

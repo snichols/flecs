@@ -40,11 +40,5 @@ func (w *World) ParentOf(e ID) (ID, bool) {
 	if rec == nil {
 		return 0, false
 	}
-	childOfIdx := w.childOfID.Index()
-	for _, id := range rec.Table.Type() {
-		if id.IsPair() && uint32(id.First()) == childOfIdx {
-			return id.Second(), true
-		}
-	}
-	return 0, false
+	return firstPairTarget(rec.Table.Type(), w.childOfID.Index())
 }
