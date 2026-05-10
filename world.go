@@ -32,7 +32,8 @@ type World struct {
 	empty     *table.Table            // canonical empty-signature table for new entities
 	compIndex *componentindex.Index   // reverse map: component ID → tables containing it
 	childOfID ID                      // built-in ChildOf relationship entity (index 1)
-	isAID     ID                      // built-in IsA relationship entity (index 2; user entities start at index 3)
+	isAID     ID                      // built-in IsA relationship entity (index 2)
+	nameID    ID                      // built-in Name component entity (index 3; user entities start at index 4)
 }
 
 // New initializes and returns an empty World.
@@ -41,7 +42,8 @@ type World struct {
 //   - Index 0: null sentinel (never issued by Alloc)
 //   - Index 1: ChildOf built-in relationship entity
 //   - Index 2: IsA built-in relationship entity
-//   - Index 3+: user entities (NewEntity)
+//   - Index 3: Name built-in component entity
+//   - Index 4+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -66,6 +68,8 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(isA))
 	w.isAID = isA
+	// Register the built-in Name component (gets index 3).
+	w.nameID = RegisterComponent[Name](w)
 	return w
 }
 
@@ -398,6 +402,14 @@ func (w *World) TablesFor(componentID ID) []*table.Table {
 // is performed; this is the hot path for Phase 3 query iteration.
 func (w *World) EachTableFor(componentID ID, fn func(*table.Table) bool) {
 	w.compIndex.Each(componentID, fn)
+}
+
+// eachAlive calls fn for every currently alive entity, in dense order.
+// Callbacks must not call Alloc or Free (i.e. NewEntity, Delete) during iteration.
+func (w *World) eachAlive(fn func(ID)) {
+	w.index.Each(func(id ID, _ *entityindex.Record) {
+		fn(id)
+	})
 }
 
 // sigKey encodes a sorted []ID as a string map key.
