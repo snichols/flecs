@@ -3,7 +3,7 @@ package entityindex
 import (
 	"testing"
 
-	"github.com/snichols/flecs"
+	"github.com/snichols/flecs/internal/ids"
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
@@ -11,9 +11,9 @@ import (
 // record to simulate an entity that has been freed many times (advancing its
 // generation to a target value without actually cycling through all frees).
 // Used only to test the generation-overflow panic.
-func fastForwardGen(idx *Index, id flecs.ID, targetGen uint32) flecs.ID {
+func fastForwardGen(idx *Index, id ids.ID, targetGen uint32) ids.ID {
 	rawIdx := id.Index()
-	newID := flecs.MakeEntity(rawIdx, targetGen)
+	newID := ids.MakeEntity(rawIdx, targetGen)
 	// Update the dense vector entry (find it by raw index in the alive range).
 	for i := 1; i < idx.aliveCount; i++ {
 		if idx.dense[i].Index() == rawIdx {
@@ -61,10 +61,10 @@ func TestIsAliveAfterAllocAndFree(t *testing.T) {
 
 func TestIsAliveNeverAllocated(t *testing.T) {
 	idx := New()
-	if idx.IsAlive(flecs.MakeEntity(42, 0)) {
+	if idx.IsAlive(ids.MakeEntity(42, 0)) {
 		t.Fatal("IsAlive true for never-allocated entity")
 	}
-	if idx.IsAlive(flecs.ID(0)) {
+	if idx.IsAlive(ids.ID(0)) {
 		t.Fatal("IsAlive true for null ID")
 	}
 }
@@ -81,7 +81,7 @@ func TestIsAliveStaleHandle(t *testing.T) {
 
 func TestFreeUnknown(t *testing.T) {
 	idx := New()
-	if idx.Free(flecs.MakeEntity(99, 0)) {
+	if idx.Free(ids.MakeEntity(99, 0)) {
 		t.Fatal("Free returned true for unknown entity")
 	}
 }
@@ -100,7 +100,7 @@ func TestGenerationRecycling(t *testing.T) {
 	id := idx.Alloc()
 	rawIdx := id.Index()
 
-	var prev flecs.ID = id
+	var prev ids.ID = id
 	for i := 0; i < 5; i++ {
 		if !idx.Free(prev) {
 			t.Fatalf("iteration %d: Free returned false", i)
@@ -140,12 +140,12 @@ func TestPageGrowth(t *testing.T) {
 	idx := New()
 	const n = 200
 
-	ids := make([]flecs.ID, n)
-	for i := range ids {
-		ids[i] = idx.Alloc()
+	allocated := make([]ids.ID, n)
+	for i := range allocated {
+		allocated[i] = idx.Alloc()
 	}
 
-	for _, id := range ids {
+	for _, id := range allocated {
 		if !idx.IsAlive(id) {
 			t.Fatalf("entity %v should be alive", id)
 		}
@@ -156,7 +156,7 @@ func TestPageGrowth(t *testing.T) {
 
 	// Free every other one.
 	freed := 0
-	for i, id := range ids {
+	for i, id := range allocated {
 		if i%2 == 0 {
 			idx.Free(id)
 			freed++
@@ -164,7 +164,7 @@ func TestPageGrowth(t *testing.T) {
 	}
 
 	// Reallocate — should come from recycled pool before new indices.
-	newIDs := make([]flecs.ID, freed)
+	newIDs := make([]ids.ID, freed)
 	maxBeforeRealloc := idx.maxID
 	for i := range newIDs {
 		newIDs[i] = idx.Alloc()
@@ -217,16 +217,16 @@ func TestCountCorrectness(t *testing.T) {
 		t.Fatalf("initial count want 0, got %d", idx.Count())
 	}
 
-	ids := make([]flecs.ID, 5)
-	for i := range ids {
-		ids[i] = idx.Alloc()
+	allocated := make([]ids.ID, 5)
+	for i := range allocated {
+		allocated[i] = idx.Alloc()
 	}
 	if idx.Count() != 5 {
 		t.Fatalf("after 5 allocs: want 5, got %d", idx.Count())
 	}
 
-	idx.Free(ids[0])
-	idx.Free(ids[2])
+	idx.Free(allocated[0])
+	idx.Free(allocated[2])
 	if idx.Count() != 3 {
 		t.Fatalf("after 2 frees: want 3, got %d", idx.Count())
 	}
@@ -245,8 +245,8 @@ func TestEachAliveset(t *testing.T) {
 
 	idx.Free(b) // b is dead
 
-	seen := map[flecs.ID]bool{}
-	idx.Each(func(id flecs.ID, _ *Record) {
+	seen := map[ids.ID]bool{}
+	idx.Each(func(id ids.ID, _ *Record) {
 		seen[id] = true
 	})
 
@@ -266,10 +266,10 @@ func TestEachAliveset(t *testing.T) {
 
 func TestGetNullID(t *testing.T) {
 	idx := New()
-	if idx.Get(flecs.ID(0)) != nil {
+	if idx.Get(ids.ID(0)) != nil {
 		t.Fatal("Get(0) should return nil")
 	}
-	if idx.IsAlive(flecs.ID(0)) {
+	if idx.IsAlive(ids.ID(0)) {
 		t.Fatal("IsAlive(0) should return false")
 	}
 }
@@ -315,7 +315,7 @@ func TestGetDeadAndStaleEntity(t *testing.T) {
 	}
 
 	// Get on a never-allocated entity must return nil.
-	never := flecs.MakeEntity(999, 0)
+	never := ids.MakeEntity(999, 0)
 	if idx.Get(never) != nil {
 		t.Fatal("Get returned non-nil for never-allocated entity")
 	}
@@ -370,13 +370,13 @@ func TestAllocNeverReturnsIndex0(t *testing.T) {
 
 func TestEachDenseOrder(t *testing.T) {
 	idx := New()
-	var allocOrder []flecs.ID
+	var allocOrder []ids.ID
 	for i := 0; i < 5; i++ {
 		allocOrder = append(allocOrder, idx.Alloc())
 	}
 	// The dense vector [1:aliveCount] should be in allocation order.
-	var eachOrder []flecs.ID
-	idx.Each(func(id flecs.ID, _ *Record) {
+	var eachOrder []ids.ID
+	idx.Each(func(id ids.ID, _ *Record) {
 		eachOrder = append(eachOrder, id)
 	})
 	if len(eachOrder) != len(allocOrder) {
