@@ -1,0 +1,23 @@
+# Test coverage output (produced by `go test -cover`, `go tool cover`, etc.)
+*.out
+coverage.txt
+coverage.html
+
+# Compiled test binaries
+*.test
+
+# Go build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local dev scratch
+/tmp/
