@@ -636,3 +636,102 @@ func TestCacheAddEdgeIdempotent(t *testing.T) {
 		t.Fatal("CacheAddEdge with conflicting dst should have panicked")
 	}
 }
+
+// ── Component index (Phase 2.2) ───────────────────────────────────────────────
+
+func TestTablesFor_singleComponent(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{1, 2})
+
+	tables := w.TablesFor(posID)
+	if len(tables) != 1 {
+		t.Fatalf("TablesFor(posID): want 1 table, got %d", len(tables))
+	}
+}
+
+func TestTablesFor_twoComponentsMigration(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{1, 2})
+	flecs.Set(w, e, Velocity{3, 4})
+
+	posTables := w.TablesFor(posID)
+	// Must contain [Position] table AND [Position,Velocity] table.
+	if len(posTables) != 2 {
+		t.Fatalf("TablesFor(posID) after pos+vel: want 2 tables, got %d", len(posTables))
+	}
+	velTables := w.TablesFor(velID)
+	// Only the [Position,Velocity] table.
+	if len(velTables) != 1 {
+		t.Fatalf("TablesFor(velID) after pos+vel: want 1 table, got %d", len(velTables))
+	}
+}
+
+func TestTablesFor_sharedTableNoDuplicate(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	e1 := w.NewEntity()
+	e2 := w.NewEntity()
+	flecs.Set(w, e1, Position{1, 2})
+	flecs.Set(w, e2, Position{3, 4})
+
+	tables := w.TablesFor(posID)
+	if len(tables) != 1 {
+		t.Fatalf("TablesFor(posID) with two entities sharing table: want 1, got %d", len(tables))
+	}
+}
+
+// Tables are immortal in this phase; the [Position] table stays indexed even
+// after the entity migrates away to [Position,Velocity].
+func TestTablesFor_ghostTableAfterMigration(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{1, 2}) // creates [Position] table
+	flecs.Set(w, e, Velocity{3, 4}) // creates [Position,Velocity] table
+
+	tables := w.TablesFor(posID)
+	// Both tables (including the now-empty [Position] table) must be present.
+	if len(tables) != 2 {
+		t.Fatalf("TablesFor(posID) after migration: want 2 (including ghost), got %d", len(tables))
+	}
+}
+
+func TestTablesFor_tagComponent(t *testing.T) {
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, Tag{})
+
+	tables := w.TablesFor(tagID)
+	if len(tables) != 1 {
+		t.Fatalf("TablesFor(tagID): want 1 table, got %d", len(tables))
+	}
+}
+
+func TestTablesFor_emptyTableNotIndexed(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	// No entity has Position yet; the empty table should not appear.
+	tables := w.TablesFor(posID)
+	if len(tables) != 0 {
+		t.Fatalf("TablesFor before any Set: want 0, got %d — empty table must not be indexed", len(tables))
+	}
+}
+
+func TestEachTableFor_earlyStop(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{1, 2})
+	flecs.Set(w, e, Velocity{3, 4}) // creates second table containing posID
+
+	// posID is in two tables; stopping after 1 should visit exactly 1.
+	if got := flecs.EachTableForCount(w, posID, 1); got != 1 {
+		t.Fatalf("EachTableFor early stop: want 1 visit, got %d", got)
+	}
+}
