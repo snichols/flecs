@@ -16,6 +16,7 @@
 package table
 
 import (
+	"reflect"
 	"sort"
 	"unsafe"
 
@@ -195,6 +196,29 @@ func (t *Table) CacheAddEdge(id ids.ID, dst *Table) {
 		panic("table: CacheAddEdge: conflicting destination for same (table, id)")
 	}
 	t.addEdges[id] = dst
+}
+
+// ColumnReflectSlice returns the backing slice for the column of id, sliced to
+// the current row count. The returned reflect.Value has kind Slice and element
+// type equal to the registered Go type for that component.
+//
+// For tag components (Size==0) the column is nil; the zero reflect.Value is
+// returned. Callers must check rv.IsValid() before using it.
+//
+// The value is invalidated by any subsequent Append (may grow the column) or
+// RemoveSwap (may reorder rows). Do not cache across those operations.
+//
+// Panics if id is not in the table's signature.
+func (t *Table) ColumnReflectSlice(id ids.ID) reflect.Value {
+	idx, ok := t.colIndex[id]
+	if !ok {
+		panic("table: ColumnReflectSlice: id not in signature")
+	}
+	col := t.columns[idx]
+	if col == nil {
+		return reflect.Value{} // tag column: no data
+	}
+	return col.slice.Slice(0, len(t.entities))
 }
 
 // CacheRemoveEdge records that removing id from this table's signature leads to dst.

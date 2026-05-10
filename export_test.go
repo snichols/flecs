@@ -2,6 +2,12 @@ package flecs
 
 import "github.com/snichols/flecs/internal/storage/table"
 
+// QueryIterCandidateCount returns the number of seed-table candidates inside
+// it. For tests only: used to verify that Iter() seeds from the smallest set.
+func QueryIterCandidateCount(it *QueryIter) int {
+	return len(it.candidates)
+}
+
 // TableOf returns the archetype table pointer for entity e. For tests only.
 func TableOf(w *World, e ID) *table.Table {
 	rec := w.index.Get(e)
