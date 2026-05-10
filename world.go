@@ -86,6 +86,7 @@ func (w *World) NewEntity() ID {
 // deleteOne removes a single entity from its archetype table and frees its ID.
 // It is the primitive used by both Delete (non-parent case) and the cascade
 // delete orchestrator. Returns true if e was alive.
+// Fires OnRemove for each component in e's current table before removal.
 func (w *World) deleteOne(e ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -94,6 +95,10 @@ func (w *World) deleteOne(e ID) bool {
 	t := rec.Table
 	row := int(rec.Row)
 	if t != nil {
+		for _, id := range t.Type() {
+			info, _ := w.registry.LookupByID(id)
+			w.fireOnRemove(info, e, t.Get(row, id))
+		}
 		moved, ok := t.RemoveSwap(row)
 		if ok {
 			movedRec := w.index.Get(moved)
@@ -172,8 +177,9 @@ func RegisterComponent[T any](w *World) ID {
 
 // Set writes value v as component T on entity e.
 // If T is not yet registered, it is auto-registered. Panics if e is not alive.
-// If e already has T, the existing value is overwritten in place.
-// Otherwise an archetype migration moves e to the table for its new component set.
+// If e already has T, the existing value is overwritten in place (fires OnSet).
+// Otherwise an archetype migration moves e to the table for its new component set
+// (fires OnAdd then OnSet).
 func Set[T any](w *World, e ID, v T) {
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
@@ -183,9 +189,15 @@ func Set[T any](w *World, e ID, v T) {
 	t := rec.Table
 	if t != nil && t.HasComponent(cid) {
 		t.Set(int(rec.Row), cid, unsafe.Pointer(&v))
+		info, _ := component.LookupByType[T](w.registry)
+		w.fireOnSet(info, e, t.Get(int(rec.Row), cid))
 		return
 	}
 	w.migrate(e, cid, 0, unsafe.Pointer(&v))
+	// OnAdd fired inside migrate; fire OnSet now that the slot is written.
+	rec = w.index.Get(e)
+	info, _ := component.LookupByType[T](w.registry)
+	w.fireOnSet(info, e, rec.Table.Get(int(rec.Row), cid))
 }
 
 // Get returns the value of component T on entity e. Checks the entity's own
@@ -372,6 +384,18 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	// Write the new component value, if any.
 	if addID != 0 && copyValue != nil {
 		newTable.Set(newRow, addID, copyValue)
+	}
+
+	// Fire OnAdd for the newly-added component — destination slot is fully written.
+	if addID != 0 {
+		addInfo, _ := w.registry.LookupByID(addID)
+		w.fireOnAdd(addInfo, e, newTable.Get(newRow, addID))
+	}
+
+	// Fire OnRemove for the removed component — source slot still intact.
+	if removeID != 0 && oldTable != nil {
+		remInfo, _ := w.registry.LookupByID(removeID)
+		w.fireOnRemove(remInfo, e, oldTable.Get(oldRow, removeID))
 	}
 
 	// Remove e from the old table using swap-remove.
