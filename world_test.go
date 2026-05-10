@@ -49,19 +49,17 @@ func TestDeleteReturnValues(t *testing.T) {
 
 func TestCountReflectsAliveEntities(t *testing.T) {
 	w := flecs.New()
-	if w.Count() != 0 {
-		t.Fatalf("initial Count want 0, got %d", w.Count())
-	}
+	// World starts with the built-in ChildOf entity (index 1); user entities begin at index 2.
+	base := w.Count()
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
-	if w.Count() != 2 {
-		t.Fatalf("Count want 2 after 2 NewEntity, got %d", w.Count())
+	if w.Count() != base+2 {
+		t.Fatalf("Count want base+2=%d after 2 NewEntity, got %d", base+2, w.Count())
 	}
 	w.Delete(e1)
 	_ = e2
-	// Count includes component entities; just verify it decremented.
-	if w.Count() < 1 {
-		t.Fatalf("Count want ≥1 after deleting one entity, got %d", w.Count())
+	if w.Count() != base+1 {
+		t.Fatalf("Count want base+1=%d after deleting one entity, got %d", base+1, w.Count())
 	}
 }
 

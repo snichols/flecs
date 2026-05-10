@@ -31,9 +31,15 @@ type World struct {
 	tables    map[string]*table.Table // sigKey(sorted []ID) → table
 	empty     *table.Table            // canonical empty-signature table for new entities
 	compIndex *componentindex.Index   // reverse map: component ID → tables containing it
+	childOfID ID                      // built-in ChildOf relationship entity (index 1; user entities start at 2)
 }
 
 // New initializes and returns an empty World.
+//
+// Built-in entity allocation order:
+//   - Index 0: null sentinel (never issued by Alloc)
+//   - Index 1: ChildOf built-in relationship entity
+//   - Index 2+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -46,6 +52,12 @@ func New() *World {
 	for _, id := range w.empty.Type() {
 		w.compIndex.Register(id, w.empty)
 	}
+	// Allocate the built-in ChildOf relationship entity (gets index 1).
+	childOf := w.index.Alloc()
+	rec := w.index.Get(childOf)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(childOf))
+	w.childOfID = childOf
 	return w
 }
 
@@ -59,12 +71,10 @@ func (w *World) NewEntity() ID {
 	return e
 }
 
-// Delete removes entity e from its archetype table and frees its ID.
-// Returns true if e was alive. After deletion, IsAlive(e) is false.
-//
-// If another entity occupied the last row of e's table, RemoveSwap moves it
-// into e's vacated row; Delete updates that entity's Record.Row accordingly.
-func (w *World) Delete(e ID) bool {
+// deleteOne removes a single entity from its archetype table and frees its ID.
+// It is the primitive used by both Delete (non-parent case) and the cascade
+// delete orchestrator. Returns true if e was alive.
+func (w *World) deleteOne(e ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -79,6 +89,50 @@ func (w *World) Delete(e ID) bool {
 		}
 	}
 	return w.index.Free(e)
+}
+
+// Delete removes entity e and all entities related to it via (ChildOf, e) pairs,
+// recursively. Deletion is post-order: children are deleted before their parents,
+// leaves before any internal node.
+//
+// Returns true if e was alive. Returns false immediately with no cascade if e
+// is not alive, preserving Phase 1.5 semantics.
+//
+// A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
+func (w *World) Delete(e ID) bool {
+	if !w.index.IsAlive(e) {
+		return false
+	}
+
+	// Collect e and all descendants via iterative DFS with cycle detection.
+	stack := []ID{e}
+	var toDelete []ID
+	seen := make(map[ID]struct{})
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[node]; ok {
+			continue
+		}
+		seen[node] = struct{}{}
+		toDelete = append(toDelete, node)
+		pairID := MakePair(w.childOfID, node)
+		for _, t := range w.compIndex.TablesFor(pairID) {
+			// Snapshot the entity list before any deleteOne calls mutate the table.
+			entities := append([]ID(nil), t.Entities()...)
+			for _, child := range entities {
+				if w.index.IsAlive(child) {
+					stack = append(stack, child)
+				}
+			}
+		}
+	}
+
+	// Delete in post-order: deepest descendants first, root last.
+	for i := len(toDelete) - 1; i >= 0; i-- {
+		w.deleteOne(toDelete[i])
+	}
+	return true
 }
 
 // IsAlive reports whether e is currently alive.
