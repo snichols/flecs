@@ -37,4 +37,7 @@ func MakeEntity(index, generation uint32) ID { return ids.MakeEntity(index, gene
 
 // MakePair constructs a pair ID from a relationship and a target entity.
 // first is masked to 28 bits; second is masked to 32 bits; FlagPair is set.
+//
+// Pair-as-tag (no data): AddID(w, e, MakePair(rel, tgt)) / HasID / RemoveID.
+// Pair-with-data: SetPair[T](w, e, rel, tgt, v) / GetPair[T](w, e, rel, tgt).
 func MakePair(first, second ID) ID { return ids.MakePair(first, second) }
