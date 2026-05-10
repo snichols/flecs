@@ -80,10 +80,14 @@ func OwnsID(w *World, e ID, id ID) bool {
 // the pair was previously registered with a different Go type, SetPair panics.
 // Panics if e is not alive.
 //
+// Fires OnAdd (when the pair is newly added) and OnSet (every call) on the
+// pair's TypeInfo. Hooks on the pair TypeInfo can be installed by mutating
+// the TypeInfo returned by component.RegisterPairData directly.
+//
 // For pair-as-tag (no data), prefer AddID(w, e, MakePair(rel, tgt)).
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	pairID := MakePair(rel, tgt)
-	component.RegisterPairData[T](w.registry, pairID)
+	pairInfo := component.RegisterPairData[T](w.registry, pairID)
 	rec := w.index.Get(e)
 	if rec == nil {
 		panic("flecs: SetPair called on dead entity")
@@ -91,9 +95,13 @@ func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	t := rec.Table
 	if t != nil && t.HasComponent(pairID) {
 		t.Set(int(rec.Row), pairID, unsafe.Pointer(&v))
+		w.fireOnSet(pairInfo, e, t.Get(int(rec.Row), pairID))
 		return
 	}
 	w.migrate(e, pairID, 0, unsafe.Pointer(&v))
+	// OnAdd fired inside migrate; fire OnSet now.
+	rec = w.index.Get(e)
+	w.fireOnSet(pairInfo, e, rec.Table.Get(int(rec.Row), pairID))
 }
 
 // GetPair returns the value of pair (rel, tgt) on entity e.
