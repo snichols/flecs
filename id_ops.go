@@ -47,9 +47,25 @@ func RemoveID(w *World, e ID, id ID) bool {
 	return true
 }
 
-// HasID reports whether entity e currently has the component or tag identified
-// by id. Returns false if e is not alive or id is absent from e's signature.
+// HasID reports whether entity e has the component or tag identified by id —
+// locally or via an IsA chain. Returns false if e is not alive or id is not
+// reachable. Does NOT auto-register.
 func HasID(w *World, e ID, id ID) bool {
+	rec := w.index.Get(e)
+	if rec == nil {
+		return false
+	}
+	if rec.Table != nil && rec.Table.HasComponent(id) {
+		return true
+	}
+	seen := map[ID]struct{}{e: {}}
+	return hasViaIsA(w, e, id, seen)
+}
+
+// OwnsID reports whether entity e locally owns the component or tag identified
+// by id. Local-only: does not walk the IsA chain. Does not auto-register.
+// Returns false if e is not alive.
+func OwnsID(w *World, e ID, id ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
