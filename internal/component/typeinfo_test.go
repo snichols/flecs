@@ -1,6 +1,7 @@
 package component_test
 
 import (
+	"reflect"
 	"testing"
 	"unsafe"
 
@@ -14,6 +15,17 @@ func TestNilMoveHookAllowed(t *testing.T) {
 	info := component.Register[hookTarget](r)
 	if info.Hooks.Move != nil {
 		t.Fatal("Move hook should be nil by default")
+	}
+}
+
+type fooRegistered struct{ V int }
+
+func TestTypeInfoTypeField(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[fooRegistered](r)
+	want := reflect.TypeFor[fooRegistered]()
+	if info.Type != want {
+		t.Fatalf("TypeInfo.Type = %v, want %v", info.Type, want)
 	}
 }
 
