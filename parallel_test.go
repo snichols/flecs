@@ -488,4 +488,3 @@ func TestParallelRace(t *testing.T) {
 		w.Progress(1.0 / 60.0)
 	}
 }
-
