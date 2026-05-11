@@ -83,12 +83,7 @@ func BenchmarkNewEntity(b *testing.B) {
 
 func BenchmarkDeleteEntity(b *testing.B) {
 	b.ReportAllocs()
-	w := flecs.New()
-	entities := make([]flecs.ID, b.N)
-	for i := range b.N {
-		entities[i] = w.NewEntity()
-	}
-	b.ResetTimer()
+	w, entities := setupWorldWithEntities(b, b.N)
 	for _, e := range entities {
 		w.Delete(e)
 	}
