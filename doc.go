@@ -115,5 +115,25 @@
 // Use Get[T]/Set[T] when the type is known at compile time; use GetByID/SetByID
 // only when the component ID is the sole available handle.
 //
+// # JSON Serialization
+//
+// [World.MarshalJSON] and [World.UnmarshalJSON] implement [json.Marshaler] and
+// [json.Unmarshaler] for basic world persistence. Entities, names, and
+// non-pair components are saved and restored. Pair components, ChildOf
+// hierarchies, and IsA prefabs are not serialized in this release (Phase 9.2.1).
+//
+// All component types must be pre-registered before calling UnmarshalJSON:
+//
+//	// Save:
+//	data, err := w.MarshalJSON()
+//	os.WriteFile("save.json", data, 0644)
+//
+//	// Load:
+//	data, _ := os.ReadFile("save.json")
+//	w2 := flecs.New()
+//	flecs.RegisterComponent[Position](w2)
+//	flecs.RegisterComponent[Velocity](w2)
+//	err = w2.UnmarshalJSON(data)
+//
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs
