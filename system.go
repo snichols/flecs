@@ -65,7 +65,7 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 }
 
 // NewSystemInPhase registers a new system in the given pipeline phase.
-// phase must be one of w.PreUpdate(), w.OnUpdate(), or w.PostUpdate().
+// phase must be one of w.PreUpdate(), w.OnUpdate(), w.PostUpdate(), or w.OnFixedUpdate().
 //
 // All other validations match NewSystem: panics on nil world/query/fn, closed
 // query, or a query that belongs to a different world.
@@ -73,8 +73,8 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	if w == nil {
 		panic("flecs: NewSystemInPhase: world must not be nil")
 	}
-	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID {
-		panic(fmt.Sprintf("flecs: NewSystemInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate", phase))
+	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
+		panic(fmt.Sprintf("flecs: NewSystemInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
 	}
 	if q == nil {
 		panic("flecs: NewSystemInPhase: query must not be nil")
@@ -122,37 +122,38 @@ func (s *System) IsClosed() bool {
 }
 
 // Progress runs all registered (non-closed) systems in pipeline phase order:
-// PreUpdate, then OnUpdate, then PostUpdate. Within a phase, systems run in
-// registration order.
+// PreUpdate → OnFixedUpdate (accumulator loop) → OnUpdate → PostUpdate.
+// Within a phase, systems run in registration order.
 //
-// Each phase is wrapped in its own w.Defer block. Mutations queued by systems
-// in an earlier phase are flushed before the next phase starts, so cross-phase
-// visibility is guaranteed: a value Set in PreUpdate is visible to Get calls in
-// OnUpdate.
+// dt must be >= 0; Progress panics on negative dt. A zero dt is allowed and
+// documents as a "null frame" that still increments FrameCount.
 //
-// Within a single phase, mutations are queued and NOT yet visible to peer
-// systems in the same phase (same-phase safety contract, unchanged from 7.1).
+// Each variable-rate phase (PreUpdate, OnUpdate, PostUpdate) is wrapped in its
+// own w.Defer block. The OnFixedUpdate phase runs inside a per-iteration Defer
+// block so that mutations from one fixed tick are visible to the next fixed
+// tick within the same Progress call.
+//
+// Mutations queued by systems in an earlier phase are flushed before the next
+// phase starts, so cross-phase visibility is guaranteed.
+//
+// Within a single phase iteration, mutations are queued and NOT yet visible to
+// peer systems in the same iteration (same-phase safety contract).
 //
 // Deferred-removal semantics: each phase's active set is snapshotted at the
 // start of that phase's Defer block. A system Closed in an earlier phase is
-// excluded from the snapshot of later phases (its removed flag is set before
-// those snapshots are taken). A system Closed by a peer within the same phase
-// is still in that phase's snapshot and runs this frame.
-//
-// Panic behavior: if a system's fn panics, the panic propagates through
-// Progress. Go's defer semantics guarantee that the current phase's DeferEnd
-// still runs, flushing mutations queued before the panic.
+// excluded from later-phase snapshots.
 //
 // Compaction of closed systems is NOT done here; it happens lazily in NewSystem
 // and NewSystemInPhase.
 func (w *World) Progress(dt float32) {
-	phases := [3]ID{w.preUpdateID, w.onUpdateID, w.postUpdateID}
-	for _, phase := range phases {
-		p := phase // capture for closure
+	if dt < 0 {
+		panic("flecs: Progress: dt must be >= 0")
+	}
+	w.frameCount++
+	w.time += dt
+
+	runPhase := func(p ID, phaseDT float32) {
 		w.Defer(func() {
-			// Snapshot active systems for this phase at the start of the phase's
-			// Defer block. Systems Closed in a prior phase are already removed=true
-			// and are excluded here.
 			active := make([]*System, 0, len(w.systems))
 			for _, s := range w.systems {
 				if !s.removed && s.phase == p {
@@ -161,10 +162,27 @@ func (w *World) Progress(dt float32) {
 			}
 			for _, s := range active {
 				it := s.query.Iter()
-				s.fn(dt, it)
+				s.fn(phaseDT, it)
 			}
 		})
 	}
+
+	// PreUpdate with real dt.
+	runPhase(w.preUpdateID, dt)
+
+	// OnFixedUpdate: accumulator loop; each iteration is its own Defer block.
+	if w.fixedTimestep > 0 {
+		w.fixedAccumulator += dt
+		for w.fixedAccumulator >= w.fixedTimestep {
+			step := w.fixedTimestep
+			runPhase(w.onFixedUpdateID, step)
+			w.fixedAccumulator -= step
+		}
+	}
+
+	// OnUpdate and PostUpdate with real dt.
+	runPhase(w.onUpdateID, dt)
+	runPhase(w.postUpdateID, dt)
 }
 
 // SystemCount returns the number of currently registered (non-closed) systems.

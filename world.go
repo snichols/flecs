@@ -26,22 +26,27 @@ import (
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	index         *entityindex.Index
-	registry      *component.Registry
-	tables        map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty         *table.Table                    // canonical empty-signature table for new entities
-	compIndex     *componentindex.Index           // reverse map: component ID → tables containing it
-	observers     map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	cachedQueries []*CachedQuery                  // lazily allocated; notified on new table creation
-	systems       []*System                       // lazily allocated; compacted in NewSystem
-	childOfID     ID                              // built-in ChildOf relationship entity (index 1)
-	isAID         ID                              // built-in IsA relationship entity (index 2)
-	nameID        ID                              // built-in Name component entity (index 3)
-	preUpdateID   ID                              // built-in PreUpdate phase entity (index 4)
-	onUpdateID    ID                              // built-in OnUpdate phase entity (index 5)
-	postUpdateID  ID                              // built-in PostUpdate phase entity (index 6; first user entity at index 7)
-	deferDepth    int                             // nesting counter; 0 means "apply immediately"
-	deferred      []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
+	index            *entityindex.Index
+	registry         *component.Registry
+	tables           map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty            *table.Table                    // canonical empty-signature table for new entities
+	compIndex        *componentindex.Index           // reverse map: component ID → tables containing it
+	observers        map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	cachedQueries    []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems          []*System                       // lazily allocated; compacted in NewSystem
+	childOfID        ID                              // built-in ChildOf relationship entity (index 1)
+	isAID            ID                              // built-in IsA relationship entity (index 2)
+	nameID           ID                              // built-in Name component entity (index 3)
+	preUpdateID      ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
+	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	deferDepth       int                             // nesting counter; 0 means "apply immediately"
+	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
+	time             float32                         // total accumulated simulation time
+	frameCount       uint64                          // number of Progress calls
+	fixedTimestep    float32                         // fixed step size; 0 means disabled
+	fixedAccumulator float32                         // internal accumulator for fixed-step dispatch
 }
 
 // New initializes and returns an empty World.
@@ -54,7 +59,8 @@ type World struct {
 //   - Index 4: PreUpdate built-in pipeline phase entity
 //   - Index 5: OnUpdate built-in pipeline phase entity
 //   - Index 6: PostUpdate built-in pipeline phase entity
-//   - Index 7+: user entities (NewEntity)
+//   - Index 7: OnFixedUpdate built-in pipeline phase entity
+//   - Index 8+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -100,6 +106,12 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(postUpdate))
 	w.postUpdateID = postUpdate
+	// Allocate the built-in OnFixedUpdate phase entity (gets index 7).
+	onFixedUpdate := w.index.Alloc()
+	rec = w.index.Get(onFixedUpdate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(onFixedUpdate))
+	w.onFixedUpdateID = onFixedUpdate
 	return w
 }
 
@@ -112,8 +124,38 @@ func (w *World) PreUpdate() ID { return w.preUpdateID }
 func (w *World) OnUpdate() ID { return w.onUpdateID }
 
 // PostUpdate returns the ID of the built-in PostUpdate pipeline phase entity.
-// Systems in this phase run last in each Progress call.
+// Systems in this phase run last in each Progress call (after OnFixedUpdate).
 func (w *World) PostUpdate() ID { return w.postUpdateID }
+
+// OnFixedUpdate returns the ID of the built-in OnFixedUpdate pipeline phase entity.
+// Systems in this phase are dispatched via a fixed-step accumulator loop inside
+// each Progress call and always receive the fixed timestep as dt.
+// Use SetFixedTimestep to configure the step; a zero step disables this phase.
+func (w *World) OnFixedUpdate() ID { return w.onFixedUpdateID }
+
+// Time returns the total simulated time accumulated across all Progress calls.
+func (w *World) Time() float32 { return w.time }
+
+// FrameCount returns the number of Progress calls made on this world.
+func (w *World) FrameCount() uint64 { return w.frameCount }
+
+// FixedTimestep returns the current fixed step size. Zero means disabled.
+func (w *World) FixedTimestep() float32 { return w.fixedTimestep }
+
+// SetFixedTimestep sets the fixed step size used by the OnFixedUpdate accumulator.
+// A step of 0 disables OnFixedUpdate dispatch entirely. Panics if step < 0.
+//
+// Spiral-of-death risk: if the fixed step is smaller than the average frame dt,
+// each Progress call must run multiple fixed iterations. If fixed systems are
+// slow, the total wall time per frame grows, causing more iterations next frame,
+// creating a positive-feedback loop that stalls the simulation. No guard is
+// provided; callers must ensure the fixed step is reachable within one frame.
+func (w *World) SetFixedTimestep(step float32) {
+	if step < 0 {
+		panic("flecs: SetFixedTimestep: step must be >= 0")
+	}
+	w.fixedTimestep = step
+}
 
 // NewEntity allocates a new entity, places it in the empty-signature table,
 // and returns its ID.
