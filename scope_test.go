@@ -739,6 +739,71 @@ func TestDeferredAddIDAlreadyHasComponent(t *testing.T) {
 	flecs.DeferEndForTest(w)
 }
 
+// TestQueryIterReaderWriter verifies that QueryIter.Reader() and QueryIter.Writer()
+// return non-nil capabilities backed by the world.
+func TestQueryIterReaderWriter(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[scopePos](w)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, scopePos{X: 3, Y: 4})
+	})
+	_ = e
+
+	q := flecs.NewQuery(w, posID)
+	it := q.Iter()
+	var gotReader *flecs.Reader
+	var gotWriter *flecs.Writer
+	for it.Next() {
+		gotReader = it.Reader()
+		gotWriter = it.Writer()
+	}
+	if gotReader == nil {
+		t.Fatal("QueryIter.Reader() returned nil")
+	}
+	if gotWriter == nil {
+		t.Fatal("QueryIter.Writer() returned nil")
+	}
+	// Verify the Reader is functional: Get should find the entity.
+	got, ok := flecs.Get[scopePos](gotReader, e)
+	if !ok || got.X != 3 {
+		t.Fatalf("Reader from QueryIter returned wrong value: %+v, ok=%v", got, ok)
+	}
+}
+
+// TestCachedQueryIterReaderWriter verifies that a CachedQuery's iter also exposes
+// working Reader() and Writer() methods.
+func TestCachedQueryIterReaderWriter(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[scopePos](w)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, scopePos{X: 7, Y: 8})
+	})
+	_ = e
+
+	cq := flecs.NewCachedQuery(w, posID)
+	it := cq.Iter()
+	var gotReader *flecs.Reader
+	var gotWriter *flecs.Writer
+	for it.Next() {
+		gotReader = it.Reader()
+		gotWriter = it.Writer()
+	}
+	if gotReader == nil {
+		t.Fatal("CachedQuery QueryIter.Reader() returned nil")
+	}
+	if gotWriter == nil {
+		t.Fatal("CachedQuery QueryIter.Writer() returned nil")
+	}
+	got, ok := flecs.Get[scopePos](gotReader, e)
+	if !ok || got.X != 7 {
+		t.Fatalf("Reader from CachedQuery iter returned wrong value: %+v, ok=%v", got, ok)
+	}
+}
+
 // TestFieldMaybe_ZeroSizePair exercises the zero-size optional path in FieldMaybe.
 func TestFieldMaybe_ZeroSizePair(t *testing.T) {
 	w := flecs.New()
