@@ -419,18 +419,18 @@
 //
 // Usage:
 //
-//	w := flecs.New()
-//	w.ExclusiveAccessBegin("main-thread")
-//	// ... only this goroutine may call World methods ...
-//	w.ExclusiveAccessEnd(false) // false = release; true = lock all writes
+//		w := flecs.New()
+//		w.ExclusiveAccessBegin("main-thread")
+//		// ... only this goroutine may call World methods ...
+//		w.ExclusiveAccessEnd(false) // false = release; true = lock all writes
 //
-//   - [World.ExclusiveAccessBegin] records the calling goroutine's ID and a
-//     human-readable label. Any subsequent call from a different goroutine
-//     panics with [ErrExclusiveAccessViolation].
-//   - [World.ExclusiveAccessEnd] releases the claim. Passing lockWorld=true
-//     transitions to a write-locked state where ALL goroutines receive a
-//     violation panic on any mutation; reads still pass. Passing lockWorld=false
-//     returns the world to the unclaimed state where any goroutine may call it.
+//	  - [World.ExclusiveAccessBegin] records the calling goroutine's ID and a
+//	    human-readable label. Any subsequent call from a different goroutine
+//	    panics with [ErrExclusiveAccessViolation].
+//	  - [World.ExclusiveAccessEnd] releases the claim. Passing lockWorld=true
+//	    transitions to a write-locked state where ALL goroutines receive a
+//	    violation panic on any mutation; reads still pass. Passing lockWorld=false
+//	    returns the world to the unclaimed state where any goroutine may call it.
 //
 // Common case overhead: one atomic.Load per public call. [goid.Get] is only
 // invoked when an owner is set, so the un-claimed path costs ~1 ns total.
