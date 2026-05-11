@@ -23,8 +23,8 @@ func TestCachedQueryBasicConstruction(t *testing.T) {
 
 	// Add an entity with both; a new [P,V] table is created.
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
-	flecs.Set(w, e, Velocity{DX: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
+	flecs.Set(w.W(), e, Velocity{DX: 1})
 
 	if cq.Count() != 1 {
 		t.Fatalf("after Set[P]+Set[V]: want Count()=1, got %d", cq.Count())
@@ -42,7 +42,7 @@ func TestCachedQuerySingleTerm(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{X: float32(i)})
+		flecs.Set(w.W(), e, Position{X: float32(i)})
 	}
 
 	cq := flecs.NewCachedQuery(w, posID)
@@ -66,8 +66,8 @@ func TestCachedQueryIterWalksCachedTables(t *testing.T) {
 	// Create 5 entities with [P,V].
 	for i := 0; i < 5; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{X: float32(i)})
-		flecs.Set(w, e, Velocity{DX: 1})
+		flecs.Set(w.W(), e, Position{X: float32(i)})
+		flecs.Set(w.W(), e, Velocity{DX: 1})
 	}
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
@@ -87,9 +87,9 @@ func TestCachedQueryIterWalksCachedTables(t *testing.T) {
 	type LocalMarker struct{}
 	for i := 0; i < 5; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{X: float32(i + 5)})
-		flecs.Set(w, e, Velocity{DX: 2})
-		flecs.Set(w, e, LocalMarker{})
+		flecs.Set(w.W(), e, Position{X: float32(i + 5)})
+		flecs.Set(w.W(), e, Velocity{DX: 2})
+		flecs.Set(w.W(), e, LocalMarker{})
 	}
 
 	// CachedQuery was notified when [P,V,Marker] was created.
@@ -108,8 +108,8 @@ func TestCachedQueryInitialPopulation(t *testing.T) {
 	// Create entities BEFORE constructing the cached query.
 	for i := 0; i < 4; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{X: float32(i)})
-		flecs.Set(w, e, Velocity{DX: float32(i)})
+		flecs.Set(w.W(), e, Position{X: float32(i)})
+		flecs.Set(w.W(), e, Velocity{DX: float32(i)})
 	}
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
@@ -127,7 +127,7 @@ func TestCachedQueryNoGrowthWithoutNewTable(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -146,7 +146,7 @@ func TestCachedQueryNoGrowthWithoutNewTable(t *testing.T) {
 
 	// Setting a component that the entity already has also must not create a
 	// new table (it's an in-place update).
-	flecs.Set(w, e, Position{X: 99})
+	flecs.Set(w.W(), e, Position{X: 99})
 	if cq.Count() != initial {
 		t.Fatalf("in-place Set grew table count: want %d, got %d", initial, cq.Count())
 	}
@@ -161,7 +161,7 @@ func TestCachedQueryMigrationAddsMatchingTable(t *testing.T) {
 
 	// Entity starts in [P]-only table.
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	defer cq.Close()
@@ -171,7 +171,7 @@ func TestCachedQueryMigrationAddsMatchingTable(t *testing.T) {
 	}
 
 	// Migrate e to [P,V].
-	flecs.Set(w, e, Velocity{DX: 1})
+	flecs.Set(w.W(), e, Velocity{DX: 1})
 
 	if cq.Count() != 1 {
 		t.Fatalf("after migration: want Count()=1, got %d", cq.Count())
@@ -193,7 +193,7 @@ func TestCachedQueryMigrationNonMatchingTable(t *testing.T) {
 
 	// Create [P]-only entity; table does not match [P,V] query.
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 	_ = e
 
 	if cq.Count() != 0 {
@@ -212,7 +212,7 @@ func TestCachedQueryCloseStopsMatching(t *testing.T) {
 
 	// Post-close migration should not grow the cache.
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	if cq.Count() != 0 {
 		t.Fatalf("post-Close: want Count()=0, got %d", cq.Count())
@@ -244,7 +244,7 @@ func TestCachedQueryIterAfterClose(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	cq.Close()
@@ -276,14 +276,14 @@ func TestCachedQueryMultiple(t *testing.T) {
 
 	// [P]-only entity.
 	eP := w.NewEntity()
-	flecs.Set(w, eP, Position{X: 1})
+	flecs.Set(w.W(), eP, Position{X: 1})
 	// [V]-only entity.
 	eV := w.NewEntity()
-	flecs.Set(w, eV, Velocity{DX: 1})
+	flecs.Set(w.W(), eV, Velocity{DX: 1})
 	// [P,V] entity.
 	ePV := w.NewEntity()
-	flecs.Set(w, ePV, Position{X: 2})
-	flecs.Set(w, ePV, Velocity{DX: 2})
+	flecs.Set(w.W(), ePV, Position{X: 2})
+	flecs.Set(w.W(), ePV, Velocity{DX: 2})
 
 	cqP := flecs.NewCachedQuery(w, posID)
 	cqV := flecs.NewCachedQuery(w, velID)
@@ -300,9 +300,9 @@ func TestCachedQueryMultiple(t *testing.T) {
 	// New [P,V,Marker] entity — both queries must grow.
 	type LocalM struct{}
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 3})
-	flecs.Set(w, e, Velocity{DX: 3})
-	flecs.Set(w, e, LocalM{})
+	flecs.Set(w.W(), e, Position{X: 3})
+	flecs.Set(w.W(), e, Velocity{DX: 3})
+	flecs.Set(w.W(), e, LocalM{})
 
 	if cqP.EntityCount() != 3 {
 		t.Errorf("P query after new table: want 3 entities, got %d", cqP.EntityCount())
@@ -325,7 +325,7 @@ func TestCachedQuerySameAsUncached(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{X: float32(i)})
+		flecs.Set(w.W(), e, Position{X: float32(i)})
 	}
 
 	q := flecs.NewQuery(w, posID)
@@ -368,7 +368,7 @@ func TestCachedQueryWithDefer(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	defer cq.Close()
@@ -378,12 +378,12 @@ func TestCachedQueryWithDefer(t *testing.T) {
 	}
 
 	// Queue Set[V] inside a deferred block.
-	w.DeferBegin()
-	flecs.Set(w, e, Velocity{DX: 1})
+	flecs.DeferBeginForTest(w)
+	flecs.Set(w.W(), e, Velocity{DX: 1})
 	if cq.Count() != 0 {
 		t.Fatalf("during defer: want 0, got %d", cq.Count())
 	}
-	w.DeferEnd() // flushes; e migrates to [P,V] → notifyTableCreated fires
+	flecs.DeferEndForTest(w) // flushes; e migrates to [P,V] → notifyTableCreated fires
 
 	if cq.Count() != 1 {
 		t.Fatalf("after DeferEnd: want 1, got %d", cq.Count())
@@ -402,8 +402,8 @@ func TestCachedQueryTag(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Tag{})
-	flecs.Set(w, e, Position{X: 7})
+	flecs.Set(w.W(), e, Tag{})
+	flecs.Set(w.W(), e, Position{X: 7})
 
 	cq := flecs.NewCachedQuery(w, tagID, posID)
 	defer cq.Close()
@@ -432,7 +432,7 @@ func TestCachedQueryPairComponent(t *testing.T) {
 	}
 
 	e := w.NewEntity()
-	flecs.AddID(w, e, pairID)
+	flecs.AddID(w.W(), e, pairID)
 
 	if cq.Count() != 1 {
 		t.Fatalf("after AddID pair: want 1, got %d", cq.Count())
@@ -447,8 +447,8 @@ func TestCachedQueryFieldT(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1, Y: 2})
-	flecs.Set(w, e, Velocity{DX: 3, DY: 4})
+	flecs.Set(w.W(), e, Position{X: 1, Y: 2})
+	flecs.Set(w.W(), e, Velocity{DX: 3, DY: 4})
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	defer cq.Close()

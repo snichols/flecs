@@ -33,9 +33,9 @@ func restSetup(t *testing.T) (*flecs.World, *httptest.Server) {
 
 	child := w.NewEntity()
 	w.SetName(child, "child")
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.Set(w, child, restPosition{X: 1, Y: 2})
-	flecs.Set(w, child, restVelocity{DX: 3, DY: 4})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), child, restPosition{X: 1, Y: 2})
+	flecs.Set(w.W(), child, restVelocity{DX: 3, DY: 4})
 
 	srv := httptest.NewServer(flecs.NewRESTHandler(w))
 	t.Cleanup(srv.Close)
@@ -282,7 +282,7 @@ func TestRESTPutSnapshot(t *testing.T) {
 	flecs.RegisterComponent[restVelocity](wsrc)
 	e := wsrc.NewEntity()
 	wsrc.SetName(e, "from-snapshot")
-	flecs.Set(wsrc, e, restPosition{X: 9, Y: 8})
+	flecs.Set(wsrc.W(), e, restPosition{X: 9, Y: 8})
 	snapshot, err := wsrc.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
@@ -367,8 +367,8 @@ func TestRESTEntityWithCustomPair(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 	w.SetName(e, "paired")
-	flecs.AddID(w, e, flecs.MakePair(rel, tgt))
-	flecs.Set(w, e, restPosition{X: 5, Y: 6})
+	flecs.AddID(w.W(), e, flecs.MakePair(rel, tgt))
+	flecs.Set(w.W(), e, restPosition{X: 5, Y: 6})
 
 	srv := httptest.NewServer(flecs.NewRESTHandler(w))
 	t.Cleanup(srv.Close)

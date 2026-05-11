@@ -17,7 +17,7 @@ func ExampleWorld_name() {
 
 	w.SetName(scene, "scene")
 	w.SetName(player, "player")
-	flecs.AddID(w, player, flecs.MakePair(w.ChildOf(), scene))
+	flecs.AddID(w.W(), player, flecs.MakePair(w.ChildOf(), scene))
 
 	// PathOf reconstructs the full dot-separated path from the root.
 	fmt.Println(w.PathOf(player))

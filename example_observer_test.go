@@ -14,19 +14,19 @@ func ExampleObserve() {
 	w := flecs.New()
 
 	// Register two observers on the same component event.
-	flecs.Observe[obsScore](w, flecs.EventOnSet, func(e flecs.ID, s *obsScore) {
+	flecs.Observe[obsScore](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, s obsScore) {
 		fmt.Printf("A: %d\n", s.Points)
 	})
-	obs2 := flecs.Observe[obsScore](w, flecs.EventOnSet, func(e flecs.ID, s *obsScore) {
+	obs2 := flecs.Observe[obsScore](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, s obsScore) {
 		fmt.Printf("B: %d\n", s.Points)
 	})
 
 	e := w.NewEntity()
-	flecs.Set(w, e, obsScore{Points: 5}) // both observers fire
+	flecs.Set(w.W(), e, obsScore{Points: 5}) // both observers fire
 
 	// Unsubscribe the second observer; only the first fires from now on.
 	obs2.Unsubscribe()
-	flecs.Set(w, e, obsScore{Points: 9})
+	flecs.Set(w.W(), e, obsScore{Points: 9})
 
 	// Output:
 	// A: 5

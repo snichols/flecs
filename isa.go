@@ -8,12 +8,9 @@ package flecs
 // override). The IsA entity is always alive for the lifetime of the World.
 func (w *World) IsA() ID { return w.isAID }
 
-// PrefabOf returns the first IsA prefab of entity e — the target of the first
-// (IsA, *) pair found in e's archetype signature.
-//
-// Returns (0, false) if e is not alive or has no IsA relationship.
-func PrefabOf(w *World, e ID) (ID, bool) {
-	w.checkExclusiveAccessRead()
+// prefabOfInternal returns the first IsA prefab of entity e.
+// Internal helper; no exclusive-access check.
+func prefabOfInternal(w *World, e ID) (ID, bool) {
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return 0, false

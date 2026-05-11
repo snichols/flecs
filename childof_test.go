@@ -46,9 +46,9 @@ func TestAddIDChildOfPairHasIDAndParentOf(t *testing.T) {
 	child := w.NewEntity()
 
 	pairID := flecs.MakePair(w.ChildOf(), parent)
-	flecs.AddID(w, child, pairID)
+	flecs.AddID(w.W(), child, pairID)
 
-	if !flecs.HasID(w, child, pairID) {
+	if !flecs.HasID(w.R(), child, pairID) {
 		t.Fatal("HasID returned false after AddID with ChildOf pair")
 	}
 
@@ -98,7 +98,7 @@ func TestEachChildThreeChildren(t *testing.T) {
 	c3 := w.NewEntity()
 
 	for _, child := range []flecs.ID{c1, c2, c3} {
-		flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	}
 
 	seen := make(map[flecs.ID]bool)
@@ -122,7 +122,7 @@ func TestEachChildNotCalledOnNonChildren(t *testing.T) {
 	parent := w.NewEntity()
 	child := w.NewEntity()
 	other := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
 	seen := make(map[flecs.ID]bool)
 	w.EachChild(parent, func(id flecs.ID) bool {
@@ -143,7 +143,7 @@ func TestEachChildEarlyExit(t *testing.T) {
 	parent := w.NewEntity()
 	for i := 0; i < 5; i++ {
 		child := w.NewEntity()
-		flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	}
 
 	count := 0
@@ -180,8 +180,8 @@ func TestCascadeDeleteSingleLevel(t *testing.T) {
 	c1 := w.NewEntity()
 	c2 := w.NewEntity()
 
-	flecs.AddID(w, c1, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w, c2, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), parent))
 
 	w.Delete(parent)
 
@@ -204,8 +204,8 @@ func TestCascadeDeleteMultiLevel(t *testing.T) {
 	parent := w.NewEntity()
 	child := w.NewEntity()
 
-	flecs.AddID(w, parent, flecs.MakePair(w.ChildOf(), grandparent))
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), parent, flecs.MakePair(w.ChildOf(), grandparent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
 	w.Delete(grandparent)
 
@@ -229,8 +229,8 @@ func TestCascadeIsolation(t *testing.T) {
 	c1 := w.NewEntity()
 	c2 := w.NewEntity()
 
-	flecs.AddID(w, c1, flecs.MakePair(w.ChildOf(), p1))
-	flecs.AddID(w, c2, flecs.MakePair(w.ChildOf(), p2))
+	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), p1))
+	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), p2))
 
 	w.Delete(p1)
 
@@ -248,8 +248,8 @@ func TestCascadeScrubsRowData(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.Set[Position](w, child, Position{X: 99, Y: 42})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set[Position](w.W(), child, Position{X: 99, Y: 42})
 
 	w.Delete(parent)
 
@@ -258,7 +258,7 @@ func TestCascadeScrubsRowData(t *testing.T) {
 	_ = recycled
 
 	// The recycled entity must not inherit Position from the deleted child.
-	_, ok := flecs.Get[Position](w, recycled)
+	_, ok := flecs.Get[Position](w.R(), recycled)
 	if ok {
 		t.Fatal("recycled entity must not inherit Position from deleted child")
 	}
@@ -270,7 +270,7 @@ func TestCascadePostOrder(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
 	w.Delete(parent)
 
@@ -291,7 +291,7 @@ func TestWideCascade(t *testing.T) {
 	children := make([]flecs.ID, n)
 	for i := range children {
 		children[i] = w.NewEntity()
-		flecs.AddID(w, children[i], flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(w.W(), children[i], flecs.MakePair(w.ChildOf(), parent))
 	}
 	before := w.Count()
 	w.Delete(parent)
@@ -335,7 +335,7 @@ func TestDeleteSelfCycleTerminates(t *testing.T) {
 	w := flecs.New()
 	p := w.NewEntity()
 	// p is its own parent — deliberate cycle
-	flecs.AddID(w, p, flecs.MakePair(w.ChildOf(), p))
+	flecs.AddID(w.W(), p, flecs.MakePair(w.ChildOf(), p))
 
 	w.Delete(p) // must terminate
 

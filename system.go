@@ -235,9 +235,9 @@ func (s *System) IsClosed() bool {
 // documents as a "null frame" that still increments FrameCount.
 //
 // Each variable-rate phase (PreUpdate, OnUpdate, PostUpdate) is wrapped in its
-// own w.Defer block. The OnFixedUpdate phase runs inside a per-iteration Defer
-// block so that mutations from one fixed tick are visible to the next fixed
-// tick within the same Progress call.
+// own deferred-command scope. The OnFixedUpdate phase runs inside a per-iteration
+// deferred scope so that mutations from one fixed tick are visible to the next
+// fixed tick within the same Progress call.
 //
 // Mutations queued by systems in an earlier phase are flushed before the next
 // phase starts, so cross-phase visibility is guaranteed.
@@ -262,7 +262,7 @@ func (w *World) Progress(dt float32) {
 	w.time += dt
 
 	runPhase := func(p ID, phaseDT float32) {
-		w.Defer(func() {
+		w.deferScope(func() {
 			active := make([]*System, 0, len(w.systems))
 			for _, s := range w.systems {
 				if !s.removed && s.phase == p {

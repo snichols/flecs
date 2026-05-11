@@ -108,7 +108,7 @@ func TestNameIsRegularComponent(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
 	w.SetName(e, "thing")
-	if !flecs.Has[flecs.Name](w, e) {
+	if !flecs.Has[flecs.Name](w.R(), e) {
 		t.Fatal("Has[Name] should return true after SetName")
 	}
 }
@@ -134,11 +134,11 @@ func TestLookupNested(t *testing.T) {
 	w.SetName(root, "scene")
 
 	car := w.NewEntity()
-	flecs.AddID(w, car, flecs.MakePair(w.ChildOf(), root))
+	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
 
 	wheel := w.NewEntity()
-	flecs.AddID(w, wheel, flecs.MakePair(w.ChildOf(), car))
+	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	found, ok := w.Lookup("scene.car.wheel")
@@ -193,7 +193,7 @@ func TestLookupChildBasics(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	w.SetName(child, "target")
 
 	found, ok := w.LookupChild(parent, "target")
@@ -219,7 +219,7 @@ func TestLookupChildRootScope(t *testing.T) {
 	// A child entity should NOT match root scope.
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	w.SetName(child, "rooted") // same name, but has a parent
 
 	found, ok := w.LookupChild(0, "rooted")
@@ -233,8 +233,8 @@ func TestLookupChildSiblingCollision(t *testing.T) {
 	parent := w.NewEntity()
 	c1 := w.NewEntity()
 	c2 := w.NewEntity()
-	flecs.AddID(w, c1, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w, c2, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), parent))
 	w.SetName(c1, "twin")
 	w.SetName(c2, "twin")
 
@@ -264,10 +264,10 @@ func TestPathOfNestedChain(t *testing.T) {
 	root := w.NewEntity()
 	w.SetName(root, "scene")
 	car := w.NewEntity()
-	flecs.AddID(w, car, flecs.MakePair(w.ChildOf(), root))
+	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
 	wheel := w.NewEntity()
-	flecs.AddID(w, wheel, flecs.MakePair(w.ChildOf(), car))
+	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	if got := w.PathOf(wheel); got != "scene.car.wheel" {
@@ -298,9 +298,9 @@ func TestPathOfUnnamedParentTruncation(t *testing.T) {
 	root := w.NewEntity()
 	w.SetName(root, "scene")
 	mid := w.NewEntity() // unnamed intermediate
-	flecs.AddID(w, mid, flecs.MakePair(w.ChildOf(), root))
+	flecs.AddID(w.W(), mid, flecs.MakePair(w.ChildOf(), root))
 	leaf := w.NewEntity()
-	flecs.AddID(w, leaf, flecs.MakePair(w.ChildOf(), mid))
+	flecs.AddID(w.W(), leaf, flecs.MakePair(w.ChildOf(), mid))
 	w.SetName(leaf, "wheel")
 
 	// mid is unnamed, so PathOf(leaf) stops at mid and returns just "wheel".
@@ -316,10 +316,10 @@ func TestPathRoundTrip(t *testing.T) {
 	root := w.NewEntity()
 	w.SetName(root, "scene")
 	car := w.NewEntity()
-	flecs.AddID(w, car, flecs.MakePair(w.ChildOf(), root))
+	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
 	wheel := w.NewEntity()
-	flecs.AddID(w, wheel, flecs.MakePair(w.ChildOf(), car))
+	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	path := w.PathOf(wheel)
@@ -337,7 +337,7 @@ func TestNameInheritedViaIsA(t *testing.T) {
 	w.SetName(prefab, "proto")
 
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 
 	// child has no own Name; Get[Name] walks IsA and finds prefab's name.
 	got, ok := w.GetName(child)

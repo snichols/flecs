@@ -16,10 +16,10 @@ type Name struct {
 func (w *World) Name() ID { return w.nameID }
 
 // SetName sets the Name component on entity e to name.
-// Equivalent to Set[Name](w, e, Name{Value: name}). Panics if e is not alive.
+// Equivalent to setOnWorld[Name](w, e, Name{Value: name}). Panics if e is not alive.
 func (w *World) SetName(e ID, name string) {
 	w.checkExclusiveAccessWrite()
-	Set[Name](w, e, Name{Value: name})
+	setOnWorld[Name](w, e, Name{Value: name})
 }
 
 // GetName returns the name of entity e.
@@ -29,7 +29,7 @@ func (w *World) SetName(e ID, name string) {
 // purposes. Inherited names via IsA are visible (same as Get[Name] semantics).
 func (w *World) GetName(e ID) (string, bool) {
 	w.checkExclusiveAccessRead()
-	n, ok := Get[Name](w, e)
+	n, ok := getOnWorld[Name](w, e)
 	if !ok || n.Value == "" {
 		return "", false
 	}
@@ -40,7 +40,7 @@ func (w *World) GetName(e ID) (string, bool) {
 // Returns true if e had a Name, false if e was dead or had no Name.
 func (w *World) RemoveName(e ID) bool {
 	w.checkExclusiveAccessWrite()
-	return Remove[Name](w, e)
+	return removeOnWorld[Name](w, e)
 }
 
 // LookupChild finds the direct child of parent with the given name. If parent
@@ -71,7 +71,7 @@ func (w *World) LookupChild(parent ID, name string) (ID, bool) {
 		if found != 0 {
 			return
 		}
-		if !Owns[Name](w, id) {
+		if !ownsOnWorld[Name](w, id) {
 			return
 		}
 		if _, hasParent := w.ParentOf(id); hasParent {

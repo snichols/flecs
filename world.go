@@ -32,6 +32,9 @@ import (
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
+	mu               sync.RWMutex // guards Read/Write scopes
+	writeCapability  Writer       // cached Writer; &writeCapability avoids per-Write allocation
+	readCapability   Reader       // cached Reader; &readCapability avoids per-Read allocation
 	index            *entityindex.Index
 	registry         *component.Registry
 	tables           map[string]*table.Table         // sigKey(sorted []ID) → table
@@ -49,7 +52,6 @@ type World struct {
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
 	exclusiveAccess  atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread  string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
 	deferred         *cmdQueue                       // tagged-union cmd queue; flushed when deferDepth reaches 0
@@ -128,6 +130,9 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(onFixedUpdate))
 	w.onFixedUpdateID = onFixedUpdate
+	// Initialize cached capability pointers — these avoid per-call heap allocation.
+	w.writeCapability.Reader.world = w
+	w.readCapability.world = w
 	return w
 }
 
@@ -216,10 +221,27 @@ func (w *World) SetWorkerCount(n int) {
 // serial dispatch (the default).
 func (w *World) WorkerCount() int { return w.workerCount }
 
+// W returns an unsynchronized *Writer backed by this world. For use during
+// single-goroutine setup or tests where no concurrent access occurs. It does
+// not acquire any locks and does not enter a Write scope.
+func (w *World) W() *Writer { return &w.writeCapability }
+
+// R returns an unsynchronized *Reader backed by this world. For use during
+// single-goroutine setup or tests where no concurrent access occurs. It does
+// not acquire any locks and does not enter a Read scope.
+func (w *World) R() *Reader { return &w.readCapability }
+
 // NewEntity allocates a new entity, places it in the empty-signature table,
-// and returns its ID.
+// and returns its ID. For use outside of Read/Write scopes (setup time).
 func (w *World) NewEntity() ID {
 	w.checkExclusiveAccessWrite()
+	return w.newEntityInternal()
+}
+
+// newEntityInternal allocates a new entity without the exclusive-access check.
+// Called by Writer.NewEntity (which runs inside a Write scope where access is
+// already guaranteed) and by World.NewEntity (setup-time).
+func (w *World) newEntityInternal() ID {
 	e := w.index.Alloc()
 	rec := w.index.Get(e)
 	rec.Table = w.empty
@@ -275,7 +297,7 @@ func (w *World) deleteOne(e ID) bool {
 func (w *World) Delete(e ID) bool {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		if !w.index.IsAlive(e) {
 			w.deferMu.Unlock()
 			return false
@@ -360,19 +382,11 @@ func RegisterComponent[T any](w *World) ID {
 	return id
 }
 
-// Set writes value v as component T on entity e.
-// If T is not yet registered, it is auto-registered. Panics if e is not alive.
-// If e already has T, the existing value is overwritten in place (fires OnSet).
-// Otherwise an archetype migration moves e to the table for its new component set
-// (fires OnAdd then OnSet).
-//
-// Within a deferred block (DeferBegin/DeferEnd or Defer), the operation is
-// queued and applied on DeferEnd. Reads (Get/Has/Owns/IsAlive) still see the
-// CURRENT state, not the deferred future state.
-func Set[T any](w *World, e ID, v T) {
-	w.checkExclusiveAccessWrite()
+// setOnWorld writes value v as component T on entity e.
+// Internal helper called by Writer.Set and the legacy World-based paths.
+func setOnWorld[T any](w *World, e ID, v T) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		cid := RegisterComponent[T](w)
 		info, _ := component.LookupByType[T](w.registry)
 		if info.Size > 0 {
@@ -396,12 +410,9 @@ func setImmediate[T any](w *World, e ID, v T) {
 	setImmediateByPtr(w, e, cid, unsafe.Pointer(&v), info)
 }
 
-// Get returns the value of component T on entity e. Checks the entity's own
-// table first (Owns semantics); on a miss, walks the IsA chain transitively.
-// Returns (zero, false) if T is not registered, e is not alive, or no IsA
-// path yields T. Does NOT auto-register T.
-func Get[T any](w *World, e ID) (T, bool) {
-	w.checkExclusiveAccessRead()
+// getOnWorld returns the value of component T on entity e.
+// Internal helper; does not check exclusive access (called from within scopes).
+func getOnWorld[T any](w *World, e ID) (T, bool) {
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
@@ -419,15 +430,12 @@ func Get[T any](w *World, e ID) (T, bool) {
 		}
 		return *(*T)(ptr), true
 	}
-	// Local miss: walk the IsA chain. seen is allocated lazily inside getViaIsA
-	// only when an IsA pair is found, avoiding a map allocation in the common case.
 	return getViaIsA[T](w, e, info.Component, nil)
 }
 
-// Has reports whether entity e has component T — locally or via an IsA chain.
-// Auto-registers T so the answer is meaningful; an unregistered type yields false.
-func Has[T any](w *World, e ID) bool {
-	w.checkExclusiveAccessRead()
+// hasOnWorld reports whether entity e has component T — locally or via an IsA chain.
+// Internal helper; does not check exclusive access.
+func hasOnWorld[T any](w *World, e ID) bool {
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -437,15 +445,12 @@ func Has[T any](w *World, e ID) bool {
 	if t != nil && t.HasComponent(cid) {
 		return true
 	}
-	// seen is allocated lazily inside hasViaIsA when an IsA pair is found.
 	return hasViaIsA(w, e, cid, nil)
 }
 
-// Owns reports whether entity e locally owns component T — T is present in
-// e's own archetype table rather than inherited via an IsA chain.
-// Auto-registers T (matches Has[T] policy). Returns false if e is not alive.
-func Owns[T any](w *World, e ID) bool {
-	w.checkExclusiveAccessRead()
+// ownsOnWorld reports whether entity e locally owns component T.
+// Internal helper; does not check exclusive access.
+func ownsOnWorld[T any](w *World, e ID) bool {
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -454,16 +459,11 @@ func Owns[T any](w *World, e ID) bool {
 	return rec.Table != nil && rec.Table.HasComponent(cid)
 }
 
-// Remove removes component T from entity e.
-// Returns true if T was present and has been removed, false if e was dead or
-// lacked T. If removal empties the component set, e moves to the empty table.
-//
-// Within a deferred block, the operation is queued; returns true if T is
-// currently present on e (at queue time).
-func Remove[T any](w *World, e ID) bool {
-	w.checkExclusiveAccessWrite()
+// removeOnWorld removes component T from entity e.
+// Internal helper; does not check exclusive access.
+func removeOnWorld[T any](w *World, e ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		info, ok := component.LookupByType[T](w.registry)
 		if !ok || info.Component == 0 {
 			w.deferMu.Unlock()
@@ -786,6 +786,105 @@ func sigKeyLookup(sig []ID) string {
 		return ""
 	}
 	return unsafe.String((*byte)(unsafe.Pointer(&sig[0])), len(sig)*8)
+}
+
+// Read opens a read-only capability scope. Concurrent calls from multiple
+// goroutines are allowed; writes from other goroutines block until all active
+// Read callbacks return. Internally backed by sync.RWMutex.RLock.
+func (w *World) Read(fn func(*Reader)) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	fn(&w.readCapability)
+}
+
+// Write opens a read/write capability scope. Claims exclusive access for
+// the duration of fn. All structural mutations are queued in a defer scope
+// and flushed when fn returns.
+//
+// Nested Write calls from the same goroutine increment deferDepth and run fn;
+// only the outermost Write flushes. Write from a different goroutine while
+// exclusive access is held panics with ErrExclusiveAccessViolation.
+func (w *World) Write(fn func(*Writer)) {
+	id := currentGoid()
+	owner := w.exclusiveAccess.Load()
+	if owner == id {
+		// Nested Write from same goroutine — increment depth and run without re-locking.
+		w.deferMu.Lock()
+		w.deferDepth++
+		w.deferMu.Unlock()
+		defer func() {
+			w.deferMu.Lock()
+			w.deferDepth--
+			depth := w.deferDepth
+			var q *cmdQueue
+			if depth == 0 {
+				q = w.deferred
+				w.deferred = acquireCmdQueue()
+			}
+			w.deferMu.Unlock()
+			if q != nil {
+				q.flush(w)
+				releaseCmdQueue(q)
+			}
+		}()
+		fn(&w.writeCapability)
+		return
+	}
+	if owner != 0 {
+		panic(ErrExclusiveAccessViolation)
+	}
+	w.mu.Lock()
+	w.ExclusiveAccessBegin("Write")
+	w.deferMu.Lock()
+	w.deferDepth++
+	w.deferMu.Unlock()
+	defer func() {
+		w.deferMu.Lock()
+		w.deferDepth--
+		depth := w.deferDepth
+		var q *cmdQueue
+		if depth == 0 {
+			q = w.deferred
+			w.deferred = acquireCmdQueue()
+		}
+		w.deferMu.Unlock()
+		if q != nil {
+			q.flush(w)
+			releaseCmdQueue(q)
+		}
+		w.ExclusiveAccessEnd(false)
+		w.mu.Unlock()
+	}()
+	fn(&w.writeCapability)
+}
+
+// deferScope runs fn in a deferred-mutation scope without claiming exclusive
+// access. It is the internal equivalent of the former public Defer method,
+// used by Progress/runPhase which already holds or does not require exclusive
+// access. Worker goroutines that call mutators inside a system callback rely
+// on deferScope not checking goroutine ownership.
+func (w *World) deferScope(fn func()) {
+	w.deferMu.Lock()
+	w.deferDepth++
+	w.deferMu.Unlock()
+	defer func() {
+		w.deferMu.Lock()
+		if w.deferDepth <= 0 {
+			w.deferMu.Unlock()
+			panic("flecs: deferScope: depth underflow")
+		}
+		w.deferDepth--
+		if w.deferDepth > 0 {
+			w.deferMu.Unlock()
+			return
+		}
+		q := w.deferred
+		w.deferred = acquireCmdQueue()
+		w.deferMu.Unlock()
+		q.flush(w)
+		releaseCmdQueue(q)
+	}()
+	fn()
 }
 
 // SetLogger installs l as the structured logger for lifecycle events.

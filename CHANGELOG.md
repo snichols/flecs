@@ -1,5 +1,147 @@
 # Changelog
 
+## [Unreleased] v0.15.0 — Scoped Capability API (Reader / Writer) — BREAKING CHANGE
+
+> **Breaking change.** The legacy `Defer`/`DeferBegin`/`DeferEnd`/`Readonly`/`ReadonlyBegin`/`ReadonlyEnd`
+> methods have been removed from `*World`. Hook and observer callback signatures have changed.
+> See the migration guide below.
+
+Completes the Reader/Writer scoped-capability migration begun in v0.14.0.
+All mutation entrypoints now require an explicit `*Writer` capability obtained from
+`world.Write(func(*Writer))`. All read entrypoints require an explicit `*Reader` from
+`world.Read(func(*Reader))`. The old bare-`*World` mutation methods are gone.
+
+### Breaking Changes
+
+#### API removals
+
+| Removed | Replacement |
+|---------|-------------|
+| `world.Defer(fn func())` | `world.Write(func(fw *flecs.Writer) { fn() })` |
+| `world.DeferBegin()` | `world.Write(...)` or internal `deferScope` (unexported) |
+| `world.DeferEnd()` | (same — managed by `Write` scope) |
+| `world.Readonly(fn func())` | `world.Read(func(fr *flecs.Reader) { fn() })` |
+| `world.ReadonlyBegin()` | (internal only; use `world.Read`) |
+| `world.ReadonlyEnd()` | (internal only; use `world.Read`) |
+
+#### Hook callback signature
+
+```go
+// v0.14 and earlier:
+flecs.OnSet[T](w, func(e flecs.ID, v *T) { ... })
+
+// v0.15:
+flecs.OnSet[T](w, func(fw *flecs.Writer, e flecs.ID, v T) { ... })
+```
+
+Same change applies to `OnAdd[T]` and `OnRemove[T]`. The value is now passed by
+value (not pointer). The `*Writer` parameter provides safe mutation access from
+within a hook without re-entering the world mutex.
+
+#### Observer callback signature
+
+```go
+// v0.14 and earlier:
+flecs.Observe[T](w, func(e flecs.ID, v *T) { ... })
+flecs.ObserveID(w, id, event, func(e flecs.ID, ptr unsafe.Pointer) { ... })
+flecs.Observe2[T](w, func(e flecs.ID, v *T) { ... })
+
+// v0.15:
+flecs.Observe[T](w, func(fw *flecs.Writer, e flecs.ID, v T) { ... })
+flecs.ObserveID(w, id, event, func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) { ... })
+flecs.Observe2[T](w, func(fw *flecs.Writer, e flecs.ID, v T) { ... })
+```
+
+#### Migration guide
+
+```go
+// --- Mutation (Set/Add/Remove/Delete) ---
+// Before:
+w.Defer(func() {
+    flecs.Set(w, e, MyComp{X: 1})
+    w.Delete(e2)
+})
+// After:
+w.Write(func(fw *flecs.Writer) {
+    flecs.Set(fw, e, MyComp{X: 1})
+    fw.Delete(e2)
+})
+
+// --- Read-only iteration ---
+// Before:
+w.Readonly(func() {
+    flecs.Each1[MyComp](w, func(e flecs.ID, p *MyComp) { ... })
+})
+// After:
+w.Read(func(fr *flecs.Reader) {
+    flecs.Each1[MyComp](fr, func(e flecs.ID, p *MyComp) { ... })
+})
+
+// --- Hooks ---
+// Before:
+flecs.OnSet[Score](w, func(e flecs.ID, v *Score) { fmt.Println(v.Value) })
+// After:
+flecs.OnSet[Score](w, func(_ *flecs.Writer, e flecs.ID, v Score) { fmt.Println(v.Value) })
+```
+
+### Added
+
+- **`Reader` / `Writer` types** — `Reader` holds read-only methods; `Writer` embeds
+  `Reader` and adds mutating methods. Both are obtained via `world.Read` / `world.Write`.
+- **`world.Read(fn func(*Reader))`** — opens a shared-read scope (RLock). Multiple
+  goroutines may hold concurrent Read scopes.
+- **`world.Write(fn func(*Writer))`** — opens an exclusive read/write scope. Nested
+  calls from the same goroutine share the defer queue; calls from other goroutines
+  block until the scope is released. Panics with `ErrExclusiveAccessViolation` if the
+  world is held by a different goroutine via `ExclusiveAccessBegin`.
+- **`ErrExclusiveAccessViolation`** — sentinel error value for the above panic.
+- **`world.W()` / `world.R()`** — convenience accessors that return an unsynchronized
+  `*Writer` / `*Reader` for single-goroutine setup code and tests.
+- **Free functions on `*Reader`**: `Get[T]`, `GetRef[T]`, `Has[T]`, `Owns[T]`,
+  `GetPair[T]`, `GetPairRef[T]`, `HasID`, `OwnsID`, `GetUp[T]`, `HasUp`, `TargetUp`,
+  `PrefabOf`, `Each1–Each4`.
+- **Free functions on `*Writer`**: `Set[T]`, `Remove[T]`, `AddID`, `RemoveID`,
+  `SetPair[T]`.
+- **`*Writer` passed to hooks and observers** — hook and observer callbacks receive a
+  `*Writer` as their first argument, enabling safe mutation inside a callback without
+  re-acquiring any lock.
+- **`TestHookReceivesWriter`** — confirms that the `*Writer` passed to `OnSet` hooks is
+  non-nil and functional.
+- **`TestObserverReceivesWriter`** — confirms that the `*Writer` passed to `Observe`
+  observers is non-nil and functional.
+- **Concurrent-reader tests** — `TestReadonlyAllowsConcurrentReaders`,
+  `TestReadonlyEnqueuesWrites`, `TestReadonlyDeleteEnqueued`,
+  `TestReadonlyNestedWithDefer`, `TestDeferWrappedIterationStillPasses`,
+  `TestReadonlyIsDeferred`, `TestReadonlyEndPanicsWithoutBegin`,
+  `TestReadonlyNestedDepthPreservation`, `TestWriterAsReader`.
+
+### Changed
+
+- All free functions that previously accepted `*World` as their first argument
+  (`Set`, `Get`, `Has`, `Remove`, `AddID`, `RemoveID`, `HasID`, `OwnsID`, `SetPair`,
+  `GetPair`, `Each1–Each4`, `GetUp`, `HasUp`, `TargetUp`, `PrefabOf`, etc.) now
+  accept `*Writer` or `*Reader` as appropriate.
+- Hook callbacks changed from `func(e ID, v *T)` to `func(fw *Writer, e ID, v T)`.
+- Observer callbacks changed from `func(e ID, v *T)` to `func(fw *Writer, e ID, v T)`.
+- `system.go`'s `runPhase` now uses the internal `deferScope` instead of
+  `world.Write`, avoiding a spurious exclusive-access claim that conflicted with the
+  worker goroutines in multi-threaded dispatch.
+- `rest.go` handlers use `world.Read(func(*Reader))` for all read-only responses.
+
+### Removed
+
+- `world.Defer(fn func())` — use `world.Write(func(fw *Writer))`.
+- `world.DeferBegin()` / `world.DeferEnd()` — internal lifecycle now managed by `Write`.
+- `world.Readonly(fn func())` — use `world.Read(func(fr *Reader))`.
+- `world.ReadonlyBegin()` / `world.ReadonlyEnd()` — internalized; use `world.Read`.
+
+### Performance
+
+- `BenchmarkSetExistingComponent`: 0 allocs/op (unchanged).
+- `BenchmarkDeferBatchedAdds`: 0 allocs/op, ~7 200 ns/op (unchanged from v0.14.0).
+- `BenchmarkDeferSingleSet`: 0 allocs/op (unchanged).
+- Test coverage: 95.1% of statements.
+
 ## v0.14.0 — 2026-05-11 — Coalescing Deferred Command Queue
 
 Port of C flecs' tagged-union command queue and two-pass entity coalescer.

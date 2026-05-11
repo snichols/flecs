@@ -22,14 +22,14 @@ func TestEach1Basic(t *testing.T) {
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
 	e3 := w.NewEntity()
-	flecs.Set(w, e1, eachPos{X: 1})
-	flecs.Set(w, e2, eachPos{X: 2})
-	flecs.Set(w, e3, eachPos{X: 3})
+	flecs.Set(w.W(), e1, eachPos{X: 1})
+	flecs.Set(w.W(), e2, eachPos{X: 2})
+	flecs.Set(w.W(), e3, eachPos{X: 3})
 	_ = posID
 
 	var total float64
 	var count int
-	flecs.Each1[eachPos](w, func(e flecs.ID, p *eachPos) {
+	flecs.Each1[eachPos](w.R(), func(e flecs.ID, p *eachPos) {
 		total += p.X
 		count++
 	})
@@ -45,13 +45,13 @@ func TestEach1Basic(t *testing.T) {
 func TestEach1MutationWritesBack(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, eachPos{X: 10})
+	flecs.Set(w.W(), e, eachPos{X: 10})
 
-	flecs.Each1[eachPos](w, func(_ flecs.ID, p *eachPos) {
+	flecs.Each1[eachPos](w.R(), func(_ flecs.ID, p *eachPos) {
 		p.X = 99
 	})
 
-	got, ok := flecs.Get[eachPos](w, e)
+	got, ok := flecs.Get[eachPos](w.R(), e)
 	if !ok {
 		t.Fatal("entity should have eachPos")
 	}
@@ -64,17 +64,17 @@ func TestEach2Basic(t *testing.T) {
 	w := flecs.New()
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
-	flecs.Set(w, e1, eachPos{X: 1})
-	flecs.Set(w, e1, eachVel{X: 10})
-	flecs.Set(w, e2, eachPos{X: 2})
-	flecs.Set(w, e2, eachVel{X: 20})
+	flecs.Set(w.W(), e1, eachPos{X: 1})
+	flecs.Set(w.W(), e1, eachVel{X: 10})
+	flecs.Set(w.W(), e2, eachPos{X: 2})
+	flecs.Set(w.W(), e2, eachVel{X: 20})
 
-	flecs.Each2[eachPos, eachVel](w, func(_ flecs.ID, p *eachPos, v *eachVel) {
+	flecs.Each2[eachPos, eachVel](w.R(), func(_ flecs.ID, p *eachPos, v *eachVel) {
 		p.X += v.X
 	})
 
-	p1, _ := flecs.Get[eachPos](w, e1)
-	p2, _ := flecs.Get[eachPos](w, e2)
+	p1, _ := flecs.Get[eachPos](w.R(), e1)
+	p2, _ := flecs.Get[eachPos](w.R(), e2)
 	if p1.X != 11 {
 		t.Fatalf("e1: want X=11, got %v", p1.X)
 	}
@@ -86,12 +86,12 @@ func TestEach2Basic(t *testing.T) {
 func TestEach3Basic(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, eachPos{X: 1})
-	flecs.Set(w, e, eachVel{X: 2})
-	flecs.Set(w, e, eachMass{V: 3})
+	flecs.Set(w.W(), e, eachPos{X: 1})
+	flecs.Set(w.W(), e, eachVel{X: 2})
+	flecs.Set(w.W(), e, eachMass{V: 3})
 
 	var sumX, sumV float64
-	flecs.Each3[eachPos, eachVel, eachMass](w, func(_ flecs.ID, p *eachPos, v *eachVel, m *eachMass) {
+	flecs.Each3[eachPos, eachVel, eachMass](w.R(), func(_ flecs.ID, p *eachPos, v *eachVel, m *eachMass) {
 		sumX = p.X
 		sumV = v.X + m.V
 	})
@@ -104,13 +104,13 @@ func TestEach3Basic(t *testing.T) {
 func TestEach4Basic(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, eachPos{X: 1})
-	flecs.Set(w, e, eachVel{X: 2})
-	flecs.Set(w, e, eachMass{V: 3})
-	flecs.Set(w, e, eachHealth{HP: 4})
+	flecs.Set(w.W(), e, eachPos{X: 1})
+	flecs.Set(w.W(), e, eachVel{X: 2})
+	flecs.Set(w.W(), e, eachMass{V: 3})
+	flecs.Set(w.W(), e, eachHealth{HP: 4})
 
 	var total float64
-	flecs.Each4[eachPos, eachVel, eachMass, eachHealth](w, func(_ flecs.ID, p *eachPos, v *eachVel, m *eachMass, h *eachHealth) {
+	flecs.Each4[eachPos, eachVel, eachMass, eachHealth](w.R(), func(_ flecs.ID, p *eachPos, v *eachVel, m *eachMass, h *eachHealth) {
 		total = p.X + v.X + m.V + float64(h.HP)
 	})
 
@@ -124,17 +124,17 @@ func TestEach2MixedArchetypes(t *testing.T) {
 
 	// archetype [eachPos, eachVel]
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, eachPos{X: 1})
-	flecs.Set(w, e1, eachVel{X: 10})
+	flecs.Set(w.W(), e1, eachPos{X: 1})
+	flecs.Set(w.W(), e1, eachVel{X: 10})
 
 	// archetype [eachPos, eachVel, eachTag]
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, eachPos{X: 2})
-	flecs.Set(w, e2, eachVel{X: 20})
-	flecs.Set(w, e2, eachTag{})
+	flecs.Set(w.W(), e2, eachPos{X: 2})
+	flecs.Set(w.W(), e2, eachVel{X: 20})
+	flecs.Set(w.W(), e2, eachTag{})
 
 	var count int
-	flecs.Each2[eachPos, eachVel](w, func(_ flecs.ID, p *eachPos, v *eachVel) {
+	flecs.Each2[eachPos, eachVel](w.R(), func(_ flecs.ID, p *eachPos, v *eachVel) {
 		p.X += v.X
 		count++
 	})
@@ -142,8 +142,8 @@ func TestEach2MixedArchetypes(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("want 2 entities across both archetypes, got %d", count)
 	}
-	p1, _ := flecs.Get[eachPos](w, e1)
-	p2, _ := flecs.Get[eachPos](w, e2)
+	p1, _ := flecs.Get[eachPos](w.R(), e1)
+	p2, _ := flecs.Get[eachPos](w.R(), e2)
 	if p1.X != 11 {
 		t.Fatalf("e1: want X=11, got %v", p1.X)
 	}
@@ -155,11 +155,11 @@ func TestEach2MixedArchetypes(t *testing.T) {
 func TestEach2NoMatch(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, eachPos{X: 1})
+	flecs.Set(w.W(), e, eachPos{X: 1})
 	// no eachVel; Each2 should not call fn at all
 
 	var count int
-	flecs.Each2[eachPos, eachVel](w, func(_ flecs.ID, _ *eachPos, _ *eachVel) {
+	flecs.Each2[eachPos, eachVel](w.R(), func(_ flecs.ID, _ *eachPos, _ *eachVel) {
 		count++
 	})
 
@@ -174,7 +174,7 @@ func TestEach1AutoRegistration(t *testing.T) {
 	before := w.Count()
 
 	var count int
-	flecs.Each1[neverRegistered](w, func(_ flecs.ID, _ *neverRegistered) {
+	flecs.Each1[neverRegistered](w.R(), func(_ flecs.ID, _ *neverRegistered) {
 		count++
 	})
 
@@ -191,11 +191,11 @@ func TestEach1TagComponent(t *testing.T) {
 	w := flecs.New()
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
-	flecs.Set(w, e1, eachTag{})
-	flecs.Set(w, e2, eachTag{})
+	flecs.Set(w.W(), e1, eachTag{})
+	flecs.Set(w.W(), e2, eachTag{})
 
 	var count int
-	flecs.Each1[eachTag](w, func(_ flecs.ID, _ *eachTag) {
+	flecs.Each1[eachTag](w.R(), func(_ flecs.ID, _ *eachTag) {
 		count++
 	})
 
@@ -211,7 +211,7 @@ func TestEach1GCPointerSurvives(t *testing.T) {
 	entities := make([]flecs.ID, 10)
 	for i := range entities {
 		e := w.NewEntity()
-		flecs.Set(w, e, withString{Name: "entity"})
+		flecs.Set(w.W(), e, withString{Name: "entity"})
 		entities[i] = e
 	}
 
@@ -219,7 +219,7 @@ func TestEach1GCPointerSurvives(t *testing.T) {
 	runtime.GC()
 
 	var count int
-	flecs.Each1[withString](w, func(_ flecs.ID, s *withString) {
+	flecs.Each1[withString](w.R(), func(_ flecs.ID, s *withString) {
 		if s.Name != "entity" {
 			panic("GC corrupted string in column")
 		}
@@ -236,14 +236,14 @@ func TestEachMutationIsLive(t *testing.T) {
 	// to the live column slot and are visible via Get after iteration.
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, eachPos{X: 0, Y: 0})
+	flecs.Set(w.W(), e, eachPos{X: 0, Y: 0})
 
-	flecs.Each1[eachPos](w, func(_ flecs.ID, p *eachPos) {
+	flecs.Each1[eachPos](w.R(), func(_ flecs.ID, p *eachPos) {
 		p.X = 42
 		p.Y = 7
 	})
 
-	got, ok := flecs.Get[eachPos](w, e)
+	got, ok := flecs.Get[eachPos](w.R(), e)
 	if !ok {
 		t.Fatal("entity should still have eachPos after Each1")
 	}

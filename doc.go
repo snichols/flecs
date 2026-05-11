@@ -21,8 +21,12 @@
 //
 //	posID := flecs.RegisterComponent[Position](w)
 //	e     := w.NewEntity()
-//	flecs.Set(w, e, Position{X: 1, Y: 2})
-//	if p, ok := flecs.Get[Position](w, e); ok { ... }
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.Set(fw, e, Position{X: 1, Y: 2})
+//	})
+//	w.Read(func(fr *flecs.Reader) {
+//	    if p, ok := flecs.Get[Position](fr, e); ok { ... }
+//	})
 //
 // # Queries
 //
@@ -30,8 +34,10 @@
 // helpers [Each1], [Each2], [Each3], [Each4] cover the common case. For
 // programmatic or cached queries use [NewQuery], [NewCachedQuery], and [Field]:
 //
-//	flecs.Each2[Position, Velocity](w, func(e flecs.ID, p *Position, v *Velocity) {
-//	    p.X += v.DX
+//	w.Read(func(fr *flecs.Reader) {
+//	    flecs.Each2[Position, Velocity](fr, func(e flecs.ID, p *Position, v *Velocity) {
+//	        p.X += v.DX
+//	    })
 //	})
 //
 // # Pipelines and Systems
@@ -53,8 +59,10 @@
 // inheritance: [Get] and [Has] walk the IsA chain when the component is not
 // locally owned.
 //
-//	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
-//	flecs.AddID(w, instance, flecs.MakePair(w.IsA(), prefab))
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+//	    flecs.AddID(fw, instance, flecs.MakePair(w.IsA(), prefab))
+//	})
 //
 // # Structured Query Terms
 //
@@ -117,44 +125,39 @@
 //
 // # Deferred Mutation
 //
-// [World.Defer] wraps a block so that structural mutations (Set, Remove, Delete,
-// AddID) are queued and applied atomically when the block exits. This makes it
-// safe to mutate the world during iteration:
+// [World.Write] opens an exclusive read/write scope. All structural mutations
+// (Set, Remove, Delete, AddID) inside the scope are queued and applied atomically
+// when the scope exits. This makes it safe to mutate the world during iteration:
 //
-//	w.Defer(func() {
-//	    flecs.Each1[Position](w, func(e flecs.ID, p *Position) {
-//	        if p.X < 0 { w.Delete(e) } // queued, not immediate
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.Each1[Position](w.R(), func(e flecs.ID, p *Position) {
+//	        if p.X < 0 { fw.Delete(e) } // queued, not immediate
 //	    })
 //	})
 //
 // # Concurrency model
 //
-// Outside [World.Progress], the world is single-threaded by convention. For
-// concurrent read access from multiple goroutines, wrap the read window in
-// [World.Readonly]:
+// [World.Read] opens a shared-read scope backed by sync.RWMutex. Multiple
+// goroutines may hold concurrent Read scopes; a Write scope waits for all
+// active Read scopes to finish before acquiring exclusive access:
 //
-//	w.Readonly(func() {
-//	    var wg sync.WaitGroup
-//	    for range numWorkers {
-//	        wg.Add(1)
-//	        go func() {
-//	            defer wg.Done()
-//	            flecs.Each1[Position](w, func(e flecs.ID, p *Position) { ... })
-//	        }()
-//	    }
-//	    wg.Wait()
-//	}) // deferred writes (if any) are applied here
+//	var wg sync.WaitGroup
+//	for range numWorkers {
+//	    wg.Add(1)
+//	    go func() {
+//	        defer wg.Done()
+//	        w.Read(func(fr *flecs.Reader) {
+//	            flecs.Each1[Position](fr, func(e flecs.ID, p *Position) { ... })
+//	        })
+//	    }()
+//	}
+//	wg.Wait()
 //
-// While the window is open, any goroutine that calls a mutator (Set, Remove,
-// Delete, AddID, RemoveID, SetPair, SetByID) has its operation transparently
-// enqueued in the deferred-command queue rather than applied immediately.
-// On [World.ReadonlyEnd] (or when the [World.Readonly] wrapper returns), all
-// enqueued operations are flushed on the calling goroutine.
-//
-// Readers take no locks — the readonly flag guarantees nothing mutates world
-// state during the window, so all ECS tables are safe to read concurrently.
-// This avoids the Each+Defer+Delete deadlock that a naive RWMutex approach
-// would produce.
+// [World.Write] acquires an exclusive write lock. Structural mutations inside
+// the scope (Set, Remove, Delete, AddID, RemoveID, SetPair, SetByID) are
+// transparently enqueued in the deferred-command queue and flushed when the
+// scope exits. Nested Write calls from the same goroutine share the queue and
+// flush only when the outermost Write returns.
 //
 // # Dynamic Value Access
 //
@@ -213,8 +216,10 @@
 //
 //	follows := w.NewEntity()
 //	alice, bob, charlie := w.NewEntity(), w.NewEntity(), w.NewEntity()
-//	flecs.SetPair[Edge](w, alice, follows, bob, Edge{Weight: 0.8})
-//	flecs.AddID(w, alice, flecs.MakePair(follows, charlie)) // tag-only
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.SetPair[Edge](fw, alice, follows, bob, Edge{Weight: 0.8})
+//	    flecs.AddID(fw, alice, flecs.MakePair(follows, charlie)) // tag-only
+//	})
 //
 //	data, _ := w.MarshalJSON()
 //	// JSON for alice: {"serial":2,"pairs":[
@@ -231,10 +236,11 @@
 // inheritance is restored transparently after UnmarshalJSON:
 //
 //	prefab := w.NewEntity()
-//	flecs.Set(w, prefab, Position{X: 1, Y: 1})
-//
 //	inst := w.NewEntity()
-//	flecs.AddID(w, inst, flecs.MakePair(w.IsA(), prefab))
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.Set(fw, prefab, Position{X: 1, Y: 1})
+//	    flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+//	})
 //
 //	data, _ := w.MarshalJSON()
 //	// JSON: {"version":1,"entities":[
@@ -397,7 +403,9 @@
 //	e := w.NewEntity()
 //	// -> DEBUG msg="entity created" id=<n>
 //
-//	flecs.Set(w, e, Position{1, 2})
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.Set(fw, e, Position{1, 2})
+//	})
 //	// -> DEBUG msg="table created" signature_len=1 signature="<id>"
 //
 // Lifecycle events that produce log records:

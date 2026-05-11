@@ -43,7 +43,7 @@ type observerKey struct {
 // dispatch and compacted lazily on the next registration for the same key.
 type observerNode struct {
 	key      observerKey
-	callback func(e ID, ptr unsafe.Pointer)
+	callback func(fw *Writer, e ID, ptr unsafe.Pointer)
 	removed  bool
 }
 
@@ -80,11 +80,17 @@ func (o *Observer) Unsubscribe() {
 // if it has not already been registered. The observer fires after any hook
 // registered for the same (T, event), and after observers registered earlier.
 // Returns an *Observer handle; call Unsubscribe to cancel.
-func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
+//
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+func Observe[T any](w *World, event EventKind, fn func(fw *Writer, e ID, v T)) *Observer {
 	w.checkExclusiveAccessWrite()
 	id := RegisterComponent[T](w)
-	callback := func(e ID, ptr unsafe.Pointer) {
-		fn(e, (*T)(ptr))
+	callback := func(fw *Writer, e ID, ptr unsafe.Pointer) {
+		var v T
+		if ptr != nil {
+			v = *(*T)(ptr)
+		}
+		fn(fw, e, v)
 	}
 	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, callback)
@@ -102,7 +108,9 @@ func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
 // is performed. The observer fires whenever that exact id appears in a fire
 // helper call (AddID, Set, SetPair, Delete paths).
 // Returns an *Observer handle; call Unsubscribe to cancel.
-func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointer)) *Observer {
+//
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+func ObserveID(w *World, id ID, event EventKind, fn func(fw *Writer, e ID, ptr unsafe.Pointer)) *Observer {
 	w.checkExclusiveAccessWrite()
 	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, fn)
@@ -119,14 +127,20 @@ func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointe
 // The fn callback receives the EventKind that triggered it, allowing a single
 // function to handle Add, Set, and Remove events. Returns a single *Observer
 // handle; Unsubscribe cancels all subscriptions.
-func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID, v *T)) *Observer {
+//
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+func Observe2[T any](w *World, events []EventKind, fn func(fw *Writer, event EventKind, e ID, v T)) *Observer {
 	w.checkExclusiveAccessWrite()
 	id := RegisterComponent[T](w)
 	obs := &Observer{w: w}
 	for _, ev := range events {
 		ev := ev
-		callback := func(e ID, ptr unsafe.Pointer) {
-			fn(ev, e, (*T)(ptr))
+		callback := func(fw *Writer, e ID, ptr unsafe.Pointer) {
+			var v T
+			if ptr != nil {
+				v = *(*T)(ptr)
+			}
+			fn(fw, ev, e, v)
 		}
 		node := w.addObserverNode(id, ev, callback)
 		obs.nodes = append(obs.nodes, node)
@@ -141,7 +155,7 @@ func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID
 
 // addObserverNode creates an observerNode for (id, event) and appends it to
 // the world's observer map, compacting removed entries lazily before insertion.
-func (w *World) addObserverNode(id ID, event EventKind, callback func(e ID, ptr unsafe.Pointer)) *observerNode {
+func (w *World) addObserverNode(id ID, event EventKind, callback func(fw *Writer, e ID, ptr unsafe.Pointer)) *observerNode {
 	if w.observers == nil {
 		w.observers = make(map[observerKey][]*observerNode)
 	}
@@ -176,6 +190,6 @@ func (w *World) dispatchObservers(id ID, event EventKind, e ID, ptr unsafe.Point
 		if n.removed {
 			continue
 		}
-		n.callback(e, ptr)
+		n.callback(&w.writeCapability, e, ptr)
 	}
 }

@@ -19,7 +19,7 @@ func ExampleNewRESTHandler() {
 
 	e := w.NewEntity()
 	w.SetName(e, "hero")
-	flecs.Set(w, e, examplePosition{X: 10, Y: 20})
+	flecs.Set(w.W(), e, examplePosition{X: 10, Y: 20})
 
 	srv := httptest.NewServer(flecs.NewRESTHandler(w))
 	defer srv.Close()

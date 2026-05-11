@@ -21,7 +21,7 @@ func Example_pipeline() {
 
 	tickID := flecs.RegisterComponent[plTick](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, plTick{})
+	flecs.Set(w.W(), e, plTick{})
 
 	preQ := flecs.NewCachedQuery(w, tickID)
 	flecs.NewSystemInPhase(w, w.PreUpdate(), preQ, func(dt float32, it *flecs.QueryIter) {

@@ -14,13 +14,13 @@ func TestQueryTermsWith(t *testing.T) {
 	_ = flecs.RegisterComponent[Velocity](w)
 
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2})
-	flecs.Set(w, e2, Velocity{DX: 1})
+	flecs.Set(w.W(), e2, Position{X: 2})
+	flecs.Set(w.W(), e2, Velocity{DX: 1})
 	// e3 has only Velocity — should not match.
 	e3 := w.NewEntity()
-	flecs.Set(w, e3, Velocity{DX: 3})
+	flecs.Set(w.W(), e3, Velocity{DX: 3})
 
 	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
 
@@ -48,11 +48,11 @@ func TestQueryTermsWithout(t *testing.T) {
 
 	// alive: has Position, no dead tag.
 	alive := w.NewEntity()
-	flecs.Set(w, alive, Position{X: 1})
+	flecs.Set(w.W(), alive, Position{X: 1})
 	// dead: has Position and dead tag.
 	dead := w.NewEntity()
-	flecs.Set(w, dead, Position{X: 2})
-	flecs.AddID(w, dead, deadID)
+	flecs.Set(w.W(), dead, Position{X: 2})
+	flecs.AddID(w.W(), dead, deadID)
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -81,11 +81,11 @@ func TestQueryTermsMaybe(t *testing.T) {
 
 	// e1: Position only.
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	// e2: Position + Velocity.
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2})
-	flecs.Set(w, e2, Velocity{DX: 10})
+	flecs.Set(w.W(), e2, Position{X: 2})
+	flecs.Set(w.W(), e2, Velocity{DX: 10})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -139,15 +139,15 @@ func TestQueryTermsMixed(t *testing.T) {
 
 	// match: Position, no dead, optional Velocity.
 	eAlive := w.NewEntity()
-	flecs.Set(w, eAlive, Position{X: 1})
+	flecs.Set(w.W(), eAlive, Position{X: 1})
 	// match: Position + Velocity, no dead.
 	eAliveVel := w.NewEntity()
-	flecs.Set(w, eAliveVel, Position{X: 2})
-	flecs.Set(w, eAliveVel, Velocity{DX: 5})
+	flecs.Set(w.W(), eAliveVel, Position{X: 2})
+	flecs.Set(w.W(), eAliveVel, Velocity{DX: 5})
 	// no match: Position + dead.
 	eDead := w.NewEntity()
-	flecs.Set(w, eDead, Position{X: 3})
-	flecs.AddID(w, eDead, deadID)
+	flecs.Set(w.W(), eDead, Position{X: 3})
+	flecs.AddID(w.W(), eDead, deadID)
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -183,20 +183,20 @@ func TestQueryTermsMultipleNot(t *testing.T) {
 
 	// match: only Position.
 	eOnly := w.NewEntity()
-	flecs.Set(w, eOnly, Position{X: 1})
+	flecs.Set(w.W(), eOnly, Position{X: 1})
 	// no match: Position + A.
 	eA := w.NewEntity()
-	flecs.Set(w, eA, Position{})
-	flecs.AddID(w, eA, aID)
+	flecs.Set(w.W(), eA, Position{})
+	flecs.AddID(w.W(), eA, aID)
 	// no match: Position + B.
 	eB := w.NewEntity()
-	flecs.Set(w, eB, Position{})
-	flecs.AddID(w, eB, bID)
+	flecs.Set(w.W(), eB, Position{})
+	flecs.AddID(w.W(), eB, bID)
 	// no match: Position + A + B.
 	eAB := w.NewEntity()
-	flecs.Set(w, eAB, Position{})
-	flecs.AddID(w, eAB, aID)
-	flecs.AddID(w, eAB, bID)
+	flecs.Set(w.W(), eAB, Position{})
+	flecs.AddID(w.W(), eAB, aID)
+	flecs.AddID(w.W(), eAB, bID)
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -225,20 +225,20 @@ func TestQueryTermsMultipleOptional(t *testing.T) {
 
 	// e1: Position only.
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	// e2: Position + Velocity.
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2})
-	flecs.Set(w, e2, Velocity{DX: 1})
+	flecs.Set(w.W(), e2, Position{X: 2})
+	flecs.Set(w.W(), e2, Velocity{DX: 1})
 	// e3: Position + Mass.
 	e3 := w.NewEntity()
-	flecs.Set(w, e3, Position{X: 3})
-	flecs.Set(w, e3, Mass{V: 5})
+	flecs.Set(w.W(), e3, Position{X: 3})
+	flecs.Set(w.W(), e3, Mass{V: 5})
 	// e4: Position + Velocity + Mass.
 	e4 := w.NewEntity()
-	flecs.Set(w, e4, Position{X: 4})
-	flecs.Set(w, e4, Velocity{DX: 2})
-	flecs.Set(w, e4, Mass{V: 10})
+	flecs.Set(w.W(), e4, Position{X: 4})
+	flecs.Set(w.W(), e4, Velocity{DX: 2})
+	flecs.Set(w.W(), e4, Mass{V: 10})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -288,10 +288,10 @@ func TestQueryTermsLegacyNewQueryUnchanged(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2})
-	flecs.Set(w, e2, Velocity{DX: 1})
+	flecs.Set(w.W(), e2, Position{X: 2})
+	flecs.Set(w.W(), e2, Velocity{DX: 1})
 
 	q := flecs.NewQuery(w, posID, velID)
 
@@ -344,7 +344,7 @@ func TestQueryTermsPanicFieldMaybeOnAndTerm(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
 	it := q.Iter()
@@ -369,7 +369,7 @@ func TestQueryTermsFieldPanicsOnMissingOptional(t *testing.T) {
 
 	// Entity with only Position; Velocity is absent.
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -445,11 +445,11 @@ func TestCachedQueryFromTermsBasic(t *testing.T) {
 
 	// alive: Position only.
 	eAlive := w.NewEntity()
-	flecs.Set(w, eAlive, Position{X: 1})
+	flecs.Set(w.W(), eAlive, Position{X: 1})
 	// dead: Position + dead tag.
 	eDead := w.NewEntity()
-	flecs.Set(w, eDead, Position{X: 2})
-	flecs.AddID(w, eDead, deadID)
+	flecs.Set(w.W(), eDead, Position{X: 2})
+	flecs.AddID(w.W(), eDead, deadID)
 
 	cq := flecs.NewCachedQueryFromTerms(w,
 		flecs.With(posID),
@@ -489,7 +489,7 @@ func TestCachedQueryNotTermMigration(t *testing.T) {
 	deadID := w.NewEntity()
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	cq := flecs.NewCachedQueryFromTerms(w,
 		flecs.With(posID),
@@ -503,19 +503,19 @@ func TestCachedQueryNotTermMigration(t *testing.T) {
 
 	// Add dead tag: entity migrates to [P, dead]. tryMatchTable([P,dead]) → false (dead present).
 	// The [P] table still has 0 entities. EntityCount drops to 0.
-	flecs.AddID(w, e, deadID)
+	flecs.AddID(w.W(), e, deadID)
 	if cq.EntityCount() != 0 {
 		t.Fatalf("after AddID(dead): want 0, got %d", cq.EntityCount())
 	}
 
 	// Remove dead tag: entity migrates back to [P]. [P] table is still in cache.
-	flecs.RemoveID(w, e, deadID)
+	flecs.RemoveID(w.W(), e, deadID)
 	if cq.EntityCount() != 1 {
 		t.Fatalf("after RemoveID(dead): want 1, got %d", cq.EntityCount())
 	}
 
 	// Re-add dead: entity leaves [P] again.
-	flecs.AddID(w, e, deadID)
+	flecs.AddID(w.W(), e, deadID)
 	if cq.EntityCount() != 0 {
 		t.Fatalf("after re-AddID(dead): want 0, got %d", cq.EntityCount())
 	}
@@ -542,13 +542,13 @@ func TestCachedQueryNotTermNewMatchingTable(t *testing.T) {
 
 	// Set Position: creates [P] table → matches (P present, dead absent).
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	if cq.Count() != 1 {
 		t.Fatalf("after [P] entity: want 1 table, got %d", cq.Count())
 	}
 
 	// Set Extra: e1 migrates to [P,Extra] → new table, matches.
-	flecs.Set(w, e1, Extra{V: 42})
+	flecs.Set(w.W(), e1, Extra{V: 42})
 	if cq.Count() != 2 {
 		t.Fatalf("after [P,Extra] migration: want 2 tables, got %d", cq.Count())
 	}
@@ -556,8 +556,8 @@ func TestCachedQueryNotTermNewMatchingTable(t *testing.T) {
 	// Create entity that ends up with [P, dead]: new table should NOT be added
 	// (dead is present, violating the Without term).
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2}) // migrates to [P], already cached
-	flecs.AddID(w, e2, deadID)       // migrates to [P,dead] — new table, rejected
+	flecs.Set(w.W(), e2, Position{X: 2}) // migrates to [P], already cached
+	flecs.AddID(w.W(), e2, deadID)       // migrates to [P,dead] — new table, rejected
 
 	if cq.Count() != 2 {
 		t.Fatalf("after [P,dead] entity: want 2 tables (unchanged), got %d", cq.Count())
@@ -595,7 +595,7 @@ func TestQueryTermsPanicFieldMaybeIDNotInTerms(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w.W(), e, Position{X: 1})
 
 	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
 	it := q.Iter()
@@ -723,19 +723,19 @@ func TestOrQueryBasic(t *testing.T) {
 	playID := flecs.RegisterComponent[Playing](w)
 
 	eSleep := w.NewEntity()
-	flecs.Set(w, eSleep, Position{X: 1})
-	flecs.Set(w, eSleep, Sleeping{})
+	flecs.Set(w.W(), eSleep, Position{X: 1})
+	flecs.Set(w.W(), eSleep, Sleeping{})
 
 	eWork := w.NewEntity()
-	flecs.Set(w, eWork, Position{X: 2})
-	flecs.Set(w, eWork, Working{})
+	flecs.Set(w.W(), eWork, Position{X: 2})
+	flecs.Set(w.W(), eWork, Working{})
 
 	ePlay := w.NewEntity()
-	flecs.Set(w, ePlay, Position{X: 3})
-	flecs.Set(w, ePlay, Playing{})
+	flecs.Set(w.W(), ePlay, Position{X: 3})
+	flecs.Set(w.W(), ePlay, Playing{})
 
 	eNone := w.NewEntity()
-	flecs.Set(w, eNone, Position{X: 4}) // no activity — should NOT match
+	flecs.Set(w.W(), eNone, Position{X: 4}) // no activity — should NOT match
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -783,25 +783,25 @@ func TestOrQueryMultipleGroups(t *testing.T) {
 
 	// Matches: has A, X, C.
 	eAXC := w.NewEntity()
-	flecs.Set(w, eAXC, CompA{})
-	flecs.Set(w, eAXC, CompX{})
-	flecs.Set(w, eAXC, CompC{})
+	flecs.Set(w.W(), eAXC, CompA{})
+	flecs.Set(w.W(), eAXC, CompX{})
+	flecs.Set(w.W(), eAXC, CompC{})
 
 	// Matches: has B, X, D.
 	eBXD := w.NewEntity()
-	flecs.Set(w, eBXD, CompB{})
-	flecs.Set(w, eBXD, CompX{})
-	flecs.Set(w, eBXD, CompD{})
+	flecs.Set(w.W(), eBXD, CompB{})
+	flecs.Set(w.W(), eBXD, CompX{})
+	flecs.Set(w.W(), eBXD, CompD{})
 
 	// No match: has A, X but neither C nor D.
 	eAXonly := w.NewEntity()
-	flecs.Set(w, eAXonly, CompA{})
-	flecs.Set(w, eAXonly, CompX{})
+	flecs.Set(w.W(), eAXonly, CompA{})
+	flecs.Set(w.W(), eAXonly, CompX{})
 
 	// No match: has A, C but no X.
 	eACnoX := w.NewEntity()
-	flecs.Set(w, eACnoX, CompA{})
-	flecs.Set(w, eACnoX, CompC{})
+	flecs.Set(w.W(), eACnoX, CompA{})
+	flecs.Set(w.W(), eACnoX, CompC{})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.Or(aID),
@@ -841,11 +841,11 @@ func TestOrQuerySingleTermGroup(t *testing.T) {
 	aID := flecs.RegisterComponent[CompA](w)
 
 	eWithA := w.NewEntity()
-	flecs.Set(w, eWithA, Position{X: 1})
-	flecs.Set(w, eWithA, CompA{})
+	flecs.Set(w.W(), eWithA, Position{X: 1})
+	flecs.Set(w.W(), eWithA, CompA{})
 
 	eWithout := w.NewEntity()
-	flecs.Set(w, eWithout, Position{X: 2}) // no A
+	flecs.Set(w.W(), eWithout, Position{X: 2}) // no A
 
 	qOr := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Or(aID))
 	qAnd := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(aID))
@@ -879,23 +879,23 @@ func TestOrQueryOrPlusNot(t *testing.T) {
 
 	// Matches: Pos, A, no Dead.
 	eA := w.NewEntity()
-	flecs.Set(w, eA, Position{})
-	flecs.Set(w, eA, CompA{})
+	flecs.Set(w.W(), eA, Position{})
+	flecs.Set(w.W(), eA, CompA{})
 
 	// Matches: Pos, B, no Dead.
 	eB := w.NewEntity()
-	flecs.Set(w, eB, Position{})
-	flecs.Set(w, eB, CompB{})
+	flecs.Set(w.W(), eB, Position{})
+	flecs.Set(w.W(), eB, CompB{})
 
 	// No match: Pos, A, Dead.
 	eADead := w.NewEntity()
-	flecs.Set(w, eADead, Position{})
-	flecs.Set(w, eADead, CompA{})
-	flecs.Set(w, eADead, Dead{})
+	flecs.Set(w.W(), eADead, Position{})
+	flecs.Set(w.W(), eADead, CompA{})
+	flecs.Set(w.W(), eADead, Dead{})
 
 	// No match: Pos, no A/B.
 	eNone := w.NewEntity()
-	flecs.Set(w, eNone, Position{})
+	flecs.Set(w.W(), eNone, Position{})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -940,18 +940,18 @@ func TestOrQueryOrPlusMaybe(t *testing.T) {
 
 	// Pos + A + C.
 	eAC := w.NewEntity()
-	flecs.Set(w, eAC, Position{})
-	flecs.Set(w, eAC, CompA{})
-	flecs.Set(w, eAC, CompC{V: 7})
+	flecs.Set(w.W(), eAC, Position{})
+	flecs.Set(w.W(), eAC, CompA{})
+	flecs.Set(w.W(), eAC, CompC{V: 7})
 
 	// Pos + B, no C.
 	eB := w.NewEntity()
-	flecs.Set(w, eB, Position{})
-	flecs.Set(w, eB, CompB{})
+	flecs.Set(w.W(), eB, Position{})
+	flecs.Set(w.W(), eB, CompB{})
 
 	// Pos only — should NOT match.
 	eNone := w.NewEntity()
-	flecs.Set(w, eNone, Position{})
+	flecs.Set(w.W(), eNone, Position{})
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.With(posID),
@@ -1056,12 +1056,12 @@ func TestCachedQueryWithOr(t *testing.T) {
 
 	// Create entities before the cached query.
 	eA := w.NewEntity()
-	flecs.Set(w, eA, Position{})
-	flecs.Set(w, eA, CompA{})
+	flecs.Set(w.W(), eA, Position{})
+	flecs.Set(w.W(), eA, CompA{})
 
 	eB := w.NewEntity()
-	flecs.Set(w, eB, Position{})
-	flecs.Set(w, eB, CompB{})
+	flecs.Set(w.W(), eB, Position{})
+	flecs.Set(w.W(), eB, CompB{})
 
 	cq := flecs.NewCachedQueryFromTerms(w,
 		flecs.With(posID),
@@ -1087,7 +1087,7 @@ func TestCachedQueryWithOr(t *testing.T) {
 
 	// New entity with neither A nor B must NOT grow the cache.
 	eNeither := w.NewEntity()
-	flecs.Set(w, eNeither, Position{})
+	flecs.Set(w.W(), eNeither, Position{})
 
 	if cq.Count() != initialTableCount {
 		t.Errorf("cache should not grow for Pos-only entity: want %d tables, got %d",
@@ -1132,22 +1132,22 @@ func TestCachedQueryWithOrNewMatchingTable(t *testing.T) {
 
 	// Create a [Pos, A] entity → new table, should be added.
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{})
-	flecs.Set(w, e1, CompA{})
+	flecs.Set(w.W(), e1, Position{})
+	flecs.Set(w.W(), e1, CompA{})
 	if cq.Count() != 1 {
 		t.Fatalf("after [Pos,A] entity: want 1 table, got %d", cq.Count())
 	}
 
 	// Add Extra to e1 → migrates to [Pos,A,Extra], new table, should be added.
-	flecs.Set(w, e1, Extra{V: 5})
+	flecs.Set(w.W(), e1, Extra{V: 5})
 	if cq.Count() != 2 {
 		t.Fatalf("after [Pos,A,Extra] migration: want 2 tables, got %d", cq.Count())
 	}
 
 	// Create [Pos, Extra] entity → table lacks A and B, should NOT be added.
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{})
-	flecs.Set(w, e2, Extra{V: 9})
+	flecs.Set(w.W(), e2, Position{})
+	flecs.Set(w.W(), e2, Extra{V: 9})
 	if cq.Count() != 2 {
 		t.Fatalf("after [Pos,Extra] entity: want 2 tables (unchanged), got %d", cq.Count())
 	}
@@ -1167,8 +1167,8 @@ func TestOrQueryFieldMaybe(t *testing.T) {
 	bID := flecs.RegisterComponent[CompB](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{X: 1})
-	flecs.Set(w, e, CompA{V: 42})
+	flecs.Set(w.W(), e, Position{X: 1})
+	flecs.Set(w.W(), e, CompA{V: 42})
 	// no CompB
 
 	q := flecs.NewQueryFromTerms(w,
@@ -1215,8 +1215,8 @@ func TestOrQueryFieldPanicsWhenAbsent(t *testing.T) {
 	bID := flecs.RegisterComponent[CompB](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{})
-	flecs.Set(w, e, CompA{})
+	flecs.Set(w.W(), e, Position{})
+	flecs.Set(w.W(), e, CompA{})
 	// no CompB
 
 	q := flecs.NewQueryFromTerms(w,
@@ -1308,10 +1308,10 @@ func TestCachedQueryFromTermsFieldMaybe(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{X: 1})
+	flecs.Set(w.W(), e1, Position{X: 1})
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{X: 2})
-	flecs.Set(w, e2, Velocity{DX: 7})
+	flecs.Set(w.W(), e2, Position{X: 2})
+	flecs.Set(w.W(), e2, Velocity{DX: 7})
 
 	cq := flecs.NewCachedQueryFromTerms(w,
 		flecs.With(posID),

@@ -103,7 +103,7 @@ func writeError(rw http.ResponseWriter, status int, msg string) {
 func restStats(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var stats Stats
-		w.Readonly(func() { stats = w.Stats() })
+		w.Read(func(fr *Reader) { stats = fr.Stats() })
 		writeJSON(rw, http.StatusOK, stats)
 	}
 }
@@ -111,11 +111,11 @@ func restStats(w *World) http.HandlerFunc {
 func restComponents(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var out []componentInfoResponse
-		w.Readonly(func() {
-			ids := w.Components()
+		w.Read(func(fr *Reader) {
+			ids := fr.Components()
 			out = make([]componentInfoResponse, 0, len(ids))
 			for _, id := range ids {
-				info, ok := w.ComponentInfo(id)
+				info, ok := fr.ComponentInfo(id)
 				if !ok {
 					continue
 				}
@@ -135,7 +135,7 @@ func restComponentByID(w *World) http.HandlerFunc {
 		}
 		var info ComponentInfo
 		var found bool
-		w.Readonly(func() { info, found = w.ComponentInfo(id) })
+		w.Read(func(fr *Reader) { info, found = fr.ComponentInfo(id) })
 		if !found {
 			writeError(rw, http.StatusNotFound, "component not found")
 			return
@@ -156,14 +156,14 @@ func restEntities(w *World) http.HandlerFunc {
 			limit = n
 		}
 		var out []entityListItem
-		w.Readonly(func() {
+		w.Read(func(fr *Reader) {
 			out = make([]entityListItem, 0, limit)
-			w.EachEntity(func(e ID) bool {
+			fr.EachEntity(func(e ID) bool {
 				if len(out) >= limit {
 					return false
 				}
 				item := entityListItem{ID: strconv.FormatUint(uint64(e), 10)}
-				if name, ok := w.GetName(e); ok {
+				if name, ok := fr.GetName(e); ok {
 					item.Name = name
 				}
 				out = append(out, item)
@@ -183,8 +183,8 @@ func restEntityByID(w *World) http.HandlerFunc {
 		}
 		var resp entityDetailResponse
 		var alive bool
-		w.Readonly(func() {
-			if !w.IsAlive(id) {
+		w.Read(func(fr *Reader) {
+			if !fr.IsAlive(id) {
 				return
 			}
 			alive = true
@@ -192,19 +192,19 @@ func restEntityByID(w *World) http.HandlerFunc {
 				ID:         strconv.FormatUint(uint64(id), 10),
 				Components: []componentInfoResponse{},
 			}
-			if name, nameOK := w.GetName(id); nameOK {
+			if name, nameOK := fr.GetName(id); nameOK {
 				resp.Name = name
 			}
-			if parent, parentOK := w.ParentOf(id); parentOK {
+			if parent, parentOK := fr.ParentOf(id); parentOK {
 				resp.Parent = strconv.FormatUint(uint64(parent), 10)
 			}
-			w.EachPrefab(id, func(prefab ID) bool {
+			fr.EachPrefab(id, func(prefab ID) bool {
 				resp.Prefabs = append(resp.Prefabs, strconv.FormatUint(uint64(prefab), 10))
 				return true
 			})
 			childOfIdx := w.ChildOf().Index()
 			isAIdx := w.IsA().Index()
-			for _, cid := range w.EntityComponents(id) {
+			for _, cid := range fr.EntityComponents(id) {
 				if cid.IsPair() {
 					firstIdx := cid.First().Index()
 					if firstIdx == childOfIdx || firstIdx == isAIdx {
@@ -213,7 +213,7 @@ func restEntityByID(w *World) http.HandlerFunc {
 					resp.Pairs = append(resp.Pairs, strconv.FormatUint(uint64(cid), 10))
 					continue
 				}
-				info, infoOK := w.ComponentInfo(cid)
+				info, infoOK := fr.ComponentInfo(cid)
 				if !infoOK {
 					continue
 				}
@@ -232,7 +232,7 @@ func restSnapshotGet(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var data []byte
 		var marshalErr error
-		w.Readonly(func() { data, marshalErr = w.MarshalJSON() })
+		w.Read(func(fr *Reader) { data, marshalErr = w.MarshalJSON() })
 		if marshalErr != nil {
 			writeError(rw, http.StatusInternalServerError, marshalErr.Error())
 			return
@@ -254,8 +254,12 @@ func restSnapshotPut(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "request body is not valid JSON")
 			return
 		}
-		if err := w.UnmarshalJSON(body); err != nil {
-			writeError(rw, http.StatusBadRequest, err.Error())
+		var unmarshalErr error
+		w.Write(func(fw *Writer) {
+			unmarshalErr = w.UnmarshalJSON(body)
+		})
+		if unmarshalErr != nil {
+			writeError(rw, http.StatusBadRequest, unmarshalErr.Error())
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)

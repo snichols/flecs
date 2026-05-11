@@ -107,157 +107,167 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.PostUpdate():    {},
 		w.OnFixedUpdate(): {},
 	}
-	for _, cid := range w.Components() {
-		skip[cid] = struct{}{}
-	}
 
-	var userEnts []ID
-	w.EachEntity(func(e ID) bool {
-		if _, isBuiltin := skip[e]; !isBuiltin {
-			userEnts = append(userEnts, e)
-		}
-		return true
-	})
+	var result []byte
+	var resultErr error
 
-	// Build predecessorsOf: ChildOf parent first, then IsA prefabs in EachPrefab
-	// order. Built-in entities are filtered at insertion time.
-	m := &marshaler{
-		predecessorsOf: make(map[ID][]ID, len(userEnts)),
-		visited:        make(map[ID]struct{}, len(userEnts)),
-		visiting:       make(map[ID]struct{}),
-		order:          make([]ID, 0, len(userEnts)),
-		idToSerial:     make(map[ID]int, len(userEnts)),
-		indexToSerial:  make(map[uint32]int, len(userEnts)),
-	}
-	for _, e := range userEnts {
-		var preds []ID
-		if p, ok := w.ParentOf(e); ok {
-			if _, isBuiltin := skip[p]; !isBuiltin {
-				preds = append(preds, p)
-			}
+	w.Read(func(fr *Reader) {
+		for _, cid := range fr.Components() {
+			skip[cid] = struct{}{}
 		}
-		w.EachPrefab(e, func(prefab ID) bool {
-			if _, isBuiltin := skip[prefab]; !isBuiltin {
-				preds = append(preds, prefab)
+
+		var userEnts []ID
+		fr.EachEntity(func(e ID) bool {
+			if _, isBuiltin := skip[e]; !isBuiltin {
+				userEnts = append(userEnts, e)
 			}
 			return true
 		})
-		if len(preds) > 0 {
-			m.predecessorsOf[e] = preds
+
+		// Build predecessorsOf: ChildOf parent first, then IsA prefabs in EachPrefab
+		// order. Built-in entities are filtered at insertion time.
+		m := &marshaler{
+			predecessorsOf: make(map[ID][]ID, len(userEnts)),
+			visited:        make(map[ID]struct{}, len(userEnts)),
+			visiting:       make(map[ID]struct{}),
+			order:          make([]ID, 0, len(userEnts)),
+			idToSerial:     make(map[ID]int, len(userEnts)),
+			indexToSerial:  make(map[uint32]int, len(userEnts)),
 		}
-	}
-
-	for _, e := range userEnts {
-		if err := m.visit(e); err != nil {
-			return nil, err
-		}
-	}
-
-	// Assign serials in topo order; build reverse maps for Prefabs and pair lookups.
-	for i, e := range m.order {
-		m.idToSerial[e] = i + 1
-		m.indexToSerial[e.Index()] = i + 1
-	}
-
-	nameID := w.Name()
-	childOfIdx := w.ChildOf().Index()
-	isAIdx := w.IsA().Index()
-	var entities []jsonEntity
-
-	for _, e := range m.order {
-		je := jsonEntity{Serial: m.idToSerial[e]}
-
-		if name, ok := w.GetName(e); ok {
-			je.Name = name
-		}
-
-		if p, ok := w.ParentOf(e); ok {
-			if _, isBuiltin := skip[p]; !isBuiltin {
-				if serial, ok := m.idToSerial[p]; ok {
-					je.Parent = serial
+		for _, e := range userEnts {
+			var preds []ID
+			if p, ok := fr.ParentOf(e); ok {
+				if _, isBuiltin := skip[p]; !isBuiltin {
+					preds = append(preds, p)
 				}
 			}
-		}
-
-		// Populate Prefabs after serials are assigned so idToSerial lookups work.
-		w.EachPrefab(e, func(prefab ID) bool {
-			if _, isBuiltin := skip[prefab]; isBuiltin {
+			fr.EachPrefab(e, func(prefab ID) bool {
+				if _, isBuiltin := skip[prefab]; !isBuiltin {
+					preds = append(preds, prefab)
+				}
 				return true
+			})
+			if len(preds) > 0 {
+				m.predecessorsOf[e] = preds
 			}
-			if serial, ok := m.idToSerial[prefab]; ok {
-				je.Prefabs = append(je.Prefabs, serial)
-			}
-			return true
-		})
+		}
 
-		for _, cid := range w.EntityComponents(e) {
-			if cid.IsPair() {
-				relIdx := uint32(cid.First())
-				tgtIdx := uint32(cid.Second())
-				if relIdx == childOfIdx || relIdx == isAIdx {
-					continue
-				}
-				relSerial, ok := m.indexToSerial[relIdx]
-				if !ok {
-					continue
-				}
-				tgtSerial, ok := m.indexToSerial[tgtIdx]
-				if !ok {
-					continue
-				}
-				jp := jsonPair{Rel: relSerial, Tgt: tgtSerial}
-				info, hasInfo := w.ComponentInfo(cid)
-				if hasInfo && info.Size > 0 && info.Type != nil {
-					v, vok := w.GetByID(e, cid)
-					if vok {
-						raw, err := json.Marshal(v)
-						if err != nil {
-							return nil, err
-						}
-						jp.DataType = info.Type.String()
-						jp.Data = raw
+		for _, e := range userEnts {
+			if err := m.visit(e); err != nil {
+				resultErr = err
+				return
+			}
+		}
+
+		// Assign serials in topo order; build reverse maps for Prefabs and pair lookups.
+		for i, e := range m.order {
+			m.idToSerial[e] = i + 1
+			m.indexToSerial[e.Index()] = i + 1
+		}
+
+		nameID := w.Name()
+		childOfIdx := w.ChildOf().Index()
+		isAIdx := w.IsA().Index()
+		var entities []jsonEntity
+
+		for _, e := range m.order {
+			je := jsonEntity{Serial: m.idToSerial[e]}
+
+			if name, ok := fr.GetName(e); ok {
+				je.Name = name
+			}
+
+			if p, ok := fr.ParentOf(e); ok {
+				if _, isBuiltin := skip[p]; !isBuiltin {
+					if serial, ok := m.idToSerial[p]; ok {
+						je.Parent = serial
 					}
 				}
-				je.Pairs = append(je.Pairs, jp)
-				continue
 			}
-			if cid == nameID {
-				continue
+
+			// Populate Prefabs after serials are assigned so idToSerial lookups work.
+			fr.EachPrefab(e, func(prefab ID) bool {
+				if _, isBuiltin := skip[prefab]; isBuiltin {
+					return true
+				}
+				if serial, ok := m.idToSerial[prefab]; ok {
+					je.Prefabs = append(je.Prefabs, serial)
+				}
+				return true
+			})
+
+			for _, cid := range fr.EntityComponents(e) {
+				if cid.IsPair() {
+					relIdx := uint32(cid.First())
+					tgtIdx := uint32(cid.Second())
+					if relIdx == childOfIdx || relIdx == isAIdx {
+						continue
+					}
+					relSerial, ok := m.indexToSerial[relIdx]
+					if !ok {
+						continue
+					}
+					tgtSerial, ok := m.indexToSerial[tgtIdx]
+					if !ok {
+						continue
+					}
+					jp := jsonPair{Rel: relSerial, Tgt: tgtSerial}
+					info, hasInfo := fr.ComponentInfo(cid)
+					if hasInfo && info.Size > 0 && info.Type != nil {
+						v, vok := fr.GetByID(e, cid)
+						if vok {
+							raw, err := json.Marshal(v)
+							if err != nil {
+								resultErr = err
+								return
+							}
+							jp.DataType = info.Type.String()
+							jp.Data = raw
+						}
+					}
+					je.Pairs = append(je.Pairs, jp)
+					continue
+				}
+				if cid == nameID {
+					continue
+				}
+				info, ok := fr.ComponentInfo(cid)
+				if !ok {
+					continue
+				}
+				v, ok := fr.GetByID(e, cid)
+				if !ok {
+					continue
+				}
+				raw, err := json.Marshal(v)
+				if err != nil {
+					resultErr = err
+					return
+				}
+				if je.Components == nil {
+					je.Components = make(map[string]json.RawMessage)
+				}
+				je.Components[info.Name] = raw
 			}
-			info, ok := w.ComponentInfo(cid)
-			if !ok {
-				continue
-			}
-			v, ok := w.GetByID(e, cid)
-			if !ok {
-				continue
-			}
-			raw, err := json.Marshal(v)
-			if err != nil {
-				return nil, err
-			}
-			if je.Components == nil {
-				je.Components = make(map[string]json.RawMessage)
-			}
-			je.Components[info.Name] = raw
+
+			entities = append(entities, je)
 		}
 
-		entities = append(entities, je)
-	}
+		jw := jsonWorld{
+			Version:  1,
+			Entities: entities,
+		}
+		if jw.Entities == nil {
+			jw.Entities = []jsonEntity{}
+		}
+		result, resultErr = json.Marshal(jw)
+		if resultErr == nil && w.logger != nil {
+			w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot serialized",
+				slog.Int("entities", len(entities)))
+		}
+	})
 
-	jw := jsonWorld{
-		Version:  1,
-		Entities: entities,
-	}
-	if jw.Entities == nil {
-		jw.Entities = []jsonEntity{}
-	}
-	result, err := json.Marshal(jw)
-	if err == nil && w.logger != nil {
-		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot serialized",
-			slog.Int("entities", len(entities)))
-	}
-	return result, err
+	return result, resultErr
 }
 
 // UnmarshalJSON restores entities, names, ChildOf parent-child relationships,
@@ -293,93 +303,107 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("flecs: unmarshal failed: unsupported version %d (only v1 supported)", jw.Version)
 	}
 
-	compByName := make(map[string]ComponentInfo)
-	typeStringToType := make(map[string]reflect.Type)
-	for _, cid := range w.Components() {
-		info, ok := w.ComponentInfo(cid)
-		if !ok {
-			continue
-		}
-		compByName[info.Name] = info
-		if info.Type != nil {
-			ts := info.Type.String()
-			if _, exists := typeStringToType[ts]; !exists {
-				typeStringToType[ts] = info.Type
-			}
-		}
-	}
+	var unmarshalErr error
 
-	// Phase 1: allocate all entities so future phases can resolve serial→ID.
-	serialToID := make(map[int]ID, len(jw.Entities))
-	for _, je := range jw.Entities {
-		serialToID[je.Serial] = w.NewEntity()
-	}
+	w.Write(func(fw *Writer) {
+		compByName := make(map[string]ComponentInfo)
+		typeStringToType := make(map[string]reflect.Type)
+		for _, cid := range fw.Components() {
+			info, ok := fw.ComponentInfo(cid)
+			if !ok {
+				continue
+			}
+			compByName[info.Name] = info
+			if info.Type != nil {
+				ts := info.Type.String()
+				if _, exists := typeStringToType[ts]; !exists {
+					typeStringToType[ts] = info.Type
+				}
+			}
+		}
 
-	// Phase 2: name → ChildOf → IsA prefabs → components (JSON is in topo order).
-	for _, je := range jw.Entities {
-		e := serialToID[je.Serial]
-		if je.Name != "" {
-			w.SetName(e, je.Name)
+		// Phase 1: allocate all entities so future phases can resolve serial→ID.
+		serialToID := make(map[int]ID, len(jw.Entities))
+		for _, je := range jw.Entities {
+			serialToID[je.Serial] = fw.NewEntity()
 		}
-		if je.Parent > 0 {
-			parentID, ok := serialToID[je.Parent]
-			if !ok {
-				return fmt.Errorf("flecs: unmarshal failed: entity serial %d references unknown parent serial %d", je.Serial, je.Parent)
+
+		// Phase 2: name → ChildOf → IsA prefabs → components (JSON is in topo order).
+		for _, je := range jw.Entities {
+			e := serialToID[je.Serial]
+			if je.Name != "" {
+				fw.SetName(e, je.Name)
 			}
-			AddID(w, e, MakePair(w.ChildOf(), parentID))
-		}
-		for _, prefabSerial := range je.Prefabs {
-			prefabID, ok := serialToID[prefabSerial]
-			if !ok {
-				return fmt.Errorf("flecs: unmarshal failed: unknown prefab serial %d", prefabSerial)
-			}
-			AddID(w, e, MakePair(w.IsA(), prefabID))
-		}
-		for _, pair := range je.Pairs {
-			relID, ok := serialToID[pair.Rel]
-			if !ok {
-				return fmt.Errorf("flecs: unmarshal failed: pair rel serial %d not found", pair.Rel)
-			}
-			tgtID, ok := serialToID[pair.Tgt]
-			if !ok {
-				return fmt.Errorf("flecs: unmarshal failed: pair tgt serial %d not found", pair.Tgt)
-			}
-			if pair.DataType == "" {
-				AddID(w, e, MakePair(relID, tgtID))
-			} else {
-				foundType, ok := typeStringToType[pair.DataType]
+			if je.Parent > 0 {
+				parentID, ok := serialToID[je.Parent]
 				if !ok {
-					return fmt.Errorf("flecs: unmarshal failed: pair data type %q is not registered in the world", pair.DataType)
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: entity serial %d references unknown parent serial %d", je.Serial, je.Parent)
+					return
 				}
-				vPtr := reflect.New(foundType)
-				if err := json.Unmarshal(pair.Data, vPtr.Interface()); err != nil {
-					return fmt.Errorf("flecs: unmarshal failed: pair data type %q: %w", pair.DataType, err)
+				addIDOnWorld(w, e, MakePair(w.ChildOf(), parentID))
+			}
+			for _, prefabSerial := range je.Prefabs {
+				prefabID, ok := serialToID[prefabSerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unknown prefab serial %d", prefabSerial)
+					return
 				}
-				w.SetPairByID(e, relID, tgtID, vPtr.Elem().Interface())
+				addIDOnWorld(w, e, MakePair(w.IsA(), prefabID))
+			}
+			for _, pair := range je.Pairs {
+				relID, ok := serialToID[pair.Rel]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: pair rel serial %d not found", pair.Rel)
+					return
+				}
+				tgtID, ok := serialToID[pair.Tgt]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: pair tgt serial %d not found", pair.Tgt)
+					return
+				}
+				if pair.DataType == "" {
+					addIDOnWorld(w, e, MakePair(relID, tgtID))
+				} else {
+					foundType, ok := typeStringToType[pair.DataType]
+					if !ok {
+						unmarshalErr = fmt.Errorf("flecs: unmarshal failed: pair data type %q is not registered in the world", pair.DataType)
+						return
+					}
+					vPtr := reflect.New(foundType)
+					if err := json.Unmarshal(pair.Data, vPtr.Interface()); err != nil {
+						unmarshalErr = fmt.Errorf("flecs: unmarshal failed: pair data type %q: %w", pair.DataType, err)
+						return
+					}
+					fw.SetPairByID(e, relID, tgtID, vPtr.Elem().Interface())
+				}
+			}
+			for compName, raw := range je.Components {
+				info, ok := compByName[compName]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: component %q is not registered in the world", compName)
+					return
+				}
+				if info.Type == nil {
+					continue
+				}
+				if info.Size == 0 {
+					fw.SetByID(e, info.ID, reflect.Zero(info.Type).Interface())
+					continue
+				}
+				ptr := reflect.New(info.Type)
+				if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: component %q: %w", compName, err)
+					return
+				}
+				fw.SetByID(e, info.ID, ptr.Elem().Interface())
 			}
 		}
-		for compName, raw := range je.Components {
-			info, ok := compByName[compName]
-			if !ok {
-				return fmt.Errorf("flecs: unmarshal failed: component %q is not registered in the world", compName)
-			}
-			if info.Type == nil {
-				continue
-			}
-			if info.Size == 0 {
-				w.SetByID(e, info.ID, reflect.Zero(info.Type).Interface())
-				continue
-			}
-			ptr := reflect.New(info.Type)
-			if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
-				return fmt.Errorf("flecs: unmarshal failed: component %q: %w", compName, err)
-			}
-			w.SetByID(e, info.ID, ptr.Elem().Interface())
+
+		if w.logger != nil {
+			w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot loaded",
+				slog.Int("entities", len(jw.Entities)))
 		}
-	}
-	if w.logger != nil {
-		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot loaded",
-			slog.Int("entities", len(jw.Entities)))
-	}
-	return nil
+	})
+
+	return unmarshalErr
 }

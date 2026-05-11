@@ -26,21 +26,28 @@ type Velocity struct{ DX, DY float32 }
 func main() {
     w := flecs.New()
 
-    // Create an entity and attach components.
-    e := w.NewEntity()
-    flecs.Set(w, e, Position{X: 1, Y: 2})
-    flecs.Set(w, e, Velocity{DX: 0.5, DY: 0})
+    // Create an entity and attach components inside a Write scope.
+    var e flecs.ID
+    w.Write(func(fw *flecs.Writer) {
+        e = fw.NewEntity()
+        flecs.Set(fw, e, Position{X: 1, Y: 2})
+        flecs.Set(fw, e, Velocity{DX: 0.5, DY: 0})
+    })
 
     // Iterate every entity that has both Position and Velocity.
-    flecs.Each2[Position, Velocity](w, func(id flecs.ID, p *Position, v *Velocity) {
-        p.X += v.DX
-        p.Y += v.DY
+    w.Write(func(fw *flecs.Writer) {
+        flecs.Each2[Position, Velocity](fw.AsReader(), func(id flecs.ID, p *Position, v *Velocity) {
+            p.X += v.DX
+            p.Y += v.DY
+        })
     })
 
     // Read back.
-    if pos, ok := flecs.Get[Position](w, e); ok {
-        fmt.Printf("position: %.1f %.1f\n", pos.X, pos.Y) // 1.5 2.0
-    }
+    w.Read(func(fr *flecs.Reader) {
+        if pos, ok := flecs.Get[Position](fr, e); ok {
+            fmt.Printf("position: %.1f %.1f\n", pos.X, pos.Y) // 1.5 2.0
+        }
+    })
 
     // Register a system and run one frame.
     posID := flecs.RegisterComponent[Position](w)

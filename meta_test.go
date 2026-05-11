@@ -148,7 +148,7 @@ func TestComponentInfoPairWithData(t *testing.T) {
 	relID := w.NewEntity()
 	tgtID := w.NewEntity()
 	e := w.NewEntity()
-	flecs.SetPair[Edge](w, e, relID, tgtID, Edge{Weight: 1.5})
+	flecs.SetPair[Edge](w.W(), e, relID, tgtID, Edge{Weight: 1.5})
 
 	pairID := flecs.MakePair(relID, tgtID)
 	info, ok := w.ComponentInfo(pairID)
@@ -174,7 +174,7 @@ func TestComponentInfoPairAsTag(t *testing.T) {
 	tgtID := w.NewEntity()
 	e := w.NewEntity()
 	pairID := flecs.MakePair(relID, tgtID)
-	flecs.AddID(w, e, pairID)
+	flecs.AddID(w.W(), e, pairID)
 
 	info, ok := w.ComponentInfo(pairID)
 	if !ok {
@@ -194,7 +194,7 @@ func TestComponentInfoRawTagEntity(t *testing.T) {
 	w := flecs.New()
 	tagID := w.NewEntity()
 	e := w.NewEntity()
-	flecs.AddID(w, e, tagID)
+	flecs.AddID(w.W(), e, tagID)
 
 	info, ok := w.ComponentInfo(tagID)
 	if !ok {
@@ -221,9 +221,9 @@ func TestEntityComponentsBasic(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 	childPairID := flecs.MakePair(w.ChildOf(), parent)
 
-	flecs.Set[Position](w, e, Position{1, 2})
-	flecs.Set[Velocity](w, e, Velocity{3, 4})
-	flecs.AddID(w, e, childPairID)
+	flecs.Set[Position](w.W(), e, Position{1, 2})
+	flecs.Set[Velocity](w.W(), e, Velocity{3, 4})
+	flecs.AddID(w.W(), e, childPairID)
 
 	comps := w.EntityComponents(e)
 	if len(comps) != 3 {
@@ -287,8 +287,8 @@ func TestEntityComponentsEmptyArchetype(t *testing.T) {
 func TestEntityComponentsReturnsFreshSlice(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
-	flecs.Set[Velocity](w, e, Velocity{3, 4})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
+	flecs.Set[Velocity](w.W(), e, Velocity{3, 4})
 
 	comps := w.EntityComponents(e)
 	if len(comps) < 1 {
@@ -377,17 +377,17 @@ func TestEachEntityDeferSafeMutation(t *testing.T) {
 		ids = append(ids, e)
 		return true
 	})
-	w.Defer(func() {
-		flecs.Set[Position](w, e1, Position{1, 2})
-		flecs.Set[Velocity](w, e2, Velocity{3, 4})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e1, Position{1, 2})
+		flecs.Set[Velocity](fw, e2, Velocity{3, 4})
 	})
 
 	// Verify mutations applied.
-	pos, ok := flecs.Get[Position](w, e1)
+	pos, ok := flecs.Get[Position](w.R(), e1)
 	if !ok || pos.X != 1 {
 		t.Errorf("expected Position{1,2}, got %+v ok=%v", pos, ok)
 	}
-	vel, ok := flecs.Get[Velocity](w, e2)
+	vel, ok := flecs.Get[Velocity](w.R(), e2)
 	if !ok || vel.DX != 3 {
 		t.Errorf("expected Velocity{3,4}, got %+v ok=%v", vel, ok)
 	}

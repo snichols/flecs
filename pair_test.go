@@ -19,15 +19,15 @@ func TestAddHasRemoveIDWithComponentID(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	e := w.NewEntity()
 
-	added := flecs.AddID(w, e, posID)
+	added := flecs.AddID(w.W(), e, posID)
 	if !added {
 		t.Fatal("AddID returned false on first add")
 	}
-	if !flecs.HasID(w, e, posID) {
+	if !flecs.HasID(w.R(), e, posID) {
 		t.Fatal("HasID false after AddID")
 	}
 	// Column was zero-initialised; Get should find a zero Position.
-	pos, ok := flecs.Get[Position](w, e)
+	pos, ok := flecs.Get[Position](w.R(), e)
 	if !ok {
 		t.Fatal("Get[Position] not found after AddID")
 	}
@@ -35,22 +35,22 @@ func TestAddHasRemoveIDWithComponentID(t *testing.T) {
 		t.Fatalf("expected zero Position after AddID, got %+v", pos)
 	}
 	// Has[T] agrees with HasID.
-	if !flecs.Has[Position](w, e) {
+	if !flecs.Has[Position](w.R(), e) {
 		t.Fatal("Has[Position] false when HasID is true")
 	}
 	// Idempotent: second AddID returns false.
-	if flecs.AddID(w, e, posID) {
+	if flecs.AddID(w.W(), e, posID) {
 		t.Fatal("AddID returned true on second call (not idempotent)")
 	}
 
-	if !flecs.RemoveID(w, e, posID) {
+	if !flecs.RemoveID(w.W(), e, posID) {
 		t.Fatal("RemoveID returned false when component was present")
 	}
-	if flecs.HasID(w, e, posID) {
+	if flecs.HasID(w.R(), e, posID) {
 		t.Fatal("HasID true after RemoveID")
 	}
 	// Double remove returns false.
-	if flecs.RemoveID(w, e, posID) {
+	if flecs.RemoveID(w.W(), e, posID) {
 		t.Fatal("RemoveID returned true for absent component")
 	}
 }
@@ -60,16 +60,16 @@ func TestAddHasRemoveIDWithRawEntityTag(t *testing.T) {
 	tagEnt := w.NewEntity() // raw entity used as a tag
 	e := w.NewEntity()
 
-	if !flecs.AddID(w, e, tagEnt) {
+	if !flecs.AddID(w.W(), e, tagEnt) {
 		t.Fatal("AddID with raw entity tag returned false")
 	}
-	if !flecs.HasID(w, e, tagEnt) {
+	if !flecs.HasID(w.R(), e, tagEnt) {
 		t.Fatal("HasID false after AddID with entity tag")
 	}
-	if !flecs.RemoveID(w, e, tagEnt) {
+	if !flecs.RemoveID(w.W(), e, tagEnt) {
 		t.Fatal("RemoveID returned false when entity tag was present")
 	}
-	if flecs.HasID(w, e, tagEnt) {
+	if flecs.HasID(w.R(), e, tagEnt) {
 		t.Fatal("HasID true after RemoveID entity tag")
 	}
 }
@@ -82,10 +82,10 @@ func TestAddHasRemoveIDWithPairID(t *testing.T) {
 
 	pairID := flecs.MakePair(rel, tgt)
 
-	if !flecs.AddID(w, child, pairID) {
+	if !flecs.AddID(w.W(), child, pairID) {
 		t.Fatal("AddID with pair ID returned false on first add")
 	}
-	if !flecs.HasID(w, child, pairID) {
+	if !flecs.HasID(w.R(), child, pairID) {
 		t.Fatal("HasID false after AddID with pair")
 	}
 
@@ -102,10 +102,10 @@ func TestAddHasRemoveIDWithPairID(t *testing.T) {
 		t.Fatalf("entity signature does not contain pair id; sig=%v", tbl.Type())
 	}
 
-	if !flecs.RemoveID(w, child, pairID) {
+	if !flecs.RemoveID(w.W(), child, pairID) {
 		t.Fatal("RemoveID returned false when pair was present")
 	}
-	if flecs.HasID(w, child, pairID) {
+	if flecs.HasID(w.R(), child, pairID) {
 		t.Fatal("HasID true after RemoveID pair")
 	}
 }
@@ -118,8 +118,8 @@ func TestDistinctPairTargetsDistinctArchetypes(t *testing.T) {
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
 
-	flecs.AddID(w, e1, flecs.MakePair(rel, a))
-	flecs.AddID(w, e2, flecs.MakePair(rel, b))
+	flecs.AddID(w.W(), e1, flecs.MakePair(rel, a))
+	flecs.AddID(w.W(), e2, flecs.MakePair(rel, b))
 
 	if flecs.TableOf(w, e1) == flecs.TableOf(w, e2) {
 		t.Fatal("distinct pair targets must produce distinct archetypes")
@@ -137,17 +137,17 @@ func TestAddIDOnDeadEntityPanics(t *testing.T) {
 			t.Fatal("AddID on dead entity should panic, got none")
 		}
 	}()
-	flecs.AddID(w, e, tag)
+	flecs.AddID(w.W(), e, tag)
 }
 
 func TestRemoveIDOnDeadEntityReturnsFalse(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
 	tag := w.NewEntity()
-	flecs.AddID(w, e, tag)
+	flecs.AddID(w.W(), e, tag)
 	w.Delete(e)
 
-	if flecs.RemoveID(w, e, tag) {
+	if flecs.RemoveID(w.W(), e, tag) {
 		t.Fatal("RemoveID on dead entity should return false")
 	}
 }
@@ -156,10 +156,10 @@ func TestHasIDOnDeadEntityReturnsFalse(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
 	tag := w.NewEntity()
-	flecs.AddID(w, e, tag)
+	flecs.AddID(w.W(), e, tag)
 	w.Delete(e)
 
-	if flecs.HasID(w, e, tag) {
+	if flecs.HasID(w.R(), e, tag) {
 		t.Fatal("HasID on dead entity should return false")
 	}
 }
@@ -176,7 +176,7 @@ func TestSetPairOnDeadEntityPanics(t *testing.T) {
 			t.Fatal("SetPair on dead entity should panic, got none")
 		}
 	}()
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.0})
 }
 
 func TestGetPairOnDeadEntityReturnsFalse(t *testing.T) {
@@ -187,11 +187,11 @@ func TestGetPairOnDeadEntityReturnsFalse(t *testing.T) {
 	e2 := w.NewEntity()
 
 	// Register the pair by setting on e2.
-	flecs.SetPair[Edge](w, e2, rel, tgt, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e2, rel, tgt, Edge{Weight: 1.0})
 
 	// Delete e and verify GetPair returns (zero, false).
 	w.Delete(e)
-	v, ok := flecs.GetPair[Edge](w, e, rel, tgt)
+	v, ok := flecs.GetPair[Edge](w.R(), e, rel, tgt)
 	if ok {
 		t.Fatal("GetPair on dead entity should return false")
 	}
@@ -208,9 +208,9 @@ func TestGetPairRegisteredButNotOnEntity(t *testing.T) {
 	e2 := w.NewEntity()
 
 	// Register the pair on e1; e2 does not have it.
-	flecs.SetPair[Edge](w, e1, rel, tgt, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e1, rel, tgt, Edge{Weight: 1.0})
 
-	v, ok := flecs.GetPair[Edge](w, e2, rel, tgt)
+	v, ok := flecs.GetPair[Edge](w.R(), e2, rel, tgt)
 	if ok {
 		t.Fatal("GetPair should return false when entity lacks the pair")
 	}
@@ -226,12 +226,12 @@ func TestNoPairLeakage(t *testing.T) {
 	b := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.AddID(w, e, flecs.MakePair(rel, a))
+	flecs.AddID(w.W(), e, flecs.MakePair(rel, a))
 
-	if flecs.HasID(w, e, flecs.MakePair(rel, b)) {
+	if flecs.HasID(w.R(), e, flecs.MakePair(rel, b)) {
 		t.Fatal("adding (rel,a) leaked into (rel,b)")
 	}
-	if flecs.HasID(w, e, rel) {
+	if flecs.HasID(w.R(), e, rel) {
 		t.Fatal("adding (rel,a) leaked into rel standalone")
 	}
 }
@@ -244,9 +244,9 @@ func TestSetPairGetPairRoundTrip(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 1.5})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.5})
 
-	v, ok := flecs.GetPair[Edge](w, e, rel, tgt)
+	v, ok := flecs.GetPair[Edge](w.R(), e, rel, tgt)
 	if !ok {
 		t.Fatal("GetPair returned false after SetPair")
 	}
@@ -261,10 +261,10 @@ func TestPairReregistrationSameTypeIdempotent(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 1.0})
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 2.0}) // must not panic
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 2.0}) // must not panic
 
-	v, ok := flecs.GetPair[Edge](w, e, rel, tgt)
+	v, ok := flecs.GetPair[Edge](w.R(), e, rel, tgt)
 	if !ok {
 		t.Fatal("GetPair returned false after second SetPair")
 	}
@@ -279,14 +279,14 @@ func TestPairReregistrationDifferentTypePanics(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.0})
 
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("SetPair with different type should panic, got none")
 		}
 	}()
-	flecs.SetPair[Color](w, e, rel, tgt, Color{R: 1})
+	flecs.SetPair[Color](w.W(), e, rel, tgt, Color{R: 1})
 }
 
 func TestGetPairNotPresent(t *testing.T) {
@@ -295,7 +295,7 @@ func TestGetPairNotPresent(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	v, ok := flecs.GetPair[Edge](w, e, rel, tgt)
+	v, ok := flecs.GetPair[Edge](w.R(), e, rel, tgt)
 	if ok {
 		t.Fatal("GetPair returned true when pair not present")
 	}
@@ -310,10 +310,10 @@ func TestGetPairTypeMismatch(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 1.5})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.5})
 
 	// GetPair with mismatched type returns (zero, false), does not panic.
-	v, ok := flecs.GetPair[Color](w, e, rel, tgt)
+	v, ok := flecs.GetPair[Color](w.R(), e, rel, tgt)
 	if ok {
 		t.Fatal("GetPair[Color] returned true for an Edge pair")
 	}
@@ -328,14 +328,14 @@ func TestPairWithDataAndRegularComponentCoexist(t *testing.T) {
 	tgt := w.NewEntity()
 	e := w.NewEntity()
 
-	flecs.Set[Position](w, e, Position{X: 1, Y: 2})
-	flecs.SetPair[Edge](w, e, rel, tgt, Edge{Weight: 3.0})
+	flecs.Set[Position](w.W(), e, Position{X: 1, Y: 2})
+	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 3.0})
 
-	pos, ok := flecs.Get[Position](w, e)
+	pos, ok := flecs.Get[Position](w.R(), e)
 	if !ok || pos.X != 1 || pos.Y != 2 {
 		t.Fatalf("Position corrupted after SetPair: ok=%v, pos=%+v", ok, pos)
 	}
-	edge, ok := flecs.GetPair[Edge](w, e, rel, tgt)
+	edge, ok := flecs.GetPair[Edge](w.R(), e, rel, tgt)
 	if !ok || edge.Weight != 3.0 {
 		t.Fatalf("Edge wrong after Set[Position]: ok=%v, edge=%+v", ok, edge)
 	}
@@ -353,9 +353,9 @@ func TestQueryForPairID(t *testing.T) {
 	e2 := w.NewEntity()
 	e3 := w.NewEntity()
 
-	flecs.SetPair[Edge](w, e1, follows, target, Edge{Weight: 1.0})
-	flecs.SetPair[Edge](w, e2, follows, target, Edge{Weight: 2.0})
-	flecs.SetPair[Edge](w, e3, follows, target, Edge{Weight: 3.0})
+	flecs.SetPair[Edge](w.W(), e1, follows, target, Edge{Weight: 1.0})
+	flecs.SetPair[Edge](w.W(), e2, follows, target, Edge{Weight: 2.0})
+	flecs.SetPair[Edge](w.W(), e3, follows, target, Edge{Weight: 3.0})
 
 	q := flecs.NewQuery(w, pairID)
 	var weights []float32

@@ -81,7 +81,7 @@ func TestLoggerDefault(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
 	flecs.RegisterComponent[logType](w)
-	flecs.Set(w, e, logType{1, 2})
+	flecs.Set(w.W(), e, logType{1, 2})
 	w.Delete(e)
 }
 
@@ -215,7 +215,7 @@ func TestLoggerTableCreated(t *testing.T) {
 	w.SetLogger(slog.New(h))
 
 	e := w.NewEntity()
-	flecs.Set(w, e, logType{1, 2}) // migration → new table for [logType]
+	flecs.Set(w.W(), e, logType{1, 2}) // migration → new table for [logType]
 
 	if !hasMessage(h.messages(), "table created") {
 		t.Errorf("no 'table created' record; messages: %v", h.messages())
@@ -294,7 +294,7 @@ func TestLoggerObserverRegistered(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	obs := flecs.Observe[logType](w, flecs.EventOnAdd, func(e flecs.ID, v *logType) {})
+	obs := flecs.Observe[logType](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ logType) {})
 	_ = obs
 
 	if !hasMessage(h.messages(), "observer registered") {
@@ -309,7 +309,7 @@ func TestLoggerObserverRegisteredID(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	obs := flecs.ObserveID(w, id, flecs.EventOnSet, func(e flecs.ID, ptr unsafe.Pointer) {})
+	obs := flecs.ObserveID(w, id, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
 	_ = obs
 
 	if !hasMessage(h.messages(), "observer registered") {
@@ -324,7 +324,7 @@ func TestLoggerObserverRegisteredObserve2(t *testing.T) {
 	w.SetLogger(slog.New(h))
 
 	events := []flecs.EventKind{flecs.EventOnAdd, flecs.EventOnRemove}
-	obs := flecs.Observe2[logType](w, events, func(ev flecs.EventKind, e flecs.ID, v *logType) {})
+	obs := flecs.Observe2[logType](w, events, func(_ *flecs.Writer, _ flecs.EventKind, _ flecs.ID, _ logType) {})
 	_ = obs
 
 	msgs := h.messages()
@@ -345,7 +345,7 @@ func TestLoggerObserverEventAttr(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	flecs.Observe[logType](w, flecs.EventOnSet, func(e flecs.ID, v *logType) {})
+	flecs.Observe[logType](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ logType) {})
 
 	msgs := h.messages()
 	idx := -1
@@ -370,7 +370,7 @@ func TestLoggerObserverUnsubscribed(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	obs := flecs.Observe[logType](w, flecs.EventOnAdd, func(e flecs.ID, v *logType) {})
+	obs := flecs.Observe[logType](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ logType) {})
 	beforeUnsub := h.count()
 
 	obs.Unsubscribe()
@@ -467,7 +467,7 @@ func TestLoggerLevelFilter(t *testing.T) {
 
 	e := w.NewEntity()
 	flecs.RegisterComponent[logType](w)
-	flecs.Set(w, e, logType{1, 2})
+	flecs.Set(w.W(), e, logType{1, 2})
 
 	if h.count() != 0 {
 		t.Errorf("expected 0 records at INFO level for DEBUG events, got %d: %v", h.count(), h.messages())
@@ -479,13 +479,13 @@ func TestLoggerNoLogOnReadPaths(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[logType](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, logType{1, 2})
+	flecs.Set(w.W(), e, logType{1, 2})
 
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	_, _ = flecs.Get[logType](w, e)
-	_ = flecs.Has[logType](w, e)
+	_, _ = flecs.Get[logType](w.R(), e)
+	_ = flecs.Has[logType](w.R(), e)
 	_ = w.IsAlive(e)
 
 	if h.count() != 0 {
@@ -497,13 +497,13 @@ func TestLoggerNoLogOnReadPaths(t *testing.T) {
 func TestLoggerNoLogOnHotPaths(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, logType{1, 2}) // initial set; triggers migration
+	flecs.Set(w.W(), e, logType{1, 2}) // initial set; triggers migration
 
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
 	for range 1000 {
-		flecs.Set(w, e, logType{2, 3}) // re-set on existing component; no migration
+		flecs.Set(w.W(), e, logType{2, 3}) // re-set on existing component; no migration
 	}
 
 	if h.count() != 0 {
