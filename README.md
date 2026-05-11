@@ -138,6 +138,7 @@ within a table.
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 | REST API | `NewRESTHandler(w)` — read-only HTTP inspection + snapshot save/load (`GET /stats`, `/components`, `/entities`, `/snapshot`; `PUT /snapshot`) |
+| Structured logging | `w.SetLogger(*slog.Logger)` — lifecycle events at DEBUG level; nil-logger fast path (single pointer compare) |
 
 ---
 

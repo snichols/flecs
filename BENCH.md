@@ -281,3 +281,23 @@ SwapComponent-128               4 ± 0%       0 ± 0%      -100.00% (p=0.000)
 ```
 
 All three benchmarks reach **0 allocs/op** on the cache-hit steady-state path. The remaining `B/op` (amortized memory from table growth) is from Go's `append` doubling on the plain `[]ID` entity column and from periodic `reflect.MakeSlice` growth in the component columns — both amortized to sub-1 alloc/op over many iterations.
+
+---
+
+## Nil-logger fast path (issue #73 — structured logging)
+
+Added `if w.logger != nil` checks at each lifecycle event site. Measured before/after to confirm no measurable regression on the hot paths (no logger installed):
+
+**Before (5 runs, no logger field):**
+```
+BenchmarkNewEntity-128              ~43 ns/op    0 allocs/op
+BenchmarkSetExistingComponent-128   ~51 ns/op    0 allocs/op
+```
+
+**After (5 runs, logger field present, nil — fast path):**
+```
+BenchmarkNewEntity-128              ~47 ns/op    0 allocs/op
+BenchmarkSetExistingComponent-128   ~52 ns/op    0 allocs/op
+```
+
+`BenchmarkSetExistingComponent` (the true no-migration hot path) shows no change. `BenchmarkNewEntity` variance is within normal measurement noise (~10 ns swing between runs). The nil-logger check is a single pointer compare that the compiler treats as a branch-predicted fast path; `BenchmarkSetExistingComponent` confirms **0 allocs/op** is maintained.

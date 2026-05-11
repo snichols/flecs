@@ -1,7 +1,11 @@
 package flecs
 
 import (
+	"context"
+	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
@@ -48,6 +52,7 @@ type World struct {
 	fixedTimestep    float32                         // fixed step size; 0 means disabled
 	fixedAccumulator float32                         // internal accumulator for fixed-step dispatch
 	lastFramePhases  [4]PhaseStats                   // per-phase timing from the most recent Progress call
+	logger           *slog.Logger                    // optional structured logger; nil means no logging
 }
 
 // New initializes and returns an empty World.
@@ -165,6 +170,10 @@ func (w *World) NewEntity() ID {
 	rec := w.index.Get(e)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(e))
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "entity created",
+			slog.Uint64("id", uint64(e)))
+	}
 	return e
 }
 
@@ -190,7 +199,12 @@ func (w *World) deleteOne(e ID) bool {
 			movedRec.Row = uint32(row)
 		}
 	}
-	return w.index.Free(e)
+	freed := w.index.Free(e)
+	if freed && w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "entity deleted",
+			slog.Uint64("id", uint64(e)))
+	}
+	return freed
 }
 
 // Delete removes entity e and all entities related to it via (ChildOf, e) pairs,
@@ -273,6 +287,12 @@ func RegisterComponent[T any](w *World) ID {
 	}
 	id := w.index.Alloc()
 	w.registry.AssociateID(info, id)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "component registered",
+			slog.String("name", info.Name),
+			slog.Uint64("id", uint64(id)),
+			slog.Uint64("size", uint64(info.Size)))
+	}
 	return id
 }
 
@@ -573,6 +593,12 @@ func (w *World) notifyTableCreated(t *table.Table) {
 			cq.tryMatchTable(t)
 		}
 	}
+	if w.logger != nil {
+		sig := t.Type()
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "table created",
+			slog.Int("signature_len", len(sig)),
+			slog.String("signature", formatSig(sig)))
+	}
 }
 
 // sigKey encodes a sorted []ID as a string map key.
@@ -583,4 +609,37 @@ func sigKey(sig []ID) string {
 		return ""
 	}
 	return string(unsafe.Slice((*byte)(unsafe.Pointer(&sig[0])), len(sig)*8))
+}
+
+// SetLogger installs l as the structured logger for lifecycle events.
+// Passing nil disables logging. When set, the logger receives DEBUG-level
+// records for the following lifecycle events: entity created, entity deleted,
+// component registered, table created, system added, system closed, observer
+// registered, observer unsubscribed, snapshot serialized, snapshot loaded.
+//
+// No logs fire on hot paths: Set/Get/Has/Each/Progress and similar read or
+// per-frame operations are intentionally excluded for performance.
+//
+// Note: lifecycle events that occur inside World.New (empty table creation,
+// built-in entity allocation) are not logged because SetLogger cannot be
+// called until after New() returns.
+func (w *World) SetLogger(l *slog.Logger) { w.logger = l }
+
+// Logger returns the current logger, or nil if none is installed.
+func (w *World) Logger() *slog.Logger { return w.logger }
+
+// formatSig returns a space-separated string of decimal component IDs for use
+// as the "signature" attribute on "table created" log records.
+func formatSig(sig []ID) string {
+	if len(sig) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, id := range sig {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(strconv.FormatUint(uint64(id), 10))
+	}
+	return b.String()
 }

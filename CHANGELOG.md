@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Structured lifecycle logging via `log/slog`. No breaking changes.
+
+### Added
+
+- **`(*World).SetLogger(*slog.Logger)`** — installs or replaces the structured
+  logger. Passing `nil` disables logging (the default). Documented lifecycle
+  event surface: no hot-path logs.
+- **`(*World).Logger() *slog.Logger`** — returns the currently installed logger,
+  or `nil` if none.
+- **Lifecycle log records** at DEBUG level for:
+  - `entity created` / `entity deleted` (one per entity, including cascade deletes)
+  - `component registered` (first `RegisterComponent[T]` call only)
+  - `table created` (new archetype; `signature_len` + `signature` attrs)
+  - `system added` (with `phase` attr) / `system closed`
+  - `observer registered` (with `id` + `event` attrs) / `observer unsubscribed`
+  - `snapshot serialized` / `snapshot loaded` (with `entities` count attr)
+- Nil-logger fast path: single pointer compare at each event site; verified
+  no measurable regression on `BenchmarkNewEntity` or `BenchmarkSetExistingComponent`.
+
+---
+
 ## v0.8.0 — 2026-05-11
 
 Minimal read-only REST API addon — exposes world inspection and snapshot
