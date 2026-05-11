@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.0 — 2026-05-10
+
+Phase 9.2.1: basic JSON serialization. No breaking changes.
+
+### Added
+
+- **JSON serialization** — `World.MarshalJSON()` and `World.UnmarshalJSON()`
+  implement `json.Marshaler` / `json.Unmarshaler`. Saves and restores entities,
+  non-pair components, and entity names. Built-in entities and pair components
+  are skipped. Pair components (Phase 9.2.4), ChildOf hierarchies (Phase 9.2.2),
+  and IsA prefabs (Phase 9.2.3) are not yet serialized.
+
+---
+
 ## v0.2.0 — 2026-05-10
 
 Query extensions and traversal helpers. No breaking changes.
