@@ -155,13 +155,16 @@ func getViaIsAByID(w *World, e ID, id ID, info *component.TypeInfo, seen map[ID]
 // Performance: one extra allocation per call for a bounce buffer that makes v
 // addressable for the unsafe column write.
 func (w *World) SetByID(e ID, id ID, v any) {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setByIDImmediate(w, e, id, captured)
 		})
+		w.deferMu.Unlock()
 		return
 	}
+	w.deferMu.Unlock()
 	setByIDImmediate(w, e, id, v)
 }
 

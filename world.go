@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
@@ -45,8 +46,12 @@ type World struct {
 	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
 	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
+	workerCount      int                             // number of persistent goroutines in the worker pool; 0 = serial
+	workerCh         chan func()                     // job channel; nil when workerCount == 0
+	inProgress       bool                            // true while Progress is executing
 	time             float32                         // total accumulated simulation time
 	frameCount       uint64                          // number of Progress calls
 	fixedTimestep    float32                         // fixed step size; 0 means disabled
@@ -163,6 +168,49 @@ func (w *World) SetFixedTimestep(step float32) {
 	w.fixedTimestep = step
 }
 
+// SetWorkerCount sets the number of worker goroutines in the persistent pool
+// used for parallel system dispatch. Zero (the default) disables parallel
+// dispatch; all systems run serially on the calling goroutine.
+//
+// When n > 0, a buffered channel of size 2*n is created and n goroutines are
+// started. Systems flagged with SetParallel(true) whose write sets are pairwise
+// disjoint will be dispatched as concurrent jobs within each phase.
+//
+// Changing n between Progress calls tears down the old pool (goroutines exit
+// when the old channel is drained and closed) and starts a new pool.
+//
+// Calling SetWorkerCount during an active Progress call is a no-op.
+//
+// Panics if n < 0.
+func (w *World) SetWorkerCount(n int) {
+	if n < 0 {
+		panic("flecs: SetWorkerCount: n must be >= 0")
+	}
+	if w.inProgress {
+		return
+	}
+	if w.workerCh != nil {
+		close(w.workerCh)
+		w.workerCh = nil
+	}
+	w.workerCount = n
+	if n > 0 {
+		ch := make(chan func(), 2*n)
+		w.workerCh = ch
+		for range n {
+			go func() {
+				for fn := range ch {
+					fn()
+				}
+			}()
+		}
+	}
+}
+
+// WorkerCount returns the current number of worker goroutines. Zero means
+// serial dispatch (the default).
+func (w *World) WorkerCount() int { return w.workerCount }
+
 // NewEntity allocates a new entity, places it in the empty-signature table,
 // and returns its ID.
 func (w *World) NewEntity() ID {
@@ -219,15 +267,19 @@ func (w *World) deleteOne(e ID) bool {
 //
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		if !w.index.IsAlive(e) {
+			w.deferMu.Unlock()
 			return false
 		}
 		w.deferred = append(w.deferred, func(w *World) {
 			deleteImmediate(w, e)
 		})
+		w.deferMu.Unlock()
 		return true
 	}
+	w.deferMu.Unlock()
 	return deleteImmediate(w, e)
 }
 
@@ -306,13 +358,16 @@ func RegisterComponent[T any](w *World) ID {
 // queued and applied on DeferEnd. Reads (Get/Has/Owns/IsAlive) still see the
 // CURRENT state, not the deferred future state.
 func Set[T any](w *World, e ID, v T) {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setImmediate[T](w, e, captured)
 		})
+		w.deferMu.Unlock()
 		return
 	}
+	w.deferMu.Unlock()
 	setImmediate[T](w, e, v)
 }
 
@@ -384,20 +439,25 @@ func Owns[T any](w *World, e ID) bool {
 // Within a deferred block, the operation is queued; returns true if T is
 // currently present on e (at queue time).
 func Remove[T any](w *World, e ID) bool {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		info, ok := component.LookupByType[T](w.registry)
 		if !ok || info.Component == 0 {
+			w.deferMu.Unlock()
 			return false
 		}
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
+			w.deferMu.Unlock()
 			return false
 		}
 		w.deferred = append(w.deferred, func(w *World) {
 			removeImmediate[T](w, e)
 		})
+		w.deferMu.Unlock()
 		return true
 	}
+	w.deferMu.Unlock()
 	return removeImmediate[T](w, e)
 }
 

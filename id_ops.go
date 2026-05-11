@@ -23,19 +23,24 @@ import (
 // Within a deferred block, the operation is queued; returns true if e does not
 // currently have id (at queue time).
 func AddID(w *World, e ID, e2 ID) bool {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
 		if rec == nil {
+			w.deferMu.Unlock()
 			panic("flecs: AddID called on dead entity")
 		}
 		if rec.Table != nil && rec.Table.HasComponent(e2) {
+			w.deferMu.Unlock()
 			return false
 		}
 		w.deferred = append(w.deferred, func(w *World) {
 			addIDImmediate(w, e, e2)
 		})
+		w.deferMu.Unlock()
 		return true
 	}
+	w.deferMu.Unlock()
 	return addIDImmediate(w, e, e2)
 }
 
@@ -59,16 +64,20 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 // Within a deferred block, the operation is queued; returns true if e currently
 // has id (at queue time).
 func RemoveID(w *World, e ID, id ID) bool {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
+			w.deferMu.Unlock()
 			return false
 		}
 		w.deferred = append(w.deferred, func(w *World) {
 			removeIDImmediate(w, e, id)
 		})
+		w.deferMu.Unlock()
 		return true
 	}
+	w.deferMu.Unlock()
 	return removeIDImmediate(w, e, id)
 }
 
@@ -125,13 +134,16 @@ func OwnsID(w *World, e ID, id ID) bool {
 //
 // Within a deferred block, the operation is queued and applied on DeferEnd.
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
+	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setPairImmediate[T](w, e, rel, tgt, captured)
 		})
+		w.deferMu.Unlock()
 		return
 	}
+	w.deferMu.Unlock()
 	setPairImmediate[T](w, e, rel, tgt, v)
 }
 
