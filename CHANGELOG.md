@@ -1,47 +1,42 @@
 # Changelog
 
-## Unreleased — v0.12.0 — Exclusive Access Checking (debug build)
+## Unreleased — v0.12.0 — Exclusive Access Ownership Assertion
 
-Faithful port of the C flecs `FLECS_EXCLUSIVE_ACCESS` machinery. A debug-only
-safety net that catches "another goroutine touched the world while you owned it"
-violations. Enabled via `-tags flecs_exclusive_access`; costs nothing in release
-builds (compile-time constant false eliminates all checks).
+Always-on ownership assertion: every public `World` method panics with
+`ErrExclusiveAccessViolation` if called from a goroutine other than the one that
+called `ExclusiveAccessBegin`. No build tag required; the check is always live.
 
 ### Added
 
 - **`(*World).ExclusiveAccessBegin(threadName string)`** — claims the world for
-  the calling goroutine. In debug builds, any mutation from another goroutine
-  panics with an `exclusive_access violation` error. No-op in release builds.
+  the calling goroutine. Any subsequent mutation or read from a different goroutine
+  panics with `ErrExclusiveAccessViolation`.
 - **`(*World).ExclusiveAccessEnd(lockWorld bool)`** — releases the claim. When
   `lockWorld=true` the world enters a write-locked state where all goroutines
-  receive a violation panic on mutation; reads still pass. No-op in release.
-- **`exclusive_access atomic.Uint64` field on `*World`** — always present
-  (zero-valued, no effect in release builds). Three states: 0 = unclaimed,
-  goroutine ID = owned by that goroutine, ^uint64(0) = write-locked.
-- **Build tag `flecs_exclusive_access`** — gates all debug-mode behavior.
-  Paired files `exclusive_access_on.go` / `exclusive_access_off.go` export a
-  compile-time `const flecsExclusiveAccess bool` that eliminates checks in
-  release builds.
-- **`checkExclusiveAccessWrite` / `checkExclusiveAccessRead`** — internal check
-  functions inserted at the top of every public mutator and reader respectively.
-  One `atomic.Load` per call; dead-coded away in release builds.
-- **CI job `test-exclusive-access`** — runs `go test -tags flecs_exclusive_access
-  -race -count=10 ./...` so the debug build never bitrotS.
+  receive a violation panic on mutation; reads still pass. Passing `false` returns
+  the world to the unclaimed state.
+- **`exclusive_access atomic.Uint64` field on `*World`** — three states:
+  0 = unclaimed, goroutine ID = owned by that goroutine, ^uint64(0) = write-locked.
+- **`checkExclusiveAccessWrite` / `checkExclusiveAccessRead`** — internal
+  functions inserted at every public entry point. Common case (no owner claimed)
+  costs one `atomic.Load` per call; `goid.Get()` only runs when an owner is set.
 - **`Progress` and `RegisterComponent` / `NewSystem*` / `NewQuery*` / `NewCachedQuery*`**
-  now Write-checked: any of these called from a non-owner goroutine during
-  exclusive access panics with `ErrExclusiveAccessViolation`.
+  are Write-checked: any of these called from a non-owner goroutine panics with
+  `ErrExclusiveAccessViolation`.
 - **`IsAlive` / `Count` / `SystemCount*` / `TablesFor` / `EachTableFor`**
-  now Read-checked: panics when called from a non-owner goroutine while the
-  world is exclusively owned.
-- **CI job `lint-exclusive-access`** — runs golangci-lint with
-  `--build-tags flecs_exclusive_access` so both default and debug builds are
-  lint-clean in CI.
+  are Read-checked: panics when called from a non-owner goroutine while the world
+  is exclusively owned.
 
-### Notes
+### Changed
 
-- `goid()` uses `runtime.Stack` parsing rather than `//go:linkname` to
-  `runtime.getg()`. Simpler, no `unsafe`, no fragile linkname. Costs ~µs per
-  mutator in debug builds only; release builds are unaffected.
+- **Goroutine ID** is now obtained via `github.com/petermattis/goid` (used by
+  cockroachdb, etcd, and others) instead of `runtime.Stack` parsing. Cost drops
+  from ~µs to ~ns per check. No `unsafe` or fragile stack-format dependency.
+- **No build tag** — the exclusive-access check is always compiled in. Go makes
+  goroutines a first-class feature; the ownership assertion is on by default to
+  catch misuse in any build.
+- **CI** — collapsed to a single test job and a single lint job; the separate
+  `-tags flecs_exclusive_access` jobs are removed (there is only one build now).
 
 ## v0.11.0 — 2026-05-11 — Readonly Concurrency Window
 

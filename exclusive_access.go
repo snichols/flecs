@@ -1,11 +1,9 @@
-//go:build flecs_exclusive_access
-
 package flecs
 
 import "fmt"
 
 func (w *World) ExclusiveAccessBegin(threadName string) {
-	id := goid()
+	id := currentGoid()
 	current := w.exclusiveAccess.Load()
 	if current != 0 {
 		panic(fmt.Errorf("flecs: ExclusiveAccessBegin called while world is already claimed (owner: %q)", w.exclusiveThread))
@@ -31,7 +29,7 @@ func (w *World) checkExclusiveAccessWrite() {
 	if owner == ^uint64(0) {
 		panic(fmt.Errorf("flecs: exclusive_access violation: world is locked for writes"))
 	}
-	if owner != goid() {
+	if owner != currentGoid() {
 		panic(fmt.Errorf("flecs: exclusive_access violation: world is owned by goroutine %q; caller is a different goroutine", w.exclusiveThread))
 	}
 }
@@ -41,7 +39,7 @@ func (w *World) checkExclusiveAccessRead() {
 	if owner == 0 || owner == ^uint64(0) {
 		return
 	}
-	if owner != goid() {
+	if owner != currentGoid() {
 		panic(fmt.Errorf("flecs: exclusive_access violation: world is owned by goroutine %q; concurrent read from a different goroutine is not allowed", w.exclusiveThread))
 	}
 }

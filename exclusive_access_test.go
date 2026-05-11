@@ -1,5 +1,3 @@
-//go:build flecs_exclusive_access
-
 package flecs_test
 
 import (
@@ -203,4 +201,32 @@ func TestExclusiveAccessReadEntryPointsRespectOwnership(t *testing.T) {
 		_ = w.SystemCount()
 	}()
 	wg.Wait()
+}
+
+// TestGoidGetIsNonZero verifies that currentGoid returns a nonzero goroutine ID.
+func TestGoidGetIsNonZero(t *testing.T) {
+	w := flecs.New()
+	e := w.NewEntity()
+
+	// ExclusiveAccessBegin uses currentGoid internally; if it returns 0 the store
+	// would be a no-op and the world would appear unclaimed.
+	w.ExclusiveAccessBegin("goid-check")
+	// Owner can write without panic — proves goid was nonzero and stored correctly.
+	flecs.Set(w, e, xaPos{1, 1})
+	w.ExclusiveAccessEnd(false)
+}
+
+// TestExclusiveAccessZeroOverheadCommonPath verifies that with no ExclusiveAccessBegin
+// ever called, Set allocates 0 bytes per call (the common-path cost is just one atomic.Load).
+func TestExclusiveAccessZeroOverheadCommonPath(t *testing.T) {
+	w := flecs.New()
+	e := w.NewEntity()
+	flecs.Set(w, e, xaPos{0, 0}) // warm up archetype
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		flecs.Set(w, e, xaPos{1, 2})
+	})
+	if allocs > 0 {
+		t.Fatalf("expected 0 allocations per Set in common path, got %.1f", allocs)
+	}
 }

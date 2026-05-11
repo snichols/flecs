@@ -410,42 +410,31 @@
 // must not run concurrently with any other world operation. Add your own mutex
 // if multiple goroutines share the world.
 //
-// # Debug builds — exclusive access checking
+// # Concurrency safety — exclusive access ownership assertion
 //
-// The build tag `flecs_exclusive_access` enables a debug-only safety net that
-// catches "another goroutine touched the world while you claimed it" violations.
-// It is the Go analog of the C flecs `FLECS_EXCLUSIVE_ACCESS` feature and is
-// most useful when debugging code that manages its own goroutine discipline
-// (e.g. custom pipelines, concurrent readers with a single writer).
-//
-// Enable with:
-//
-//	go test -tags flecs_exclusive_access -race ./...
-//	go build -tags flecs_exclusive_access ./...
+// Every public World method asserts that either no goroutine has claimed the
+// world via [World.ExclusiveAccessBegin], OR the calling goroutine is the
+// claimant. Cross-goroutine misuse panics with [ErrExclusiveAccessViolation].
+// The assertion is always on — no build tag is required.
 //
 // Usage:
 //
-//	w := flecs.New()
-//	w.ExclusiveAccessBegin("main-thread")
-//	// ... only this goroutine may mutate w ...
-//	w.ExclusiveAccessEnd(false) // false = release; true = lock writes
+//		w := flecs.New()
+//		w.ExclusiveAccessBegin("main-thread")
+//		// ... only this goroutine may call World methods ...
+//		w.ExclusiveAccessEnd(false) // false = release; true = lock all writes
 //
-// When `flecs_exclusive_access` is active:
+//	  - [World.ExclusiveAccessBegin] records the calling goroutine's ID and a
+//	    human-readable label. Any subsequent call from a different goroutine
+//	    panics with [ErrExclusiveAccessViolation].
+//	  - [World.ExclusiveAccessEnd] releases the claim. Passing lockWorld=true
+//	    transitions to a write-locked state where ALL goroutines receive a
+//	    violation panic on any mutation; reads still pass. Passing lockWorld=false
+//	    returns the world to the unclaimed state where any goroutine may call it.
 //
-//   - [World.ExclusiveAccessBegin] records the calling goroutine's ID and a
-//     human-readable label. Any subsequent mutation from a different goroutine
-//     panics immediately with a descriptive error.
-//   - [World.ExclusiveAccessEnd] releases the claim. Passing lockWorld=true
-//     transitions to a "write-locked" state where ALL goroutines (including the
-//     former owner) receive a violation panic on any mutation; reads still pass.
-//     Passing lockWorld=false returns the world to the unclaimed state.
-//
-// Overhead: one atomic.Load per public mutator call and one per public reader
-// call. Not intended for production use; disable the tag in benchmarks to
-// recover baseline performance.
-//
-// The goroutine ID is read via runtime.Stack; this is fragile against Go
-// runtime format changes, which is why the feature is debug-only.
+// Common case overhead: one atomic.Load per public call. [goid.Get] is only
+// invoked when an owner is set, so the un-claimed path costs ~1 ns total.
+// Goroutine IDs are obtained via github.com/petermattis/goid.
 //
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs

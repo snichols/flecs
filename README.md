@@ -157,7 +157,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Observers (multi) | `Observe[T]`, `ObserveID`, `Observe2[T]`, `Unsubscribe` |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
 | Readonly concurrency window | `w.Readonly(fn)`, `ReadonlyBegin`, `ReadonlyEnd` |
-| **Debug** exclusive-access checking | `-tags flecs_exclusive_access`; `ExclusiveAccessBegin`, `ExclusiveAccessEnd` — panics on cross-goroutine violations; no-op in release builds |
+| Exclusive-access ownership assertion | `ExclusiveAccessBegin`, `ExclusiveAccessEnd` — always on; panics with `ErrExclusiveAccessViolation` on cross-goroutine violations; common case costs one `atomic.Load` per call |
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
