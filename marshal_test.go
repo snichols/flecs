@@ -1811,6 +1811,36 @@ func TestSetPairByIDFiresHooks(t *testing.T) {
 	}
 }
 
+func TestAddIDAfterSetPairIsNoOp(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+
+	flecs.SetPair[marshalEdge](w, alice, follows, bob, marshalEdge{Weight: 1.5})
+	pairID := flecs.MakePair(follows, bob)
+
+	// AddID after SetPair on the same pairID must be idempotent: entity already has
+	// the pair component, so AddID is a no-op and must not clear the data.
+	flecs.AddID(w, alice, pairID)
+
+	if !flecs.HasID(w, alice, pairID) {
+		t.Fatal("entity lost pair after AddID no-op")
+	}
+	v, ok := w.GetByID(alice, pairID)
+	if !ok {
+		t.Fatal("GetByID returned false after AddID no-op")
+	}
+	edge, ok := v.(marshalEdge)
+	if !ok {
+		t.Fatalf("unexpected type %T after AddID no-op", v)
+	}
+	if edge.Weight != 1.5 {
+		t.Fatalf("pair data corrupted: got Weight=%v, want 1.5", edge.Weight)
+	}
+}
+
 func TestMarshalPairsTwoStepRoundTripStable(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
