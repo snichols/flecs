@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.13.0 — Within-System Multi-Threaded Dispatch
+## v0.13.0 — 2026-05-11 — Within-System Multi-Threaded Dispatch
 
 Port of C flecs' `multi_threaded` system flag. When a system calls
 `SetMultiThreaded(true)` and `World.SetWorkerCount(n) > 0`, the dispatcher

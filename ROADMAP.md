@@ -46,7 +46,6 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 ### Concurrency
 - Lock-free defer queue (currently mutex-protected)
 - Per-goroutine command stages (currently a single mutex-protected queue; C flecs uses per-stage queues — Phase 11.0, task #40 — will unlock linear scaling for deferred mutations from multi-threaded systems)
-- Debug-mode `exclusiveAccess` goroutine-ID assert (analog of C `FLECS_EXCLUSIVE_ACCESS`)
 
 ### Performance
 - Custom allocators / `sync.Pool` for hot paths
