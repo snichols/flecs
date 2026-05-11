@@ -1,8 +1,10 @@
 package flecs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 )
 
@@ -250,7 +252,12 @@ func (w *World) MarshalJSON() ([]byte, error) {
 	if jw.Entities == nil {
 		jw.Entities = []jsonEntity{}
 	}
-	return json.Marshal(jw)
+	result, err := json.Marshal(jw)
+	if err == nil && w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot serialized",
+			slog.Int("entities", len(entities)))
+	}
+	return result, err
 }
 
 // UnmarshalJSON restores entities, names, ChildOf parent-child relationships,
@@ -369,6 +376,10 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			}
 			w.SetByID(e, info.ID, ptr.Elem().Interface())
 		}
+	}
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "snapshot loaded",
+			slog.Int("entities", len(jw.Entities)))
 	}
 	return nil
 }

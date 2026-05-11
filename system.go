@@ -1,7 +1,9 @@
 package flecs
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -64,6 +66,10 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 
 	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdateID}
 	w.systems = append(w.systems, sys)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
+			slog.String("phase", phaseName(w, sys.phase)))
+	}
 	return sys
 }
 
@@ -103,6 +109,10 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 
 	sys := &System{w: w, query: q, fn: fn, phase: phase}
 	w.systems = append(w.systems, sys)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
+			slog.String("phase", phaseName(w, sys.phase)))
+	}
 	return sys
 }
 
@@ -116,7 +126,13 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 // system in that snapshot still runs even if Close is called mid-frame. On
 // the next Progress call the system is definitively skipped.
 func (s *System) Close() {
+	if s.removed {
+		return
+	}
 	s.removed = true
+	if s.w.logger != nil {
+		s.w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system closed")
+	}
 }
 
 // IsClosed reports whether Close has been called.
@@ -234,4 +250,20 @@ func (w *World) SystemCount() int {
 		}
 	}
 	return n
+}
+
+// phaseName returns a human-readable name for the given pipeline phase ID.
+func phaseName(w *World, phase ID) string {
+	switch phase {
+	case w.preUpdateID:
+		return "PreUpdate"
+	case w.onUpdateID:
+		return "OnUpdate"
+	case w.postUpdateID:
+		return "PostUpdate"
+	case w.onFixedUpdateID:
+		return "OnFixedUpdate"
+	default:
+		return "unknown"
+	}
 }

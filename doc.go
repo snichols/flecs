@@ -271,6 +271,45 @@
 //	    fmt.Printf("  %s: %d tables, %d entities\n", c.Name, c.TableCount, c.EntityCount)
 //	}
 //
+// # Structured Logging
+//
+// [World.SetLogger] installs a [log/slog]-compatible logger that receives
+// DEBUG-level records for each lifecycle event. When no logger is installed
+// (the default), logging is a single nil-pointer comparison at each event site
+// — zero overhead on hot paths.
+//
+//	w := flecs.New()
+//	w.SetLogger(slog.Default())
+//	// or with JSON output:
+//	w.SetLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+//
+//	posID := flecs.RegisterComponent[Position](w)
+//	// -> DEBUG msg="component registered" name=pkg.Position id=<n> size=<n>
+//
+//	e := w.NewEntity()
+//	// -> DEBUG msg="entity created" id=<n>
+//
+//	flecs.Set(w, e, Position{1, 2})
+//	// -> DEBUG msg="table created" signature_len=1 signature="<id>"
+//
+// Lifecycle events that produce log records:
+//
+//   - Entity created / deleted
+//   - Component registered (first call only; subsequent RegisterComponent are no-ops)
+//   - Table created (new archetype; signature is a space-separated list of decimal IDs)
+//   - System added / closed
+//   - Observer registered / unsubscribed
+//   - Snapshot serialized / loaded (entities count included)
+//
+// No records fire on hot paths: Set, Get, Has, Each, Progress, and similar
+// read or per-frame operations are intentionally excluded. Use [World.Logger]
+// to retrieve the currently installed logger. Pass nil to [World.SetLogger] to
+// disable logging.
+//
+// Note: lifecycle events that occur inside [New] (empty table creation and
+// built-in entity allocation) are not logged because SetLogger cannot be called
+// until after New() returns.
+//
 // # REST API
 //
 // [NewRESTHandler] returns an [http.Handler] that exposes world inspection and

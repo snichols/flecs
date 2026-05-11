@@ -1,6 +1,10 @@
 package flecs
 
-import "unsafe"
+import (
+	"context"
+	"log/slog"
+	"unsafe"
+)
 
 // EventKind identifies which lifecycle event an observer subscribes to.
 type EventKind int
@@ -46,6 +50,7 @@ type observerNode struct {
 // Observer is an opaque handle returned by Observe[T], ObserveID, or Observe2[T].
 // Call Unsubscribe to stop receiving events. Observer is NOT goroutine-safe.
 type Observer struct {
+	w     *World
 	nodes []*observerNode
 }
 
@@ -58,8 +63,14 @@ type Observer struct {
 // current dispatch iteration are skipped. Observers that have already fired
 // in the current event are unaffected (they have already been called).
 func (o *Observer) Unsubscribe() {
+	if len(o.nodes) == 0 {
+		return
+	}
 	for _, n := range o.nodes {
 		n.removed = true
+	}
+	if o.w != nil && o.w.logger != nil {
+		o.w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer unsubscribed")
 	}
 	o.nodes = nil
 }
@@ -74,9 +85,14 @@ func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
 	callback := func(e ID, ptr unsafe.Pointer) {
 		fn(e, (*T)(ptr))
 	}
-	obs := &Observer{}
+	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, callback)
 	obs.nodes = append(obs.nodes, node)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer registered",
+			slog.Uint64("id", uint64(id)),
+			slog.String("event", event.String()))
+	}
 	return obs
 }
 
@@ -86,9 +102,14 @@ func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
 // helper call (AddID, Set, SetPair, Delete paths).
 // Returns an *Observer handle; call Unsubscribe to cancel.
 func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointer)) *Observer {
-	obs := &Observer{}
+	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, fn)
 	obs.nodes = append(obs.nodes, node)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer registered",
+			slog.Uint64("id", uint64(id)),
+			slog.String("event", event.String()))
+	}
 	return obs
 }
 
@@ -98,7 +119,7 @@ func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointe
 // handle; Unsubscribe cancels all subscriptions.
 func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID, v *T)) *Observer {
 	id := RegisterComponent[T](w)
-	obs := &Observer{}
+	obs := &Observer{w: w}
 	for _, ev := range events {
 		ev := ev
 		callback := func(e ID, ptr unsafe.Pointer) {
@@ -106,6 +127,11 @@ func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID
 		}
 		node := w.addObserverNode(id, ev, callback)
 		obs.nodes = append(obs.nodes, node)
+		if w.logger != nil {
+			w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer registered",
+				slog.Uint64("id", uint64(id)),
+				slog.String("event", ev.String()))
+		}
 	}
 	return obs
 }
