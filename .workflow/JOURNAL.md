@@ -14,3 +14,7 @@ Added QueryIter.Reader() and Writer() methods: added world *World field to Query
 
 Added TestQueryIterReaderWriter and TestCachedQueryIterReaderWriter to scope_test.go, covering QueryIter.Reader() (query.go:372) and QueryIter.Writer() (query.go:377). Main package coverage moved from 94.9% to 95.0%, satisfying the ≥ 95% threshold. All tests pass -race -count=3.
 
+## iterate iteration 5 (2026-05-11)
+
+Fixed three verify-gate gaps: MarshalJSON now opens w.Read() scope internally; UnmarshalJSON opens w.Write() scope internally; restSnapshotPut wraps w.UnmarshalJSON in w.Write(); renamed TestHookReceivesWriterContext → TestHookReceivesWriter in scope_test.go (deliverable #12 exact name), renamed duplicate in hooks_test.go to TestHookReceivesWriterDirect. Added ParentOf/EachChild early-exit coverage to TestReaderMethods to restore ≥ 95% threshold. All tests pass -race -count=3.
+
