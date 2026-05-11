@@ -118,9 +118,16 @@
 // # JSON Serialization
 //
 // [World.MarshalJSON] and [World.UnmarshalJSON] implement [json.Marshaler] and
-// [json.Unmarshaler] for basic world persistence. Entities, names, and
-// non-pair components are saved and restored. Pair components, ChildOf
-// hierarchies, and IsA prefabs are not serialized in this release (Phase 9.2.1).
+// [json.Unmarshaler] for world persistence. Entities, names, ChildOf
+// parent-child hierarchies, and non-pair components are saved and restored.
+// IsA prefab relationships and custom pair components are not serialized in
+// this release (Phase 9.2.3–9.2.4).
+//
+// The v1 JSON format uses a "parent" field (omitted when zero) that holds the
+// serial number of the entity's ChildOf parent. Entities are emitted in
+// topological order (parents before children), so a single sequential pass
+// restores the full hierarchy. Only the first ChildOf parent is serialized for
+// entities that have multiple ChildOf relationships (a rare configuration).
 //
 // All component types must be pre-registered before calling UnmarshalJSON:
 //
