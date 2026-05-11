@@ -259,6 +259,46 @@ func TestDeferArenaOversized(t *testing.T) {
 	}
 }
 
+// TestDeferRemoveNonExistent: deferred RemoveID for a component the entity does not
+// have is a no-op (covers the sortedIDDelete "not found" branch).
+func TestDeferRemoveNonExistent(t *testing.T) {
+	w := flecs.New()
+	e := w.NewEntity()
+	a := w.NewEntity()
+	b := w.NewEntity()
+	flecs.AddID(w, e, a)
+
+	w.Defer(func() {
+		flecs.RemoveID(w, e, b) // b not present — should be no-op
+		flecs.RemoveID(w, e, a)
+		flecs.RemoveID(w, e, a) // second remove of a — also no-op
+	})
+
+	if flecs.HasID(w, e, a) {
+		t.Fatal("a should be removed")
+	}
+	if flecs.HasID(w, e, b) {
+		t.Fatal("b was never added — should still be absent")
+	}
+}
+
+// TestDeferCoalesceToEmpty: entity loses all components via deferred Remove
+// (exercises the sigKeyLookup empty-signature path in commitBatch).
+func TestDeferCoalesceToEmpty(t *testing.T) {
+	w := flecs.New()
+	e := w.NewEntity()
+	a := w.NewEntity()
+	flecs.AddID(w, e, a)
+
+	w.Defer(func() {
+		flecs.RemoveID(w, e, a)
+	})
+
+	if flecs.HasID(w, e, a) {
+		t.Fatal("entity should have no components after deferred removal")
+	}
+}
+
 // TestDeferOriginalTestsStillPass re-exercises several existing defer tests
 // to confirm the new queue preserves all prior semantics.
 func TestDeferOriginalTestsStillPass(t *testing.T) {

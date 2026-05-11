@@ -701,19 +701,22 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 	oldRow := int(rec.Row)
 
 	// Find or create the destination table.
-	key := sigKey(newSig)
-	newTable, exists := w.tables[key]
+	// sigKeyLookup is allocation-free for the common "table already exists" path.
+	newTable, exists := w.tables[sigKeyLookup(newSig)]
 	if !exists {
-		types := make([]*component.TypeInfo, len(newSig))
-		for i, id := range newSig {
+		// New archetype: copy newSig before storing — newSig may alias a scratch
+		// buffer in the caller (batchForEntity reuses cmdQueue.scratch1).
+		sigCopy := append([]ID(nil), newSig...)
+		types := make([]*component.TypeInfo, len(sigCopy))
+		for i, id := range sigCopy {
 			info, ok := w.registry.LookupByID(id)
 			if !ok {
 				panic("flecs: commitBatch: component ID not registered")
 			}
 			types[i] = info
 		}
-		newTable = table.New(newSig, types)
-		w.tables[key] = newTable
+		newTable = table.New(sigCopy, types)
+		w.tables[sigKey(sigCopy)] = newTable
 		for _, id := range newTable.Type() {
 			w.compIndex.Register(id, newTable)
 		}
@@ -766,14 +769,23 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 	rec.Row = uint32(newRow)
 }
 
-// sigKey encodes a sorted []ID as a string map key.
-// Each ID is stored as 8 raw bytes (host byte-order). The empty signature
-// encodes as the empty string "".
+// sigKey encodes a sorted []ID as a string map key (allocating copy).
+// Use for map store. Each ID is stored as 8 raw bytes (host byte-order).
 func sigKey(sig []ID) string {
 	if len(sig) == 0 {
 		return ""
 	}
 	return string(unsafe.Slice((*byte)(unsafe.Pointer(&sig[0])), len(sig)*8))
+}
+
+// sigKeyLookup returns a map-lookup string that points directly into sig's
+// backing array — no allocation. The returned string must NOT be stored in a
+// map or outlive sig. Safe to use only as a transient lookup key.
+func sigKeyLookup(sig []ID) string {
+	if len(sig) == 0 {
+		return ""
+	}
+	return unsafe.String((*byte)(unsafe.Pointer(&sig[0])), len(sig)*8)
 }
 
 // SetLogger installs l as the structured logger for lifecycle events.

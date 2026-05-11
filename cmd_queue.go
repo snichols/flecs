@@ -1,7 +1,6 @@
 package flecs
 
 import (
-	"sort"
 	"sync"
 	"unsafe"
 )
@@ -29,9 +28,12 @@ func releaseCmdQueue(q *cmdQueue) {
 //
 // Mirrors the ecs_commands_t aggregate in include/flecs/private/api_types.h:156–160.
 type cmdQueue struct {
-	cmds    []cmd
-	arena   cmdArena
-	entries map[ID]cmdEntry // entity → head/tail of its cmd chain; value type avoids per-entry alloc
+	cmds     []cmd
+	arena    cmdArena
+	entries  map[ID]cmdEntry // entity → head/tail of its cmd chain; value type avoids per-entry alloc
+	scratch1 []ID            // reused per batchForEntity call: running sorted finalSet
+	scratch2 []ID            // reused per batchForEntity call: addedIDs
+	scratch3 []ID            // reused per batchForEntity call: removedIDs
 }
 
 // append links c into the per-entity intrusive list and appends it to cmds.
@@ -102,10 +104,10 @@ func (q *cmdQueue) flush(w *World) {
 // Mirrors flecs_cmd_batch_for_entity in src/commands.c:836–1110.
 //
 // Pass 1: walk the entity's cmd chain, simulate the net archetype effect into
-// a finalSet, rewrite Add/Remove cmds to cmdSkip. Execute ONE migration.
+// a running sorted ID slice (scratch1), rewrite Add/Remove cmds to cmdSkip.
+// Execute ONE migration using sort-merge diff against oldSig — no map allocs.
 //
-// Pass 2 (if any Set cmds exist): walk the chain again, copy each Set payload
-// into the entity's final column, rewrite the cmd to cmdModified so that
+// Pass 2 (if any Set cmds exist): rewrite Set cmds to cmdModified so that
 // dispatch fires OnSet at its original submission position.
 func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 	entry, ok := q.entries[entity]
@@ -119,12 +121,12 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 
 	// --- Pass 1: compute net component set ---
 
+	// oldSig is already sorted ascending (table invariant: table.New panics if not).
 	oldSig := rec.Table.Type()
-	// finalSet starts as the entity's current component set.
-	finalSet := make(map[ID]struct{}, len(oldSig)+8)
-	for _, id := range oldSig {
-		finalSet[id] = struct{}{}
-	}
+
+	// scratch1 is the running sorted ID set; starts as a copy of oldSig.
+	// Reusing the backing array avoids allocation after the first warm-up iteration.
+	q.scratch1 = append(q.scratch1[:0], oldSig...)
 
 	deleted := false
 	hasSet := false
@@ -136,13 +138,13 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		case cmdDelete:
 			deleted = true
 		case cmdAddID:
-			finalSet[c.id] = struct{}{}
+			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			c.kind = cmdSkip
 		case cmdRemoveID:
-			delete(finalSet, c.id)
+			q.scratch1 = sortedIDDelete(q.scratch1, c.id)
 			c.kind = cmdSkip
 		case cmdSetByID, cmdSetPair:
-			finalSet[c.id] = struct{}{}
+			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			hasSet = true
 			// keep kind; handled in pass 2
 		}
@@ -158,7 +160,6 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 
 	if deleted {
 		deleteImmediate(w, entity)
-		// Rewrite the whole chain to cmdSkip.
 		idx2 := entry.first
 		for {
 			c2 := &q.cmds[idx2]
@@ -172,29 +173,37 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		return
 	}
 
-	// Build the new sorted signature.
-	newSig := make([]ID, 0, len(finalSet))
-	for id := range finalSet {
-		newSig = append(newSig, id)
-	}
-	sort.Slice(newSig, func(i, j int) bool { return newSig[i] < newSig[j] })
+	// newSig is scratch1 — already sorted, no extra allocation.
+	newSig := q.scratch1
 
-	// Compute actually-added and actually-removed IDs for hook firing.
-	oldSet := make(map[ID]struct{}, len(oldSig))
-	for _, id := range oldSig {
-		oldSet[id] = struct{}{}
-	}
-	var addedIDs, removedIDs []ID
-	for _, id := range newSig {
-		if _, inOld := oldSet[id]; !inOld {
-			addedIDs = append(addedIDs, id)
+	// Compute addedIDs / removedIDs via a single sort-merge pass over the two
+	// sorted slices. Both newSig and oldSig are sorted ascending.
+	// scratch2 = addedIDs (in newSig but not in oldSig)
+	// scratch3 = removedIDs (in oldSig but not in newSig)
+	q.scratch2 = q.scratch2[:0]
+	q.scratch3 = q.scratch3[:0]
+	i, j := 0, 0
+	for i < len(newSig) && j < len(oldSig) {
+		switch {
+		case newSig[i] < oldSig[j]:
+			q.scratch2 = append(q.scratch2, newSig[i])
+			i++
+		case newSig[i] > oldSig[j]:
+			q.scratch3 = append(q.scratch3, oldSig[j])
+			j++
+		default:
+			i++
+			j++
 		}
 	}
-	for _, id := range oldSig {
-		if _, inNew := finalSet[id]; !inNew {
-			removedIDs = append(removedIDs, id)
-		}
+	for ; i < len(newSig); i++ {
+		q.scratch2 = append(q.scratch2, newSig[i])
 	}
+	for ; j < len(oldSig); j++ {
+		q.scratch3 = append(q.scratch3, oldSig[j])
+	}
+	addedIDs := q.scratch2
+	removedIDs := q.scratch3
 
 	// Ensure TypeInfo exists for every newly-added ID (tags registered via
 	// AddID may not have TypeInfo yet).
@@ -232,6 +241,47 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		}
 		idx = ni
 	}
+}
+
+// sortedIDInsert inserts id into the sorted slice s, keeping it sorted.
+// Operates in-place on s's backing array when cap permits (no alloc after warmup).
+func sortedIDInsert(s []ID, id ID) []ID {
+	// Inline binary search avoids the closure allocation of sort.Search.
+	lo, hi := 0, len(s)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if s[mid] < id {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < len(s) && s[lo] == id {
+		return s // already present
+	}
+	// Grow by one slot, then shift right to open position lo.
+	s = append(s, 0)
+	copy(s[lo+1:], s[lo:]) // memmove semantics; safe for overlapping slices
+	s[lo] = id
+	return s
+}
+
+// sortedIDDelete removes id from the sorted slice s.
+// Operates in-place (shifts elements left); no allocation.
+func sortedIDDelete(s []ID, id ID) []ID {
+	lo, hi := 0, len(s)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if s[mid] < id {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo >= len(s) || s[lo] != id {
+		return s // not present
+	}
+	return append(s[:lo], s[lo+1:]...)
 }
 
 // dispatch executes a single post-coalescing cmd.
