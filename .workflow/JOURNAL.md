@@ -10,3 +10,7 @@ Deleted readonly.go entirely; removed w.readonly atomic.Bool field from world.go
 
 Added QueryIter.Reader() and Writer() methods: added world *World field to QueryIter struct, populated in Query.Iter() and CachedQuery.Iter(); Reader() returns &it.world.readCapability, Writer() returns &it.world.writeCapability (zero allocs, reuses cached pointers). All tests pass -race -count=3.
 
+## iterate iteration 4 (2026-05-11)
+
+Added TestQueryIterReaderWriter and TestCachedQueryIterReaderWriter to scope_test.go, covering QueryIter.Reader() (query.go:372) and QueryIter.Writer() (query.go:377). Main package coverage moved from 94.9% to 95.0%, satisfying the ≥ 95% threshold. All tests pass -race -count=3.
+
