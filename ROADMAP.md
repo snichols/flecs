@@ -1,8 +1,8 @@
 # Roadmap
 
-## Shipped (v0.1)
+## Shipped (v0.2)
 
-The following features were implemented across Phases 1-7:
+The following features are available in the current release:
 
 - **Archetype-based storage** — entities sharing the same component set are grouped into structure-of-arrays tables; no pointer chasing during iteration.
 - **Raw-ID API** — `AddID`, `RemoveID`, `HasID`, `OwnsID` for tag and pair manipulation without type parameters.
@@ -18,14 +18,16 @@ The following features were implemented across Phases 1-7:
 - **Deferred command queue** — `DeferBegin`/`DeferEnd`/`Defer`; nested scopes; safe mutation during iteration.
 - **Systems + 4-phase pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; `Progress`; frame counter; elapsed time.
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
+- **NOT and Optional query terms** — `With`/`Without`/`Maybe` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]`.
+- **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
 
 ## Future Work
 
 The following are deferred to later phases. No timeline is set; issues welcome.
 
 ### Query extensions
-- NOT, Optional, OR query terms
-- Up/Down traversal modifiers (query along ChildOf/IsA edges)
+- OR query terms (currently only AND, NOT, Optional are supported)
+- Query-term traversal modifiers (`up(rel)` inline in `NewQueryFromTerms`; the explicit `GetUp`/`HasUp`/`TargetUp` helpers cover most use cases)
 - Change-detection (delta queries)
 - Query-time IsA inheritance (match entities whose prefab has a component)
 
@@ -42,15 +44,20 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 
 ### Performance
 - Custom allocators / `sync.Pool` for hot paths
-- Benchmark suite (Phase 8.2)
-- Zero-alloc `Field[T]` via direct column pointer (currently uses reflect)
+- Defer queue refactor: closure capture → tagged-union or typed buffers (currently 1 alloc per deferred op)
 
 ## Performance
 
-A formal benchmark suite is planned for Phase 8.2. Until then, performance
-characteristics should be understood qualitatively: iteration is O(entity-count)
-within each archetype table with no virtual dispatch; archetype migrations are
-O(component-count) per entity; query setup (uncached) is O(smallest-set × terms).
+A benchmark suite ships in `bench_test.go` with baseline numbers and
+before/after comparisons captured in [BENCH.md](BENCH.md). Highlights of the
+v0.2 hot paths:
+
+- Iteration is O(entity-count) within each archetype table with no virtual dispatch.
+- Query setup (uncached) is O(smallest-set × terms); cached queries amortize this to O(1) per Iter after construction.
+- `Field[T]` is zero-allocation via `unsafe.Slice` over the column's typed backing array.
+- Archetype migration on cache hit is zero-allocation (`migrate` defers signature allocation until cache miss).
+- Observer dispatch is zero-allocation (deferred-removal at the node, no per-fire snapshot).
+- Lifecycle hooks have zero overhead when not registered (nil-safe early return).
 
 ## Contributing
 

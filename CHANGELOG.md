@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.2.0 — 2026-05-10
+
+Query extensions and traversal helpers. No breaking changes.
+
+### Added
+
+- **NOT and Optional query terms** — new structured `Term` API with
+  `With(id)`, `Without(id)`, `Maybe(id)` constructors and
+  `NewQueryFromTerms` / `NewCachedQueryFromTerms`. Use `FieldMaybe[T]` to
+  access Optional-term columns with a presence flag. Legacy
+  `NewQuery(w, ids...)` continues to produce AND-only queries with
+  unchanged behavior.
+- **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk a
+  relationship up from an entity and return the first match. Works for
+  `ChildOf`, `IsA`, or any user-defined relationship. Cycle detection and
+  64-level depth limit included. Zero allocation when the component is on
+  the entity itself.
+
+### Performance
+
+- `BenchmarkGetUp_SelfHit`: 30 ns/op, 0 allocs/op.
+- `BenchmarkGetUp_Depth1`/`Depth5`: 318/525 ns/op, 2 allocs/op (the seen-map for cycle detection).
+- Optional-term presence cache is lazy-allocated; AND-only queries pay no overhead.
+
+### Documentation
+
+- `doc.go` extended with structured-term and traversal-helper examples.
+- README feature index updated.
+
 ## v0.1.0 — 2026-05-10
 
 Initial Go port of [flecs](https://github.com/SanderMertens/flecs). No breaking
