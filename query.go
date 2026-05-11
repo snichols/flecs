@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"unsafe"
 
 	"github.com/snichols/flecs/internal/storage/table"
 )
@@ -169,28 +170,30 @@ func (it *QueryIter) Query() *Query { return it.q }
 //   - id is not in the current table's signature.
 //   - T does not match the Go type registered for id.
 //
-// Implementation: uses reflect.Value.Interface().([]T) — one interface
-// allocation per Field call. The zero-alloc alternative (unsafe.Slice over
-// the column base pointer) would require exposing column memory addresses;
-// deferred to a later optimisation phase once profiling confirms the cost.
+// Implementation: uses unsafe.Slice over the column's base pointer — zero
+// allocs per call. GC safety: the column's reflect-backed slice (reachable
+// through it.current → Table → Column) keeps the backing array alive; the
+// returned []T header's data pointer is an unsafe.Pointer to T, which the GC
+// traces correctly for pointer-containing element types.
 func Field[T any](it *QueryIter, id ID) []T {
 	tbl := it.Table() // panics if not positioned
 	if !tbl.HasComponent(id) {
 		panic(fmt.Sprintf("flecs: Field[%s]: component id %d is not in the current table's signature",
 			reflect.TypeFor[T](), id))
 	}
-	rv := tbl.ColumnReflectSlice(id)
-	if !rv.IsValid() {
-		// Tag component: return a zero-value slice of the right length so
-		// callers can range over it safely.
+	base, typ, n := tbl.ColumnBasePtr(id)
+	if typ == nil {
+		// Tag column: return zero-value slice of the right length so callers
+		// can range over it safely.
 		return make([]T, it.Count())
 	}
 	want := reflect.TypeFor[T]()
-	got := rv.Type().Elem()
-	if got != want {
+	if typ != want {
 		panic(fmt.Sprintf("flecs: Field[%s]: column for id %d holds %s, not %s",
-			want, id, got, want))
+			want, id, typ, want))
 	}
-	s := rv.Interface().([]T)
-	return s[:it.Count()]
+	if n == 0 {
+		return nil
+	}
+	return unsafe.Slice((*T)(base), n)[:it.Count()]
 }

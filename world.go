@@ -337,9 +337,9 @@ func Get[T any](w *World, e ID) (T, bool) {
 		}
 		return *(*T)(ptr), true
 	}
-	// Local miss: walk the IsA chain.
-	seen := map[ID]struct{}{e: {}}
-	return getViaIsA[T](w, e, info.Component, seen)
+	// Local miss: walk the IsA chain. seen is allocated lazily inside getViaIsA
+	// only when an IsA pair is found, avoiding a map allocation in the common case.
+	return getViaIsA[T](w, e, info.Component, nil)
 }
 
 // Has reports whether entity e has component T — locally or via an IsA chain.
@@ -354,8 +354,8 @@ func Has[T any](w *World, e ID) bool {
 	if t != nil && t.HasComponent(cid) {
 		return true
 	}
-	seen := map[ID]struct{}{e: {}}
-	return hasViaIsA(w, e, cid, seen)
+	// seen is allocated lazily inside hasViaIsA when an IsA pair is found.
+	return hasViaIsA(w, e, cid, nil)
 }
 
 // Owns reports whether entity e locally owns component T — T is present in

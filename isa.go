@@ -36,8 +36,11 @@ func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
 }
 
 // getViaIsA walks the IsA chain of e looking for component T with the given
-// pre-looked-up component ID cid. seen must already contain e on entry; each
-// prefab is added before recursion to prevent cycles. Dead prefabs are skipped.
+// pre-looked-up component ID cid.
+//
+// seen may be nil on entry; it is allocated lazily the first time an IsA pair
+// is encountered, with e pre-inserted to prevent cycles. Each prefab is added
+// before recursion. Dead prefabs are skipped.
 func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	var zero T
 	rec := w.index.Get(e)
@@ -52,6 +55,10 @@ func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 		prefab := id.Second()
 		if !w.index.IsAlive(prefab) {
 			continue
+		}
+		// Allocate seen lazily — only entities with at least one IsA pair reach here.
+		if seen == nil {
+			seen = map[ID]struct{}{e: {}}
 		}
 		if _, visited := seen[prefab]; visited {
 			continue
@@ -72,8 +79,10 @@ func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	return zero, false
 }
 
-// hasViaIsA walks the IsA chain of e checking for the presence of component
-// cid. seen must already contain e on entry. Dead prefabs are skipped.
+// hasViaIsA walks the IsA chain of e checking for the presence of component cid.
+//
+// seen may be nil on entry; it is allocated lazily the first time an IsA pair
+// is encountered, with e pre-inserted. Dead prefabs are skipped.
 func hasViaIsA(w *World, e ID, cid ID, seen map[ID]struct{}) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -87,6 +96,10 @@ func hasViaIsA(w *World, e ID, cid ID, seen map[ID]struct{}) bool {
 		prefab := id.Second()
 		if !w.index.IsAlive(prefab) {
 			continue
+		}
+		// Allocate seen lazily — only entities with at least one IsA pair reach here.
+		if seen == nil {
+			seen = map[ID]struct{}{e: {}}
 		}
 		if _, visited := seen[prefab]; visited {
 			continue

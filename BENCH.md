@@ -156,6 +156,49 @@ BenchmarkIsAGet_MissedChain-128                    	 8853752	        11.58 ns/op
 BenchmarkLookupPath_3deep-128                      	  186806	       576.6 ns/op	      48 B/op	       1 allocs/op
 ```
 
+## Phase 8.3 results
+
+Three micro-optimizations landed: (A) `Field[T]` zero-alloc `unsafe.Slice` path,
+(B) observer dispatch without per-fire snapshot slice, (C) lazy `seen` map in
+IsA Get/Has fallback. Measured on the same machine as the Phase 8.2 baseline.
+
+### A: Field[T] zero-alloc
+
+Before: `rv.Interface().([]T)` — boxes a `[]T` slice into an `any`, then type-asserts it back; 1 alloc per `Field` call.
+After: `unsafe.Slice((*T)(base), n)[:it.Count()]` — zero-alloc typed view over the column backing array.
+
+```
+BenchmarkFieldT_AllocCost:          before 93.68 ns/op, 24 B/op, 1 alloc  -> after 16.9 ns/op,  0 B/op, 0 allocs  (-82% / -1 alloc)
+BenchmarkQueryIterField_10k:        before  8992 ns/op, 120 B/op, 4 allocs -> after 6700 ns/op, 72 B/op, 2 allocs  (-25% / -2 allocs)
+BenchmarkQueryEach2_1k:             before  4070 ns/op, 224 B/op, 8 allocs -> after 3450 ns/op, 176 B/op, 6 allocs (-15% / -2 allocs)
+BenchmarkQueryEach2_10k:            before 24178 ns/op, 224 B/op, 8 allocs -> after 21000 ns/op, 176 B/op, 6 allocs (-13% / -2 allocs)
+BenchmarkQueryEach2_100k:           before 188841 ns/op, 224 B/op, 8 allocs -> after 189900 ns/op, 176 B/op, 6 allocs (flat ns / -2 allocs)
+BenchmarkCachedQueryEach2_10k:      before  7812 ns/op,  48 B/op, 2 allocs -> after  7380 ns/op,  0 B/op, 0 allocs  (-6% / -2 allocs)
+BenchmarkQueryAcrossArchetypes_10k: before 28865 ns/op, 504 B/op, 18 allocs -> after 21100 ns/op, 216 B/op, 6 allocs (-27% / -12 allocs)
+```
+
+### B: Observer dispatch without per-fire snapshot
+
+Before: `active := make([]*observerNode, 0, len(nodes))` allocated on every dispatch.
+After: direct range over `nodes`, skipping `removed` entries in-place.
+
+Semantic change: `Unsubscribe` called from a callback now takes effect immediately
+for not-yet-visited observers in the same dispatch (was: all nodes active at dispatch-start
+always fired). See `(*Observer).Unsubscribe` godoc.
+
+```
+BenchmarkObserverFires_10k:              before 922046 ns/op,      0 B/op,     0 allocs -> after 745000 ns/op, 0 B/op, 0 allocs (-19%)
+BenchmarkObserverFires_HookAndObserver_10k: before 901452 ns/op,  0 B/op,     0 allocs -> after 763000 ns/op, 0 B/op, 0 allocs (-15%)
+BenchmarkObserverFires_5observers_10k:   before 2980658 ns/op, 480000 B/op, 10000 allocs -> after 1013000 ns/op, 0 B/op, 0 allocs (-66% / -10000 allocs/10k)
+```
+
+### C: Lazy `seen` map in IsA Get/Has fallback
+
+Before: `Get[T]`, `Has[T]`, and `HasID` unconditionally allocated `map[ID]struct{}{e: {}}` on every local miss before walking the IsA chain — even when the entity has no IsA pairs at all.
+After: `getViaIsA`/`hasViaIsA` allocate `seen` lazily only when the first IsA pair is encountered. Entities without IsA pairs incur zero map allocation on a local miss.
+
+The existing benchmarks (`BenchmarkGetMissingComponent`, `BenchmarkGetExistingComponent`, `BenchmarkHasExistingComponent`) return before the IsA path (component unregistered or direct hit), so they don't directly exercise this hotspot. The `BenchmarkOwnsVsHas/Has-via-IsA` and `BenchmarkIsAGet_Hit` benchmarks measure the IsA-hit path which does allocate the map — 192 B / 2 allocs in both old and new code (unchanged; only the common no-IsA case is improved).
+
 ### Notable findings from baseline
 
 - **`OwnsID` vs `HasID`**: Owns is 7× faster (5.5 ns vs 38 ns) — HasID walks the

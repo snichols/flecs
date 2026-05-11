@@ -95,6 +95,29 @@ func (c *Column) appendZero() {
 	c.slice.Index(n).Set(reflect.Zero(c.slice.Type().Elem()))
 }
 
+// BaseUnsafe returns an unsafe pointer to element 0 of the backing array and
+// the element's reflect.Type. Returns (nil, nil) for a nil column; returns
+// (nil, elemType) when the column is empty (no rows yet).
+//
+// The pointer is derived in the same expression as UnsafeAddr (rule 6 of the
+// unsafe.Pointer rules) and is therefore safe to convert immediately to a typed
+// *T via unsafe.Slice. The column's reflect.Value slice keeps the backing array
+// alive as long as the Column itself is reachable; callers must not hold the
+// returned pointer past any Append or RemoveSwap call.
+func (c *Column) BaseUnsafe() (unsafe.Pointer, reflect.Type) {
+	if c == nil {
+		return nil, nil
+	}
+	elemType := c.slice.Type().Elem()
+	if c.slice.Len() == 0 {
+		return nil, elemType
+	}
+	// Convert in one expression per the unsafe.Pointer rules for UnsafeAddr.
+	ptr := unsafe.Pointer(c.slice.Index(0).UnsafeAddr()) //nolint:unsafeptr
+	runtime.KeepAlive(c.slice)
+	return ptr, elemType
+}
+
 // removeSwap overwrites slot row with the last element, then truncates by one.
 // If row == Len()-1, just truncates. Zeros the vacated last slot so the GC
 // can collect any pointer-containing component values that were there.
