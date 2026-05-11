@@ -989,9 +989,11 @@ func BenchmarkMultiThreadedSystem(b *testing.B) {
 				for it.Next() {
 					vecs := flecs.Field[benchVec3](it, vecID)
 					for i := range vecs {
-						vecs[i].X += 1
-						vecs[i].Y += 1
-						vecs[i].Z += 1
+						x, y, z := vecs[i].X, vecs[i].Y, vecs[i].Z
+						mag2 := x*x + y*y + z*z + 1
+						vecs[i].X = x/mag2 + 1
+						vecs[i].Y = y/mag2 + 1
+						vecs[i].Z = z/mag2 + 1
 					}
 				}
 			})
