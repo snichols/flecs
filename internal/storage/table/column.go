@@ -22,14 +22,21 @@ const initialCap = 8
 //
 // Zero-size components (tags) do not get a Column; all methods on a nil
 // *Column are no-ops (Len and Cap return 0).
+//
+// Implementation note: c.slice always has Len() == Cap() (the full backing
+// array). Logical row count is tracked in c.n to avoid reflect.Value.Slice()
+// calls in appendZero and removeSwap, each of which would allocate a heap
+// object per call.
 type Column struct {
-	slice reflect.Value // kind Slice; element type == component type
+	slice reflect.Value // kind Slice; Len() == Cap() == backing capacity
 	size  uintptr       // unsafe.Sizeof of element
+	n     int           // logical row count (0 ≤ n ≤ slice.Len())
 }
 
 func newColumn(elemType reflect.Type, size uintptr) *Column {
+	// Allocate at full capacity so Len() == Cap() from the start.
 	return &Column{
-		slice: reflect.MakeSlice(reflect.SliceOf(elemType), 0, initialCap),
+		slice: reflect.MakeSlice(reflect.SliceOf(elemType), initialCap, initialCap),
 		size:  size,
 	}
 }
@@ -39,7 +46,7 @@ func (c *Column) Len() int {
 	if c == nil {
 		return 0
 	}
-	return c.slice.Len()
+	return c.n
 }
 
 // Cap returns the capacity of the column.
@@ -47,7 +54,7 @@ func (c *Column) Cap() int {
 	if c == nil {
 		return 0
 	}
-	return c.slice.Cap()
+	return c.slice.Len() // c.slice.Len() == c.slice.Cap() always
 }
 
 // PtrAt returns an unsafe pointer to the element at row.
@@ -77,22 +84,21 @@ func (c *Column) Get(row int, dst unsafe.Pointer) {
 }
 
 // appendZero extends the column by one zero-initialized element.
-// When len == cap, capacity is doubled (minimum initialCap).
+// When n == cap, capacity is doubled (minimum initialCap).
+// Hot path: never calls reflect.Value.Slice (which allocates a heap object).
 func (c *Column) appendZero() {
-	n := c.slice.Len()
-	if n == c.slice.Cap() {
-		newCap := c.slice.Cap() * 2
+	if c.n == c.slice.Len() { // n == cap → grow
+		newCap := c.slice.Len() * 2
 		if newCap < initialCap {
 			newCap = initialCap
 		}
-		grown := reflect.MakeSlice(c.slice.Type(), n+1, newCap)
+		grown := reflect.MakeSlice(c.slice.Type(), newCap, newCap)
 		reflect.Copy(grown, c.slice)
 		c.slice = grown
-		return
 	}
-	c.slice = c.slice.Slice(0, n+1)
 	// Zero the newly exposed slot; it may hold stale data from a prior removeSwap.
-	c.slice.Index(n).Set(reflect.Zero(c.slice.Type().Elem()))
+	c.slice.Index(c.n).Set(reflect.Zero(c.slice.Type().Elem()))
+	c.n++
 }
 
 // BaseUnsafe returns an unsafe pointer to element 0 of the backing array and
@@ -109,7 +115,7 @@ func (c *Column) BaseUnsafe() (unsafe.Pointer, reflect.Type) {
 		return nil, nil
 	}
 	elemType := c.slice.Type().Elem()
-	if c.slice.Len() == 0 {
+	if c.n == 0 {
 		return nil, elemType
 	}
 	// Convert in one expression per the unsafe.Pointer rules for UnsafeAddr.
@@ -118,15 +124,16 @@ func (c *Column) BaseUnsafe() (unsafe.Pointer, reflect.Type) {
 	return ptr, elemType
 }
 
-// removeSwap overwrites slot row with the last element, then truncates by one.
-// If row == Len()-1, just truncates. Zeros the vacated last slot so the GC
+// removeSwap overwrites slot row with the last element, then decrements n.
+// If row == n-1, just decrements. Zeros the vacated last slot so the GC
 // can collect any pointer-containing component values that were there.
+// Hot path: never calls reflect.Value.Slice (which allocates a heap object).
 func (c *Column) removeSwap(row int) {
-	last := c.slice.Len() - 1
+	last := c.n - 1
 	if row != last {
 		c.slice.Index(row).Set(c.slice.Index(last))
 	}
-	// Zero before truncation so GC can reclaim pointers in the last slot.
+	// Zero before decrement so GC can reclaim pointers in the last slot.
 	c.slice.Index(last).Set(reflect.Zero(c.slice.Type().Elem()))
-	c.slice = c.slice.Slice(0, last)
+	c.n--
 }

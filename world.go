@@ -428,33 +428,14 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	oldTable := rec.Table
 	oldRow := int(rec.Row)
 
-	// Compute new signature: current ∪ {addID} \ {removeID}.
-	// Never mutate the slice returned by Type().
 	var oldSig []ID
 	if oldTable != nil {
 		oldSig = oldTable.Type()
 	}
 
-	newSig := make([]ID, 0, len(oldSig)+1)
-	for _, id := range oldSig {
-		if id == removeID {
-			continue
-		}
-		newSig = append(newSig, id)
-	}
-	if addID != 0 {
-		// Insert addID in sorted position to maintain the sorted-ascending invariant.
-		pos := sort.Search(len(newSig), func(i int) bool { return newSig[i] >= addID })
-		newSig = append(newSig, 0)
-		copy(newSig[pos+1:], newSig[pos:])
-		newSig[pos] = addID
-	}
-
-	// Look up or create the destination table.
-	// For single-component transitions, consult the edge cache first to avoid
-	// the sigKey encode + map lookup on repeated migrations of the same shape.
+	// Consult the edge cache BEFORE computing newSig so that cache hits pay
+	// zero allocation cost (no make([]ID, ...) on the fast path).
 	var newTable *table.Table
-
 	switch {
 	case removeID != 0 && addID == 0 && oldTable != nil:
 		if dst, ok := oldTable.NextOnRemove(removeID); ok {
@@ -467,6 +448,23 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	}
 
 	if newTable == nil {
+		// Cache miss: compute the new sorted signature and look up (or create)
+		// the destination table. Never mutate the slice returned by Type().
+		newSig := make([]ID, 0, len(oldSig)+1)
+		for _, id := range oldSig {
+			if id == removeID {
+				continue
+			}
+			newSig = append(newSig, id)
+		}
+		if addID != 0 {
+			// Insert addID in sorted position to maintain the sorted-ascending invariant.
+			pos := sort.Search(len(newSig), func(i int) bool { return newSig[i] >= addID })
+			newSig = append(newSig, 0)
+			copy(newSig[pos+1:], newSig[pos:])
+			newSig[pos] = addID
+		}
+
 		key := sigKey(newSig)
 		var exists bool
 		newTable, exists = w.tables[key]
@@ -489,7 +487,7 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			// NOT compact w.cachedQueries here.
 			w.notifyTableCreated(newTable)
 		}
-		// Cache the result for future single-component transitions from oldTable.
+		// Cache the edge for future single-component transitions from oldTable.
 		if oldTable != nil {
 			switch {
 			case removeID != 0 && addID == 0:
