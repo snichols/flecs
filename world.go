@@ -33,6 +33,7 @@ type World struct {
 	compIndex     *componentindex.Index           // reverse map: component ID → tables containing it
 	observers     map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
 	cachedQueries []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems       []*System                       // lazily allocated; compacted in NewSystem
 	childOfID     ID                              // built-in ChildOf relationship entity (index 1)
 	isAID         ID                              // built-in IsA relationship entity (index 2)
 	nameID        ID                              // built-in Name component entity (index 3; user entities start at index 4)
