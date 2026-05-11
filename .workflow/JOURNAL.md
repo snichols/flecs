@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-10)
+
+Implemented Phase 7.1: System type (system.go) with NewSystem constructor, Close/IsClosed, World.Progress, and World.SystemCount. Added systems []*System field to World. Progress wraps dispatch in a single outer Defer for end-of-frame mutation safety. Deferred-removal pattern mirrors CachedQuery/Observer: Progress snapshots the active set before dispatch so a peer-closed system still runs the current frame. Added SystemSliceLen test helper to export_test.go. 16 tests in system_test.go covering: basic runs, entity visibility, dt pass-through, velocity integration, multi-system ordering, close semantics, close-during-dispatch, compaction, empty match, defer safety contract, mutation-during-iteration, 100-frame sustained run, no-next-call safety, panic propagation with flush guarantee, constructor panics, and SystemCount. go test ./... -race -count=2 passes; 97.6% coverage; go vet and golangci-lint clean.
+
