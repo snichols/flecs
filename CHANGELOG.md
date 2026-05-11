@@ -37,10 +37,15 @@ flecs `flecs_cmd_batch_for_entity` semantics.
 
 ### Performance
 
-- `BenchmarkDeferSingleSet`: **0 allocs/op**, ~120 ns/op (was 7 allocs/op).
+- `BenchmarkDeferSingleSet`: **0 allocs/op**, ~112 ns/op (was 7 allocs/op).
 - `BenchmarkSetExistingComponent`: 0 allocs/op, ~57 ns/op — no regression.
-- `BenchmarkDeferBatchedAdds`: N entities deferred across 5 Add+Set+Remove
-  operations each produce ONE migration per entity.
+- `BenchmarkDeferBatchedAdds`: **~15× speedup** vs v0.13.0 closure baseline
+  (7,200 ns/op vs 111,897 ns/op; 0 allocs/op vs 108 allocs/op). 100 deferred
+  AddID calls on one entity produce ONE archetype migration after coalescing.
+  Achieved by replacing per-call map/sort allocations in `batchForEntity` with
+  reusable sorted-slice scratch buffers (`cmdQueue.scratch1/2/3`) and a
+  sort-merge diff algorithm. `sigKeyLookup` uses `unsafe.String` for a
+  zero-allocation table lookup in `commitBatch`'s common path.
 
 ### Tests
 
@@ -54,7 +59,9 @@ flecs `flecs_cmd_batch_for_entity` semantics.
 - `TestDeferSetZeroSizeTag` / `TestDeferSetZeroSizeTagCoalesced` — zero-size tags.
 - `TestDeferArenaOversized` — payload > 1 KiB page uses oversized fallback.
 - `TestDeferOriginalTestsStillPass` — regression guard for pre-existing defer tests.
-- All pass under `-race -count=3`; coverage ≥ 95.2%.
+- `TestDeferRemoveNonExistent` — deferred RemoveID for absent component is a no-op.
+- `TestDeferCoalesceToEmpty` — entity losing all components coalesces to empty sig.
+- All pass under `-race -count=5`; coverage ≥ 95.1%.
 
 ## v0.13.0 — 2026-05-11 — Within-System Multi-Threaded Dispatch
 
