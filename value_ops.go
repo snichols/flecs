@@ -200,7 +200,7 @@ func getViaIsAByID(w *World, e ID, id ID, info *component.TypeInfo, seen map[ID]
 func (w *World) SetByID(e ID, id ID, v any) {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		info, ok := w.registry.LookupByID(id)
 		if !ok {
 			w.deferMu.Unlock()

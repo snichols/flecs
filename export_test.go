@@ -67,15 +67,6 @@ func ReaderEachTableForCount(w *World, componentID ID, stopAfter int) int {
 	return count
 }
 
-// ReadonlyBeginForTest opens a readonly window using the internal readonlyBegin
-// method. For tests only — exercises the concurrent-read path without exposing
-// the public ReadonlyBegin/ReadonlyEnd API.
-func ReadonlyBeginForTest(w *World) { w.readonlyBegin() }
-
-// ReadonlyEndForTest closes a readonly window opened by ReadonlyBeginForTest.
-// For tests only.
-func ReadonlyEndForTest(w *World) { w.readonlyEnd() }
-
 // DeferBeginForTest increments deferDepth. For defer-behavior tests only.
 func DeferBeginForTest(w *World) {
 	w.deferMu.Lock()

@@ -11,7 +11,7 @@ import (
 // Internal helper used by Writer.AddID and scope.AddID.
 func addIDOnWorld(w *World, e ID, e2 ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
 		if rec == nil {
 			w.deferMu.Unlock()
@@ -47,7 +47,7 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 // Internal helper used by Writer.RemoveID and scope.RemoveID.
 func removeIDOnWorld(w *World, e ID, id ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
 			w.deferMu.Unlock()
@@ -77,7 +77,7 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 // Internal helper used by Writer.SetPair and scope.SetPair.
 func setPairOnWorld[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		pairID := MakePair(rel, tgt)
 		pairInfo := component.RegisterPairData[T](w.registry, pairID)
 		if pairInfo.Size > 0 {

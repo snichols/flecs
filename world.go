@@ -52,7 +52,6 @@ type World struct {
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
 	exclusiveAccess  atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread  string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
 	deferred         *cmdQueue                       // tagged-union cmd queue; flushed when deferDepth reaches 0
@@ -298,7 +297,7 @@ func (w *World) deleteOne(e ID) bool {
 func (w *World) Delete(e ID) bool {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		if !w.index.IsAlive(e) {
 			w.deferMu.Unlock()
 			return false
@@ -387,7 +386,7 @@ func RegisterComponent[T any](w *World) ID {
 // Internal helper called by Writer.Set and the legacy World-based paths.
 func setOnWorld[T any](w *World, e ID, v T) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		cid := RegisterComponent[T](w)
 		info, _ := component.LookupByType[T](w.registry)
 		if info.Size > 0 {
@@ -464,7 +463,7 @@ func ownsOnWorld[T any](w *World, e ID) bool {
 // Internal helper; does not check exclusive access.
 func removeOnWorld[T any](w *World, e ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 || w.readonly.Load() {
+	if w.deferDepth > 0 {
 		info, ok := component.LookupByType[T](w.registry)
 		if !ok || info.Component == 0 {
 			w.deferMu.Unlock()
