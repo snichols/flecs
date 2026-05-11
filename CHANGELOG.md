@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Phase 9.5: Change detection via `CachedQuery.Changed()`** — `(*CachedQuery).Changed() bool`
+  returns true when any matching table was mutated since the last call. The first call
+  after construction always returns true (initial state is "all changed"). Changes detected:
+  new matching table added to the cache; column write (`Set[T]`/`SetByID`/`SetPair[T]`/`SetPairByID`);
+  structural change (entity added/removed via migrate). The change counter is a monotonic
+  `uint64` on each `Table`; any column write marks the table dirty for all cached queries
+  containing it (never under-reports, may over-report). The counter is incremented in
+  `Table.Append`, `Table.RemoveSwap`, and a new `Table.BumpChange()` method called by the
+  World after in-place column writes. NOT goroutine-safe. Change detection is
+  cached-query-only; uncached `*Query` does not get `Changed()`.
+
+---
+
 ## v0.6.0 — 2026-05-11
 
 Completes the structured-term query API with OR support. No breaking

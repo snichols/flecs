@@ -37,6 +37,11 @@ type Table struct {
 	// map-header overhead.
 	addEdges    map[ids.ID]*Table // (this, +id) → destination table
 	removeEdges map[ids.ID]*Table // (this, -id) → destination table
+	// changeCount is a monotonic counter incremented on every structural change
+	// (Append, RemoveSwap) and on column writes (BumpChange). Used by
+	// CachedQuery.Changed() for opt-in change detection. Wrapping at max uint64
+	// is treated as a change (conservative; practical infinity for any real use).
+	changeCount uint64
 }
 
 // New constructs a Table for the given sorted component-id signature.
@@ -86,6 +91,18 @@ func (t *Table) ColumnIndex(id ids.ID) int {
 	return -1
 }
 
+// ChangeCount returns the current value of the table's monotonic change counter.
+// The counter is incremented by Append, RemoveSwap, and BumpChange. It is used
+// by CachedQuery.Changed() to detect whether a table was mutated between calls.
+func (t *Table) ChangeCount() uint64 { return t.changeCount }
+
+// BumpChange increments the table's change counter. Called by the World after
+// a column write (Set[T], SetByID, SetPair[T], SetPairByID) on an entity that
+// already owned the component — structural changes are covered by Append and
+// RemoveSwap. Conservative: any column write marks the table dirty for all
+// cached queries that contain it (never under-reports, may over-report).
+func (t *Table) BumpChange() { t.changeCount++ }
+
 // Append adds a new zero-initialized row for entity and returns its row index.
 // All non-tag component columns are extended by one zero element.
 func (t *Table) Append(entity ids.ID) int {
@@ -96,6 +113,7 @@ func (t *Table) Append(entity ids.ID) int {
 			col.appendZero()
 		}
 	}
+	t.changeCount++
 	return row
 }
 
@@ -121,6 +139,7 @@ func (t *Table) RemoveSwap(row int) (movedEntity ids.ID, moved bool) {
 			col.removeSwap(row)
 		}
 	}
+	t.changeCount++
 	return movedEntity, moved
 }
 

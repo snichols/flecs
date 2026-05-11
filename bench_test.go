@@ -825,3 +825,48 @@ func BenchmarkLookupPath_3deep(b *testing.B) {
 		_, _ = w.Lookup("scene.car.wheel")
 	}
 }
+
+// ---- j) Change detection ----
+
+func BenchmarkCachedQueryChangedHit_10kTables(b *testing.B) {
+	// Many tables, no changes between calls — measures the cost of a full
+	// scan with no dirty tables.
+	b.ReportAllocs()
+	w := flecs.New()
+	posID := flecs.RegisterComponent[benchPos](w)
+	tagIDs := []flecs.ID{
+		flecs.RegisterComponent[benchTag1](w),
+		flecs.RegisterComponent[benchTag2](w),
+		flecs.RegisterComponent[benchTag3](w),
+		flecs.RegisterComponent[benchTag4](w),
+		flecs.RegisterComponent[benchTag5](w),
+	}
+	// Create entities spread across many archetypes (pos + each pair of tags).
+	for i := range 10_000 {
+		e := w.NewEntity()
+		flecs.Set(w, e, benchPos{})
+		flecs.AddID(w, e, tagIDs[i%len(tagIDs)])
+	}
+	cq := flecs.NewCachedQuery(w, posID)
+	cq.Changed() // consume initial true; sync lastChangeCounts
+	b.ResetTimer()
+	for range b.N {
+		_ = cq.Changed()
+	}
+}
+
+func BenchmarkCachedQueryChangedAfterSet(b *testing.B) {
+	// Set + Changed — one column write per iteration followed by Changed().
+	b.ReportAllocs()
+	w := flecs.New()
+	posID := flecs.RegisterComponent[benchPos](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, benchPos{X: 1})
+	cq := flecs.NewCachedQuery(w, posID)
+	cq.Changed() // consume initial true
+	b.ResetTimer()
+	for range b.N {
+		flecs.Set(w, e, benchPos{X: 2})
+		_ = cq.Changed()
+	}
+}

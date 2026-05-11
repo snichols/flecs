@@ -38,6 +38,26 @@ import (
 // unprotected reference to it; the cache's lifetime guarantees validity for
 // the iterator's lifetime.
 //
+// # Change detection
+//
+// [CachedQuery.Changed] provides opt-in change detection. It returns true the
+// first time it is called (initial state is "all changed"), and thereafter
+// returns true only when a matching table was mutated since the last call:
+//
+//	q := flecs.NewCachedQuery(w, posID, velID)
+//	for {
+//	    if q.Changed() {
+//	        runMovement(q)
+//	    }
+//	    w.Progress(0.016)
+//	}
+//
+// A change is any of: a new matching table added to the cache, a column write
+// (Set[T]/SetByID or pair write), or a structural change (entity added/removed
+// via migrate). Because any column write on a cached table marks it dirty for
+// ALL cached queries containing it, Changed() may over-report but never
+// under-reports.
+//
 // *CachedQuery is NOT goroutine-safe; external synchronization is required.
 type CachedQuery struct {
 	w        *World
@@ -46,6 +66,9 @@ type CachedQuery struct {
 	orGroups [][]ID         // each inner slice is one OR-group; tables must match all groups
 	tables   []*table.Table // pre-filtered match set; grown by tryMatchTable, never shrunk
 	removed  bool           // set by Close; deferred-removal model (see observer.go)
+	// Change detection state (Phase 9.5). Not goroutine-safe.
+	lastChangeCounts map[*table.Table]uint64 // last seen ChangeCount per table; nil before first Changed() call
+	tablesAdded      bool                    // set by tryMatchTable when a new table is appended
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -276,4 +299,44 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		}
 	}
 	cq.tables = append(cq.tables, t)
+	cq.tablesAdded = true
+}
+
+// Changed reports whether any matching table was mutated since the last call.
+// Returns true on the first call (initial state is "all changed"). NOT
+// goroutine-safe.
+//
+// A change is detected when:
+//   - A new matching table was added to the cache since the last call, OR
+//   - Any cached table had a column write (Set[T]/SetByID or pair write), OR
+//   - Any cached table had a structural change (entity added/removed via migrate).
+//
+// Because any column write on a cached table marks it dirty for ALL cached
+// queries containing it, Changed() may over-report but never under-reports.
+// The change counter is monotonic uint64; counter wrap is treated as a change.
+//
+// Returns false after Close.
+func (cq *CachedQuery) Changed() bool {
+	if cq.removed {
+		return false
+	}
+	if cq.tablesAdded {
+		cq.tablesAdded = false
+		if cq.lastChangeCounts == nil {
+			cq.lastChangeCounts = make(map[*table.Table]uint64, len(cq.tables))
+		}
+		for _, t := range cq.tables {
+			cq.lastChangeCounts[t] = t.ChangeCount()
+		}
+		return true
+	}
+	changed := false
+	for _, t := range cq.tables {
+		cc := t.ChangeCount()
+		if cc != cq.lastChangeCounts[t] {
+			cq.lastChangeCounts[t] = cc
+			changed = true
+		}
+	}
+	return changed
 }

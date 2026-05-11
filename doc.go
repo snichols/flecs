@@ -218,6 +218,34 @@
 //	w2.UnmarshalJSON(data)
 //	// flecs.Get[Position](w2, restoredInst) returns Position{1, 1}.
 //
+// # Change Detection
+//
+// [CachedQuery.Changed] provides opt-in, per-table change detection so that
+// systems can skip work when nothing relevant has changed since the last call.
+// The first call after construction always returns true ("initial state is all
+// changed"); subsequent calls return true only when the cached match set was
+// mutated:
+//
+//	q := flecs.NewCachedQuery(w, posID, velID)
+//
+//	for {
+//	    if q.Changed() {
+//	        // Something relevant changed since the last call. Re-run downstream work.
+//	        runMovement(q)
+//	    }
+//	    w.Progress(0.016)
+//	}
+//
+// A change is any of: a new matching table added to the cache, a column write
+// (Set[T]/SetByID or pair write), or a structural change (entity added/removed
+// via migrate). The change counter is monotonic uint64; any column write on a
+// cached table marks it dirty for ALL cached queries containing it (never
+// under-reports, may over-report). Changed() is NOT goroutine-safe.
+//
+// Change detection is only available on [CachedQuery]; uncached [*Query] does
+// not provide Changed(). Use [NewCachedQuery] or [NewCachedQueryFromTerms] when
+// change detection is needed.
+//
 // # Stats and Observability
 //
 // [World.Stats] returns a snapshot of world-level counters and per-phase frame
