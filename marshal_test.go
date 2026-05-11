@@ -724,3 +724,97 @@ func TestMarshalParentNotInJSONWhenAbsent(t *testing.T) {
 		t.Errorf("'parent' field should be absent for entities without a parent: %s", data)
 	}
 }
+
+func TestMarshalMultipleChildOfParents(t *testing.T) {
+	// When an entity has ChildOf relationships to two different parents, only the
+	// first one in signature order (lowest pair ID, i.e. the parent with the
+	// smaller entity index — p1, allocated first) must appear in the JSON output.
+	w := flecs.New()
+	p1 := w.NewEntity()
+	w.SetName(p1, "parent1")
+	p2 := w.NewEntity()
+	w.SetName(p2, "parent2")
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), p1))
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), p2))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Serial int    `json:"serial"`
+			Name   string `json:"name"`
+			Parent int    `json:"parent"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	serialByName := make(map[string]int)
+	parentSerialByName := make(map[string]int)
+	for _, e := range jw.Entities {
+		serialByName[e.Name] = e.Serial
+		parentSerialByName[e.Name] = e.Parent
+	}
+
+	// The child must reference exactly one parent — the first ChildOf target in
+	// signature order, which is p1 (lower entity index → lower pair ID → first
+	// in sorted signature).
+	if parentSerialByName["child"] == 0 {
+		t.Fatal("child should have a parent field in JSON")
+	}
+	if parentSerialByName["child"] != serialByName["parent1"] {
+		t.Fatalf("child.parent=%d want %d (parent1); only first ChildOf parent must be serialized",
+			parentSerialByName["child"], serialByName["parent1"])
+	}
+}
+
+func TestMarshalSiblingOrder(t *testing.T) {
+	// Siblings allocated in order sib0..sib3 must appear in that same order in
+	// the JSON output (entity-allocation order, per the topo-sort guarantee).
+	w := flecs.New()
+	root := w.NewEntity()
+	w.SetName(root, "root")
+	const n = 4
+	for i := range n {
+		c := w.NewEntity()
+		w.SetName(c, fmt.Sprintf("sib%d", i))
+		flecs.AddID(w, c, flecs.MakePair(w.ChildOf(), root))
+	}
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Name   string `json:"name"`
+			Parent int    `json:"parent"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	var siblings []string
+	for _, e := range jw.Entities {
+		if e.Parent != 0 {
+			siblings = append(siblings, e.Name)
+		}
+	}
+	if len(siblings) != n {
+		t.Fatalf("expected %d siblings, got %d: %v", n, len(siblings), siblings)
+	}
+	for i, name := range siblings {
+		want := fmt.Sprintf("sib%d", i)
+		if name != want {
+			t.Fatalf("siblings[%d]=%q want %q; siblings must appear in entity-allocation order", i, name, want)
+		}
+	}
+}
