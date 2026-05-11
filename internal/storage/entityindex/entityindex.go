@@ -239,3 +239,14 @@ func (idx *Index) Each(fn func(id ids.ID, rec *Record)) {
 		fn(id, rec)
 	}
 }
+
+// EachID calls fn for every alive entity in dense order (dense[1:aliveCount]).
+// fn returns false to stop iteration early. Behavior is undefined if fn calls
+// Alloc or Free during iteration.
+func (idx *Index) EachID(fn func(id ids.ID) bool) {
+	for i := 1; i < idx.aliveCount; i++ {
+		if !fn(idx.dense[i]) {
+			return
+		}
+	}
+}
