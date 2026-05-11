@@ -26,17 +26,18 @@ import (
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	index      *entityindex.Index
-	registry   *component.Registry
-	tables     map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty      *table.Table                    // canonical empty-signature table for new entities
-	compIndex  *componentindex.Index           // reverse map: component ID → tables containing it
-	observers  map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	childOfID  ID                              // built-in ChildOf relationship entity (index 1)
-	isAID      ID                              // built-in IsA relationship entity (index 2)
-	nameID     ID                              // built-in Name component entity (index 3; user entities start at index 4)
-	deferDepth int                             // nesting counter; 0 means "apply immediately"
-	deferred   []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
+	index         *entityindex.Index
+	registry      *component.Registry
+	tables        map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty         *table.Table                    // canonical empty-signature table for new entities
+	compIndex     *componentindex.Index           // reverse map: component ID → tables containing it
+	observers     map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	cachedQueries []*CachedQuery                  // lazily allocated; notified on new table creation
+	childOfID     ID                              // built-in ChildOf relationship entity (index 1)
+	isAID         ID                              // built-in IsA relationship entity (index 2)
+	nameID        ID                              // built-in Name component entity (index 3; user entities start at index 4)
+	deferDepth    int                             // nesting counter; 0 means "apply immediately"
+	deferred      []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
 }
 
 // New initializes and returns an empty World.
@@ -59,6 +60,7 @@ func New() *World {
 	for _, id := range w.empty.Type() {
 		w.compIndex.Register(id, w.empty)
 	}
+	w.notifyTableCreated(w.empty) // no-op: cachedQueries is nil at construction
 	// Allocate the built-in ChildOf relationship entity (gets index 1).
 	childOf := w.index.Alloc()
 	rec := w.index.Get(childOf)
@@ -403,6 +405,10 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			for _, id := range newTable.Type() {
 				w.compIndex.Register(id, newTable)
 			}
+			// Notify cached queries that a new table is available. Fires once
+			// per newly-created table, after full registration. Hot path: do
+			// NOT compact w.cachedQueries here.
+			w.notifyTableCreated(newTable)
 		}
 		// Cache the result for future single-component transitions from oldTable.
 		if oldTable != nil {
@@ -489,6 +495,20 @@ func (w *World) eachAlive(fn func(ID)) {
 	w.index.Each(func(id ID, _ *entityindex.Record) {
 		fn(id)
 	})
+}
+
+// notifyTableCreated walks w.cachedQueries and calls tryMatchTable on each
+// active (non-removed) entry. Called once per newly-created table, after the
+// table is fully registered in w.tables and w.compIndex.
+//
+// Compaction of removed entries is intentionally skipped here (hot path);
+// it happens lazily in NewCachedQuery. Defensively handles nil cachedQueries.
+func (w *World) notifyTableCreated(t *table.Table) {
+	for _, cq := range w.cachedQueries {
+		if !cq.removed {
+			cq.tryMatchTable(t)
+		}
+	}
 }
 
 // sigKey encodes a sorted []ID as a string map key.
