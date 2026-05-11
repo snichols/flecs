@@ -17,9 +17,10 @@ var tagType = reflect.TypeFor[struct{}]()
 // entity ID for reverse lookups.
 // The registry is single-threaded by contract; concurrent access is not supported.
 type Registry struct {
-	m     map[reflect.Type]*TypeInfo
-	order []reflect.Type
-	byID  map[ids.ID]*TypeInfo
+	m       map[reflect.Type]*TypeInfo
+	order   []reflect.Type
+	byID    map[ids.ID]*TypeInfo
+	idOrder []ids.ID // all IDs added to byID in insertion order
 }
 
 // NewRegistry returns a new, empty Registry.
@@ -85,6 +86,9 @@ func (r *Registry) AssociateID(info *TypeInfo, id ids.ID) {
 	if existing, ok := r.byID[id]; ok && existing != info {
 		panic("component: AssociateID: id already associated with a different TypeInfo")
 	}
+	if _, exists := r.byID[id]; !exists {
+		r.idOrder = append(r.idOrder, id)
+	}
 	info.Component = id
 	r.byID[id] = info
 }
@@ -128,6 +132,18 @@ func (r *Registry) EnsureID(id ids.ID) *TypeInfo {
 	}
 	r.AssociateID(info, id)
 	return info
+}
+
+// IDs returns a fresh slice of all component IDs registered in insertion order.
+// This includes IDs associated via AssociateID (RegisterComponent, RegisterPairData,
+// EnsureID). The returned slice is a copy; mutating it does not affect the registry.
+func (r *Registry) IDs() []ids.ID {
+	if len(r.idOrder) == 0 {
+		return nil
+	}
+	out := make([]ids.ID, len(r.idOrder))
+	copy(out, r.idOrder)
+	return out
 }
 
 // RegisterPairData ensures that pairID is associated with a per-pair TypeInfo

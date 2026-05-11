@@ -426,3 +426,92 @@ func TestRegisterPairDataBaseTypeInfoUnmodified(t *testing.T) {
 		t.Errorf("base TypeInfo.Component changed: want %d, got %d", compID, base.Component)
 	}
 }
+
+// ── IDs ───────────────────────────────────────────────────────────────────────
+
+func TestIDsEmpty(t *testing.T) {
+	r := component.NewRegistry()
+	ids := r.IDs()
+	if ids != nil {
+		t.Errorf("IDs() on empty registry: want nil, got %v", ids)
+	}
+}
+
+func TestIDsInsertionOrder(t *testing.T) {
+	r := component.NewRegistry()
+	infoPos := component.Register[Position](r)
+	infoVel := component.Register[Velocity](r)
+
+	const posID ids.ID = 10
+	const velID ids.ID = 20
+	r.AssociateID(infoPos, posID)
+	r.AssociateID(infoVel, velID)
+
+	got := r.IDs()
+	if len(got) != 2 {
+		t.Fatalf("IDs() len=%d, want 2", len(got))
+	}
+	if got[0] != posID {
+		t.Errorf("IDs()[0]=%v, want %v", got[0], posID)
+	}
+	if got[1] != velID {
+		t.Errorf("IDs()[1]=%v, want %v", got[1], velID)
+	}
+}
+
+func TestIDsIncludesEnsureID(t *testing.T) {
+	r := component.NewRegistry()
+	const tagID ids.ID = 77
+	r.EnsureID(tagID)
+
+	got := r.IDs()
+	if len(got) != 1 || got[0] != tagID {
+		t.Errorf("IDs() = %v, want [%v]", got, tagID)
+	}
+}
+
+func TestIDsIncludesPairData(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 999
+	component.RegisterPairData[Position](r, pairID)
+
+	got := r.IDs()
+	found := false
+	for _, id := range got {
+		if id == pairID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("IDs() missing pair ID %v; got %v", pairID, got)
+	}
+}
+
+func TestIDsReturnsFreshSlice(t *testing.T) {
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+	const posID ids.ID = 10
+	r.AssociateID(info, posID)
+
+	got1 := r.IDs()
+	got1[0] = 0 // mutate the copy
+	got2 := r.IDs()
+	if got2[0] == 0 {
+		t.Error("IDs() returned the internal slice (mutation affected the registry)")
+	}
+}
+
+func TestIDsIdempotentAssociateID(t *testing.T) {
+	// Calling AssociateID twice with the same info+id must not duplicate the entry.
+	r := component.NewRegistry()
+	info := component.Register[Position](r)
+	const posID ids.ID = 42
+	r.AssociateID(info, posID)
+	r.AssociateID(info, posID) // idempotent
+
+	got := r.IDs()
+	if len(got) != 1 {
+		t.Errorf("IDs() len=%d after idempotent AssociateID, want 1", len(got))
+	}
+}
