@@ -18,10 +18,29 @@ type benchTag5 struct{}
 
 // ---- setup helpers ----
 
+// setupWorldWithEntities pre-creates n entities in a single archetype, each
+// having all the given component IDs added via AddID. Resets b's timer and
+// returns the world and entity slice.
+func setupWorldWithEntities(b *testing.B, n int, components ...flecs.ID) (*flecs.World, []flecs.ID) {
+	b.Helper()
+	w := flecs.New()
+	entities := make([]flecs.ID, n)
+	for i := range n {
+		e := w.NewEntity()
+		for _, cid := range components {
+			flecs.AddID(w, e, cid)
+		}
+		entities[i] = e
+	}
+	b.ResetTimer()
+	return w, entities
+}
+
 // setupWorldMultiArchetype pre-creates n entities split evenly across `archetypes`
 // distinct archetype tables. Each archetype has Position+Velocity plus one extra
-// tag to force a different table. Resets b's timer and returns the world.
-func setupWorldMultiArchetype(b *testing.B, n, archetypes int) *flecs.World {
+// tag to force a different table. Resets b's timer and returns the world and
+// entity slice.
+func setupWorldMultiArchetype(b *testing.B, n, archetypes int) (*flecs.World, []flecs.ID) {
 	b.Helper()
 	w := flecs.New()
 	posID := flecs.RegisterComponent[benchPos](w)
@@ -36,17 +55,19 @@ func setupWorldMultiArchetype(b *testing.B, n, archetypes int) *flecs.World {
 	if archetypes > len(tagIDs) {
 		archetypes = len(tagIDs)
 	}
+	entities := make([]flecs.ID, n)
 	for i := range n {
 		e := w.NewEntity()
 		flecs.Set(w, e, benchPos{})
 		flecs.Set(w, e, benchVel{DX: 1})
 		// add an extra tag to vary the archetype
 		flecs.AddID(w, e, tagIDs[i%archetypes])
+		entities[i] = e
 	}
 	_ = posID
 	_ = velID
 	b.ResetTimer()
-	return w
+	return w, entities
 }
 
 // ---- a) Entity lifecycle ----
@@ -358,7 +379,7 @@ func BenchmarkQueryAcrossArchetypes_10k(b *testing.B) {
 	// 10,000 entities split across 5 archetypes, each having benchPos+benchVel
 	// plus a distinct extra tag. Tests multi-table iteration overhead.
 	b.ReportAllocs()
-	w := setupWorldMultiArchetype(b, 10_000, 5)
+	w, _ := setupWorldMultiArchetype(b, 10_000, 5)
 	b.ResetTimer()
 	for range b.N {
 		flecs.Each2[benchPos, benchVel](w, func(_ flecs.ID, p *benchPos, v *benchVel) {
