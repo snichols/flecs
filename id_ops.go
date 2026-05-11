@@ -35,9 +35,8 @@ func AddID(w *World, e ID, e2 ID) bool {
 			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred = append(w.deferred, func(w *World) {
-			addIDImmediate(w, e, e2)
-		})
+		w.registry.EnsureID(e2)
+		w.deferred.append(cmd{kind: cmdAddID, entity: e, id: e2})
 		w.deferMu.Unlock()
 		return true
 	}
@@ -73,9 +72,7 @@ func RemoveID(w *World, e ID, id ID) bool {
 			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred = append(w.deferred, func(w *World) {
-			removeIDImmediate(w, e, id)
-		})
+		w.deferred.append(cmd{kind: cmdRemoveID, entity: e, id: id})
 		w.deferMu.Unlock()
 		return true
 	}
@@ -141,10 +138,16 @@ func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
-		captured := v
-		w.deferred = append(w.deferred, func(w *World) {
-			setPairImmediate[T](w, e, rel, tgt, captured)
-		})
+		pairID := MakePair(rel, tgt)
+		pairInfo := component.RegisterPairData[T](w.registry, pairID)
+		if pairInfo.Size > 0 {
+			off, buf := w.deferred.arena.alloc(int(pairInfo.Size), int(pairInfo.Align))
+			copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), pairInfo.Size))
+			w.deferred.append(cmd{kind: cmdSetPair, entity: e, id: pairID,
+				valueOff: off, valueSize: uint32(pairInfo.Size)})
+		} else {
+			w.deferred.append(cmd{kind: cmdSetPair, entity: e, id: pairID})
+		}
 		w.deferMu.Unlock()
 		return
 	}

@@ -160,10 +160,28 @@ func (w *World) SetByID(e ID, id ID, v any) {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
-		captured := v
-		w.deferred = append(w.deferred, func(w *World) {
-			setByIDImmediate(w, e, id, captured)
-		})
+		info, ok := w.registry.LookupByID(id)
+		if !ok {
+			w.deferMu.Unlock()
+			panic(fmt.Sprintf("flecs: SetByID: component id %d is not registered", uint64(id)))
+		}
+		if reflect.TypeOf(v) != info.Type {
+			w.deferMu.Unlock()
+			panic(fmt.Sprintf("flecs: SetByID: type mismatch for component %s (id=%d); expected %s, got %s",
+				info.Name, uint64(id), info.Type, reflect.TypeOf(v)))
+		}
+		if info.Size > 0 {
+			// Use a reflect.Value bounce buffer to get addressable bytes,
+			// matching setByIDImmediate's layout.
+			pv := reflect.New(info.Type)
+			pv.Elem().Set(reflect.ValueOf(v))
+			off, buf := w.deferred.arena.alloc(int(info.Size), int(info.Align))
+			copy(buf, unsafe.Slice((*byte)(pv.UnsafePointer()), info.Size))
+			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: id,
+				valueOff: off, valueSize: uint32(info.Size)})
+		} else {
+			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: id})
+		}
 		w.deferMu.Unlock()
 		return
 	}

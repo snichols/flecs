@@ -516,6 +516,44 @@ func BenchmarkObserverFires_5observers_10k(b *testing.B) {
 
 // ---- f) Deferred queue ----
 
+// BenchmarkDeferBatchedAdds: 100 AddID calls on one entity inside one Defer scope.
+// With the coalescing queue this should execute ~1 migration; the old closure-based
+// queue executed 100 migrations. Expect ≥ 10× speedup vs the pre-v0.14 baseline.
+func BenchmarkDeferBatchedAdds(b *testing.B) {
+	b.ReportAllocs()
+	w := flecs.New()
+	const n = 100
+	tags := make([]flecs.ID, n)
+	for i := range tags {
+		tags[i] = w.NewEntity()
+	}
+	b.ResetTimer()
+	for range b.N {
+		e := w.NewEntity()
+		w.Defer(func() {
+			for _, tag := range tags {
+				flecs.AddID(w, e, tag)
+			}
+		})
+	}
+}
+
+// BenchmarkDeferSingleSet: one Set[T] inside an explicit DeferBegin/DeferEnd.
+// The arena-backed path should produce 0 allocs/op (no closure capture for the
+// value, no slice growth after warmup, cmdQueue recycled via sync.Pool).
+func BenchmarkDeferSingleSet(b *testing.B) {
+	b.ReportAllocs()
+	w := flecs.New()
+	e := w.NewEntity()
+	flecs.Set(w, e, benchPos{})
+	b.ResetTimer()
+	for range b.N {
+		w.DeferBegin()
+		flecs.Set(w, e, benchPos{X: 1, Y: 2})
+		w.DeferEnd()
+	}
+}
+
 func BenchmarkDeferOverhead_NoOps(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()

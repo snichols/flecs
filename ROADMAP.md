@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.13)
+## Shipped (through v0.14)
 
 The following features are available in the current release:
 
@@ -15,7 +15,7 @@ The following features are available in the current release:
 - **Hierarchical entity names** — `SetName`, `GetName`, `Lookup`, `LookupChild`, `PathOf`; dot-separated path resolution.
 - **Hooks** — single per-type hook for `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`.
 - **Multi-subscriber observers** — `Observe[T]`, `ObserveID`, `Observe2[T]`; deferred unsubscribe via `Observer.Unsubscribe`.
-- **Deferred command queue** — `DeferBegin`/`DeferEnd`/`Defer`; nested scopes; safe mutation during iteration.
+- **Coalescing deferred command queue** — `DeferBegin`/`DeferEnd`/`Defer`; nested scopes; safe mutation during iteration. Tagged-union `cmd` structs replace closure captures; bump arena (`cmdArena`) eliminates per-op heap allocation; per-entity intrusive linked list folds all Add/Set/Remove ops for one entity into a single archetype migration. `BenchmarkDeferSingleSet`: 0 allocs/op. Port of C flecs `flecs_cmd_batch_for_entity`.
 - **Systems + 4-phase pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; `Progress`; frame counter; elapsed time.
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
 - **NOT, Optional, and OR query terms** — `With`/`Without`/`Maybe`/`Or` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]` (also handles OR-group disambiguation).
@@ -48,8 +48,7 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 - Per-goroutine command stages (currently a single mutex-protected queue; C flecs uses per-stage queues — Phase 11.0, task #40 — will unlock linear scaling for deferred mutations from multi-threaded systems)
 
 ### Performance
-- Custom allocators / `sync.Pool` for hot paths
-- Defer queue refactor: closure capture → tagged-union or typed buffers (currently 1 alloc per deferred op)
+- Custom allocators / `sync.Pool` for additional hot paths beyond the defer queue
 
 ## Performance
 

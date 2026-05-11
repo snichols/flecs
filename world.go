@@ -52,7 +52,7 @@ type World struct {
 	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
-	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
+	deferred         *cmdQueue                       // tagged-union cmd queue; flushed when deferDepth reaches 0
 	workerCount      int                             // number of persistent goroutines in the worker pool; 0 = serial
 	workerCh         chan func()                     // job channel; nil when workerCount == 0
 	inProgress       bool                            // true while Progress is executing
@@ -82,6 +82,7 @@ func New() *World {
 		registry:  component.NewRegistry(),
 		tables:    make(map[string]*table.Table),
 		compIndex: componentindex.New(),
+		deferred:  acquireCmdQueue(),
 	}
 	w.empty = table.New([]ID{}, []*component.TypeInfo{})
 	w.tables[sigKey(nil)] = w.empty
@@ -279,9 +280,7 @@ func (w *World) Delete(e ID) bool {
 			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred = append(w.deferred, func(w *World) {
-			deleteImmediate(w, e)
-		})
+		w.deferred.append(cmd{kind: cmdDelete, entity: e})
 		w.deferMu.Unlock()
 		return true
 	}
@@ -374,10 +373,16 @@ func Set[T any](w *World, e ID, v T) {
 	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
-		captured := v
-		w.deferred = append(w.deferred, func(w *World) {
-			setImmediate[T](w, e, captured)
-		})
+		cid := RegisterComponent[T](w)
+		info, _ := component.LookupByType[T](w.registry)
+		if info.Size > 0 {
+			off, buf := w.deferred.arena.alloc(int(info.Size), int(info.Align))
+			copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), info.Size))
+			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: cid,
+				valueOff: off, valueSize: uint32(info.Size)})
+		} else {
+			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: cid})
+		}
 		w.deferMu.Unlock()
 		return
 	}
@@ -469,9 +474,7 @@ func Remove[T any](w *World, e ID) bool {
 			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred = append(w.deferred, func(w *World) {
-			removeImmediate[T](w, e)
-		})
+		w.deferred.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
 		w.deferMu.Unlock()
 		return true
 	}
@@ -679,6 +682,88 @@ func (w *World) notifyTableCreated(t *table.Table) {
 			slog.Int("signature_len", len(sig)),
 			slog.String("signature", formatSig(sig)))
 	}
+}
+
+// commitBatch migrates entity e to the table described by newSig, carrying
+// component data from its current table. It fires OnAdd for each id in addedIDs
+// and OnRemove for each id in removedIDs, then removes e from the old table.
+//
+// Unlike migrate (which handles a single add+remove), commitBatch handles an
+// arbitrary number of added and removed IDs in one pass — the coalescer's key
+// primitive. Values for Set cmds are NOT written here; they are written in the
+// coalescer's pass 2 after this function returns.
+func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
+	rec := w.index.Get(e)
+	if rec == nil {
+		return
+	}
+	oldTable := rec.Table
+	oldRow := int(rec.Row)
+
+	// Find or create the destination table.
+	key := sigKey(newSig)
+	newTable, exists := w.tables[key]
+	if !exists {
+		types := make([]*component.TypeInfo, len(newSig))
+		for i, id := range newSig {
+			info, ok := w.registry.LookupByID(id)
+			if !ok {
+				panic("flecs: commitBatch: component ID not registered")
+			}
+			types[i] = info
+		}
+		newTable = table.New(newSig, types)
+		w.tables[key] = newTable
+		for _, id := range newTable.Type() {
+			w.compIndex.Register(id, newTable)
+		}
+		w.notifyTableCreated(newTable)
+	}
+
+	// Append a new zero-initialised row for e in the destination table.
+	newRow := newTable.Append(e)
+
+	// Carry existing component data from old table to new table.
+	if oldTable != nil {
+		for _, id := range oldTable.Type() {
+			if !newTable.HasComponent(id) {
+				continue
+			}
+			ptr := oldTable.Get(oldRow, id)
+			if ptr != nil {
+				newTable.Set(newRow, id, ptr)
+			}
+		}
+	}
+
+	// Fire OnAdd for newly-added components (slot is zero-initialised here;
+	// Set payloads are written by the coalescer's pass 2 after this returns).
+	for _, id := range addedIDs {
+		info, _ := w.registry.LookupByID(id)
+		w.fireOnAdd(info, id, e, newTable.Get(newRow, id))
+	}
+
+	// Fire OnRemove for removed components while the old slot is still live.
+	for _, id := range removedIDs {
+		if oldTable == nil {
+			continue
+		}
+		info, _ := w.registry.LookupByID(id)
+		w.fireOnRemove(info, id, e, oldTable.Get(oldRow, id))
+	}
+
+	// Swap-remove e from the old table and fix up the moved entity's record.
+	if oldTable != nil {
+		moved, ok := oldTable.RemoveSwap(oldRow)
+		if ok {
+			movedRec := w.index.Get(moved)
+			movedRec.Row = uint32(oldRow)
+		}
+	}
+
+	// Point e's record at its new location.
+	rec.Table = newTable
+	rec.Row = uint32(newRow)
 }
 
 // sigKey encodes a sorted []ID as a string map key.
