@@ -239,10 +239,18 @@ type QueryIter struct {
 	// every candidate is evaluated against the term list.
 	cached          bool
 	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table
+	// multi-threaded dispatch clipping (zero workerTotal = no clipping, full table)
+	workerIdx   int // 0-based index of this worker
+	workerTotal int // total worker count; 0 = no clipping
+	wFirst      int // first row for this worker in the current table
+	wCount      int // row count for this worker in the current table
 }
 
 // Next advances to the next matching table. Returns true when positioned on a
 // valid table; returns false when iteration is exhausted.
+//
+// For multi-threaded iterators (workerTotal > 0), tables where this worker's
+// row count is zero are skipped transparently.
 func (it *QueryIter) Next() bool {
 	for {
 		it.pos++
@@ -251,18 +259,26 @@ func (it *QueryIter) Next() bool {
 			return false
 		}
 		t := it.candidates[it.pos]
-		if it.cached {
-			// Cache is pre-filtered by CachedQuery.tryMatchTable; every
-			// candidate already satisfies And and Not terms.
-			it.current = t
-			it.updateOptionalPresence(t)
-			return true
+		// Cached iters skip the per-table term check; uncached iters filter.
+		if !it.cached && !it.matchesTable(t) {
+			continue
 		}
-		if it.matchesTable(t) {
-			it.current = t
-			it.updateOptionalPresence(t)
-			return true
+		// Compute this worker's row slice when clipping is active.
+		if it.workerTotal > 0 {
+			n := t.Count()
+			q, r := n/it.workerTotal, n%it.workerTotal
+			it.wFirst = q*it.workerIdx + min(it.workerIdx, r)
+			it.wCount = q
+			if it.workerIdx < r {
+				it.wCount++
+			}
+			if it.wCount == 0 {
+				continue // this worker has no rows in this table
+			}
 		}
+		it.current = t
+		it.updateOptionalPresence(t)
+		return true
 	}
 }
 
@@ -322,18 +338,42 @@ func (it *QueryIter) Table() *table.Table {
 	return it.current
 }
 
-// Count returns the number of entities in the current table.
+// Count returns the number of entities visible to this iterator in the current
+// table. For multi-threaded iterators this is the worker's row count (a
+// subset of the full table); for ordinary iterators it is the full table count.
 // Panics if not positioned on a valid table.
-func (it *QueryIter) Count() int { return it.Table().Count() }
+func (it *QueryIter) Count() int {
+	if it.workerTotal > 0 {
+		return it.wCount
+	}
+	return it.Table().Count()
+}
 
-// Entities returns a read-only slice of entity IDs in the current table.
-// The slice is invalidated by the next Next call; callers must consume or
-// copy within the current iteration step.
-func (it *QueryIter) Entities() []ID { return it.Table().Entities() }
+// Entities returns the entity IDs for this iterator's rows in the current table.
+// For multi-threaded iterators this is the worker's disjoint row slice; for
+// ordinary iterators it is the full table entity list. The slice is invalidated
+// by the next Next call; callers must consume or copy within the current step.
+func (it *QueryIter) Entities() []ID {
+	all := it.Table().Entities()
+	if it.workerTotal > 0 {
+		return all[it.wFirst : it.wFirst+it.wCount]
+	}
+	return all
+}
 
 // Query returns the Query that produced this iterator. Returns nil for iters
 // derived from a CachedQuery.
 func (it *QueryIter) Query() *Query { return it.q }
+
+// clippedCopy returns a shallow copy of it restricted to worker workerIdx of
+// workerTotal. Each copy independently iterates the same table list but sees
+// only its disjoint row slice per table. Used by the multi-threaded dispatcher.
+func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
+	cp := *it
+	cp.workerIdx = workerIdx
+	cp.workerTotal = workerTotal
+	return &cp
+}
 
 // Field returns a typed []T slice over the column for id in the current table.
 //
@@ -380,7 +420,11 @@ func Field[T any](it *QueryIter, id ID) []T {
 	if n == 0 {
 		return nil
 	}
-	return unsafe.Slice((*T)(base), n)[:it.Count()]
+	full := unsafe.Slice((*T)(base), n)
+	if it.workerTotal > 0 {
+		return full[it.wFirst : it.wFirst+it.wCount]
+	}
+	return full[:it.Count()]
 }
 
 // FieldMaybe returns a typed []T slice and a presence flag for a TermOptional
@@ -421,7 +465,11 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 		if n == 0 {
 			return nil, true
 		}
-		return unsafe.Slice((*T)(base), n)[:it.Count()], true
+		full := unsafe.Slice((*T)(base), n)
+		if it.workerTotal > 0 {
+			return full[it.wFirst : it.wFirst+it.wCount], true
+		}
+		return full[:it.Count()], true
 	}
 	panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not in this query's term list",
 		reflect.TypeFor[T](), id))

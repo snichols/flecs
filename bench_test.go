@@ -1,6 +1,7 @@
 package flecs_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/snichols/flecs"
@@ -69,6 +70,8 @@ func setupWorldMultiArchetype(b *testing.B, n, archetypes int) (*flecs.World, []
 	b.ResetTimer()
 	return w, entities
 }
+
+type benchVec3 struct{ X, Y, Z float32 }
 
 // ---- a) Entity lifecycle ----
 
@@ -960,5 +963,45 @@ func BenchmarkProgress_SerialBaseline_2systems_10k(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		w.Progress(1.0 / 60.0)
+	}
+}
+
+// ---- l) Multi-threaded system (Phase 10.4) ----
+
+// BenchmarkMultiThreadedSystem measures in-place Vec3 updates on 100k entities
+// with WorkerCount in {1, 2, 4}. Expect near-linear speedup vs WorkerCount=1
+// for in-place updates (no deferred mutations; no defer-queue contention).
+func BenchmarkMultiThreadedSystem(b *testing.B) {
+	for _, wc := range []int{1, 2, 4} {
+		wc := wc
+		b.Run(fmt.Sprintf("workers=%d", wc), func(b *testing.B) {
+			b.ReportAllocs()
+			w := flecs.New()
+			w.SetWorkerCount(wc)
+			vecID := flecs.RegisterComponent[benchVec3](w)
+			const n = 100_000
+			for range n {
+				e := w.NewEntity()
+				flecs.Set(w, e, benchVec3{X: 1, Y: 2, Z: 3})
+			}
+			cq := flecs.NewCachedQuery(w, vecID)
+			sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
+				for it.Next() {
+					vecs := flecs.Field[benchVec3](it, vecID)
+					for i := range vecs {
+						x, y, z := vecs[i].X, vecs[i].Y, vecs[i].Z
+						mag2 := x*x + y*y + z*z + 1
+						vecs[i].X = x/mag2 + 1
+						vecs[i].Y = y/mag2 + 1
+						vecs[i].Z = z/mag2 + 1
+					}
+				}
+			})
+			sys.SetMultiThreaded(true)
+			b.ResetTimer()
+			for range b.N {
+				w.Progress(0)
+			}
+		})
 	}
 }

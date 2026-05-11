@@ -22,6 +22,10 @@ import (
 // worker pool. Each parallel system receives its own *QueryIter; callers must
 // NOT call Field on another system's QueryIter from a parallel callback.
 //
+// Multi-threaded execution: call SetMultiThreaded(true) to split this system's
+// iter across all workers. Each worker receives a disjoint row slice of every
+// matched table. A multi-threaded system cannot batch with parallel siblings.
+//
 // *System is NOT goroutine-safe; external synchronization is required.
 type System struct {
 	w             *World
@@ -30,6 +34,7 @@ type System struct {
 	phase         ID // which pipeline phase this system belongs to
 	removed       bool
 	parallel      bool            // opt-in parallel dispatch; default false
+	multiThreaded bool            // opt-in within-system row-range split; default false
 	writeSetFixed bool            // true after SetWriteSet called
 	writeSet      map[ID]struct{} // nil = derive from query terms; non-nil (incl. empty) = explicit
 }
@@ -141,6 +146,27 @@ func (s *System) SetParallel(v bool) { s.parallel = v }
 // Parallel reports whether this system is flagged for parallel dispatch.
 func (s *System) Parallel() bool { return s.parallel }
 
+// SetMultiThreaded sets whether this system uses within-system parallelism.
+// Default is false. When true and the world's WorkerCount is > 0, the system
+// is dispatched as N concurrent worker jobs, each receiving a disjoint slice
+// of every matched table's row range (N = WorkerCount). A multi-threaded
+// system cannot batch with parallel siblings; it always runs alone.
+//
+// A multi-threaded system runs across all workers configured by
+// World.SetWorkerCount. Each worker receives a disjoint slice of every matched
+// table's row range. The user's fn may read and write component slices in place
+// without synchronization (workers' slices never overlap). Calls to World.Set,
+// Delete, AddID etc. from inside the iter loop are safe but contend on the
+// world's defer queue — for in-place updates, prefer mutating Field[T] slices
+// directly to maximize scaling.
+//
+// Per-stage command queues (Phase 11.0, task #40) are the follow-up that
+// unlocks linear scaling for deferred mutations.
+func (s *System) SetMultiThreaded(v bool) { s.multiThreaded = v }
+
+// MultiThreaded reports whether this system is flagged for multi-threaded dispatch.
+func (s *System) MultiThreaded() bool { return s.multiThreaded }
+
 // SetWriteSet declares the set of component IDs this system writes. This
 // overrides the default, which is derived from the system's query terms
 // (all And, Or, and Optional IDs).
@@ -251,24 +277,46 @@ func (w *World) Progress(dt float32) {
 				}
 				return
 			}
-			// Parallel batch dispatch: partition active systems into maximal
-			// contiguous runs of parallel-safe systems with pairwise-disjoint
-			// write sets. Serial systems form single-system batches and run on
-			// the calling goroutine before the next batch starts.
+			// Worker-pool dispatch. Multi-threaded systems commandeer all
+			// workers for within-system row-range parallelism; parallel
+			// systems batch across disjoint write sets; serial systems run
+			// on the calling goroutine.
 			i := 0
 			for i < len(active) {
 				s := active[i]
+				if s.multiThreaded {
+					// Within-system parallelism: split the iter across all N
+					// workers, each receiving a disjoint row slice per table.
+					// Cannot batch with siblings — waits for all workers before
+					// the next system starts.
+					n := w.workerCount
+					base := s.query.Iter()
+					var wg sync.WaitGroup
+					for wi := 0; wi < n; wi++ {
+						wi := wi
+						workerIt := base.clippedCopy(wi, n)
+						wg.Add(1)
+						w.workerCh <- func() {
+							defer wg.Done()
+							s.fn(phaseDT, workerIt)
+						}
+					}
+					wg.Wait()
+					i++
+					continue
+				}
 				if !s.parallel {
 					it := s.query.Iter()
 					s.fn(phaseDT, it)
 					i++
 					continue
 				}
-				// Collect a batch: advance i while systems are parallel and
-				// their write sets are disjoint with the running union.
+				// Collect a parallel batch: advance i while systems are
+				// parallel, not multi-threaded, and their write sets are
+				// disjoint with the running union.
 				batchStart := i
 				var batchUnion map[ID]struct{}
-				for i < len(active) && active[i].parallel {
+				for i < len(active) && active[i].parallel && !active[i].multiThreaded {
 					ws := active[i].effectiveWriteSet()
 					conflict := false
 					for id := range ws {
