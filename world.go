@@ -36,7 +36,10 @@ type World struct {
 	systems       []*System                       // lazily allocated; compacted in NewSystem
 	childOfID     ID                              // built-in ChildOf relationship entity (index 1)
 	isAID         ID                              // built-in IsA relationship entity (index 2)
-	nameID        ID                              // built-in Name component entity (index 3; user entities start at index 4)
+	nameID        ID                              // built-in Name component entity (index 3)
+	preUpdateID   ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID    ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID  ID                              // built-in PostUpdate phase entity (index 6; first user entity at index 7)
 	deferDepth    int                             // nesting counter; 0 means "apply immediately"
 	deferred      []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
 }
@@ -48,7 +51,10 @@ type World struct {
 //   - Index 1: ChildOf built-in relationship entity
 //   - Index 2: IsA built-in relationship entity
 //   - Index 3: Name built-in component entity
-//   - Index 4+: user entities (NewEntity)
+//   - Index 4: PreUpdate built-in pipeline phase entity
+//   - Index 5: OnUpdate built-in pipeline phase entity
+//   - Index 6: PostUpdate built-in pipeline phase entity
+//   - Index 7+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -76,8 +82,38 @@ func New() *World {
 	w.isAID = isA
 	// Register the built-in Name component (gets index 3).
 	w.nameID = RegisterComponent[Name](w)
+	// Allocate the built-in PreUpdate phase entity (gets index 4).
+	preUpdate := w.index.Alloc()
+	rec = w.index.Get(preUpdate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(preUpdate))
+	w.preUpdateID = preUpdate
+	// Allocate the built-in OnUpdate phase entity (gets index 5).
+	onUpdate := w.index.Alloc()
+	rec = w.index.Get(onUpdate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(onUpdate))
+	w.onUpdateID = onUpdate
+	// Allocate the built-in PostUpdate phase entity (gets index 6).
+	postUpdate := w.index.Alloc()
+	rec = w.index.Get(postUpdate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(postUpdate))
+	w.postUpdateID = postUpdate
 	return w
 }
+
+// PreUpdate returns the ID of the built-in PreUpdate pipeline phase entity.
+// Systems in this phase run first in each Progress call.
+func (w *World) PreUpdate() ID { return w.preUpdateID }
+
+// OnUpdate returns the ID of the built-in OnUpdate pipeline phase entity.
+// Systems in this phase run second in each Progress call. NewSystem defaults to this phase.
+func (w *World) OnUpdate() ID { return w.onUpdateID }
+
+// PostUpdate returns the ID of the built-in PostUpdate pipeline phase entity.
+// Systems in this phase run last in each Progress call.
+func (w *World) PostUpdate() ID { return w.postUpdateID }
 
 // NewEntity allocates a new entity, places it in the empty-signature table,
 // and returns its ID.
