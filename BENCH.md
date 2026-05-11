@@ -104,6 +104,36 @@ See `.github/workflows/ci.yml` (`bench` job) and `CONTRIBUTING.md`.
 | `BenchmarkIsAGet_MissedChain` | Get on child; prefab lacks Position; chain falls through |
 | `BenchmarkLookupPath_3deep` | `w.Lookup("scene.car.wheel")` over a populated tree |
 
+### i) Traversal helpers (Phase 6.2)
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkGetUp_SelfHit` | `GetUp[T]` when entity locally owns component; depth-0, 0 allocs |
+| `BenchmarkGetUp_Depth1` | `GetUp[T]` one hop up; parent owns component, child does not |
+| `BenchmarkGetUp_Depth5` | `GetUp[T]` five hops up; only 5th ancestor owns component |
+
+---
+
+## Phase 6.2 baseline
+
+Captured on branch `snichols/issue-51` (Phase 6.2 — traversal helpers). Same
+machine as prior baselines (AMD Ryzen Threadripper PRO 5995WX 64-Cores, 2026-05-10).
+
+```
+BenchmarkGetUp_SelfHit-128    118704559   30.49 ns/op    0 B/op   0 allocs/op
+BenchmarkGetUp_Depth1-128      11875677  318.20 ns/op  192 B/op   2 allocs/op
+BenchmarkGetUp_Depth5-128       6931424  525.40 ns/op  192 B/op   2 allocs/op
+```
+
+Key observations:
+- **SelfHit (depth 0)**: 0 allocs — lazy `seen` map is never allocated when the
+  component is found on the starting entity itself.
+- **Depth 1 → 5**: both allocate 192 B / 2 allocs (one seen map, one map entry) —
+  the map is allocated exactly once on the first step past e and reused for all
+  subsequent steps.
+- Depth-5 is ~1.6× slower than Depth-1, consistent with ~4 additional
+  `index.Get` + `firstPairTarget` calls.
+
 ---
 
 ## Baseline
