@@ -40,11 +40,12 @@ import (
 //
 // *CachedQuery is NOT goroutine-safe; external synchronization is required.
 type CachedQuery struct {
-	w       *World
-	terms   []Term         // sorted: And first (by ID), Not second, Optional third
-	andIDs  []ID           // pre-extracted And-term IDs; returned by Terms() for backward compat
-	tables  []*table.Table // pre-filtered match set; grown by tryMatchTable, never shrunk
-	removed bool           // set by Close; deferred-removal model (see observer.go)
+	w        *World
+	terms    []Term         // sorted: And first (by ID), Not second, Or-groups third, Optional last
+	andIDs   []ID           // pre-extracted And-term IDs; returned by Terms() for backward compat
+	orGroups [][]ID         // each inner slice is one OR-group; tables must match all groups
+	tables   []*table.Table // pre-filtered match set; grown by tryMatchTable, never shrunk
+	removed  bool           // set by Close; deferred-removal model (see observer.go)
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -76,38 +77,42 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 	for i, id := range cp {
 		terms[i] = Term{ID: id, Kind: TermAnd}
 	}
-	return newCachedQueryInternal(w, terms, cp)
+	return newCachedQueryInternal(w, terms, cp, nil)
 }
 
 // NewCachedQueryFromTerms constructs a CachedQuery over w for the given
-// structured terms, supporting TermAnd, TermNot, and TermOptional kinds.
+// structured terms, supporting TermAnd, TermNot, TermOr, and TermOptional kinds.
 //
 // Panics if:
 //   - w is nil.
 //   - no terms are provided.
 //   - no TermAnd term is present.
-//   - any two terms share the same ID.
+//   - any two terms share the same ID across any term kinds.
+//   - an Or term's ID is zero/invalid.
+//   - two Or terms within the same group share the same ID.
 //
 // Terms are sorted internally: TermAnd first (by ID), TermNot second (by ID),
-// TermOptional last (by ID). The caller's slice is not retained.
+// TermOr-groups third (preserving group adjacency), TermOptional last (by ID).
+// The caller's slice is not retained.
 //
-// Not-term cache behaviour: tryMatchTable evaluates Not terms at the moment a
-// new table is created. Because table signatures are immutable, this is the
-// only time evaluation is necessary. See type comment for full correctness
+// Not/Or-term cache behaviour: tryMatchTable evaluates Not and Or terms at the
+// moment a new table is created. Because table signatures are immutable, this is
+// the only time evaluation is necessary. See type comment for full correctness
 // argument.
 func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
-	cp, andIDs := validateAndSortTerms("flecs: NewCachedQueryFromTerms", terms)
-	return newCachedQueryInternal(w, cp, andIDs)
+	cp, andIDs, orGroups := validateAndSortTerms("flecs: NewCachedQueryFromTerms", terms)
+	return newCachedQueryInternal(w, cp, andIDs, orGroups)
 }
 
 // newCachedQueryInternal is the shared construction path for NewCachedQuery and
 // NewCachedQueryFromTerms. terms must already be validated and sorted; andIDs
-// must be the pre-extracted And-term IDs.
-func newCachedQueryInternal(w *World, terms []Term, andIDs []ID) *CachedQuery {
-	cq := &CachedQuery{w: w, terms: terms, andIDs: andIDs, tables: make([]*table.Table, 0)}
+// must be the pre-extracted And-term IDs; orGroups must be the pre-built OR-groups
+// (nil for queries with no TermOr terms).
+func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID) *CachedQuery {
+	cq := &CachedQuery{w: w, terms: terms, andIDs: andIDs, orGroups: orGroups, tables: make([]*table.Table, 0)}
 
 	// Initial population: check every existing table.
 	for _, t := range w.tables {
@@ -141,7 +146,8 @@ func (cq *CachedQuery) Terms() []ID {
 }
 
 // TermsFull returns a copy of the full structured term list in sorted order
-// (TermAnd first, TermNot second, TermOptional last). Returns nil after Close.
+// (TermAnd first, TermNot second, TermOr-groups third, TermOptional last).
+// Returns nil after Close.
 func (cq *CachedQuery) TermsFull() []Term {
 	if cq.removed {
 		return nil
@@ -165,6 +171,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 	}
 	return &QueryIter{
 		terms:      cq.terms,
+		orGroups:   cq.orGroups,
 		candidates: cq.tables,
 		pos:        -1,
 		cached:     true,
@@ -218,20 +225,21 @@ func (cq *CachedQuery) IsClosed() bool {
 	return cq.removed
 }
 
-// tryMatchTable checks whether t satisfies all terms. If so, and t is not
-// already in cq.tables, appends t. Skips if cq is removed.
+// tryMatchTable checks whether t satisfies all terms and OR-groups. If so, and
+// t is not already in cq.tables, appends t. Skips if cq is removed.
 //
 // Matching predicate:
 //   - TermAnd: t must contain the ID.
 //   - TermNot: t must NOT contain the ID.
+//   - TermOr (via orGroups): t must contain at least one ID from each OR-group.
 //   - TermOptional: no effect on matching.
 //
 // Idempotent: does not add t more than once. The dedup check is defensive;
 // the World guarantees that notifyTableCreated fires at most once per table.
 //
-// Not-term correctness: table signatures are immutable. A table rejected here
-// (because it contained a Not ID) will never gain or lose that ID — no stale
-// cache entries can result from entities migrating through the table.
+// Not/Or-term correctness: table signatures are immutable. A table rejected here
+// will never change its signature — no stale cache entries can result from
+// entities migrating through the table.
 func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	if cq.removed {
 		return
@@ -246,7 +254,19 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 			if t.HasComponent(term.ID) {
 				return
 			}
-			// TermOptional: no effect on matching
+			// TermOptional, TermOr: handled separately below.
+		}
+	}
+	for _, group := range cq.orGroups {
+		matched := false
+		for _, id := range group {
+			if t.HasComponent(id) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return
 		}
 	}
 	// Dedup: defensive guard against duplicate calls.

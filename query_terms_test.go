@@ -707,6 +707,599 @@ func TestCachedQueryFromTermsTermsBackwardCompat(t *testing.T) {
 	}
 }
 
+// ── OR query terms ────────────────────────────────────────────────────────────
+
+// TestOrQueryBasic: With(Pos), Or(Sleep), Or(Work), Or(Play).
+// Entities with exactly one of the Or ids each match; entity with none does not.
+func TestOrQueryBasic(t *testing.T) {
+	type Sleeping struct{}
+	type Working struct{}
+	type Playing struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	sleepID := flecs.RegisterComponent[Sleeping](w)
+	workID := flecs.RegisterComponent[Working](w)
+	playID := flecs.RegisterComponent[Playing](w)
+
+	eSleep := w.NewEntity()
+	flecs.Set(w, eSleep, Position{X: 1})
+	flecs.Set(w, eSleep, Sleeping{})
+
+	eWork := w.NewEntity()
+	flecs.Set(w, eWork, Position{X: 2})
+	flecs.Set(w, eWork, Working{})
+
+	ePlay := w.NewEntity()
+	flecs.Set(w, ePlay, Position{X: 3})
+	flecs.Set(w, ePlay, Playing{})
+
+	eNone := w.NewEntity()
+	flecs.Set(w, eNone, Position{X: 4}) // no activity — should NOT match
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(sleepID),
+		flecs.Or(workID),
+		flecs.Or(playID),
+	)
+
+	matched := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			matched[e] = true
+		}
+	})
+
+	if !matched[eSleep] {
+		t.Error("eSleep should match")
+	}
+	if !matched[eWork] {
+		t.Error("eWork should match")
+	}
+	if !matched[ePlay] {
+		t.Error("ePlay should match")
+	}
+	if matched[eNone] {
+		t.Error("eNone (Position-only) should NOT match")
+	}
+}
+
+// TestOrQueryMultipleGroups: two independent OR-groups separated by a With term.
+// [Or(A), Or(B), With(X), Or(C), Or(D)] → groups {A,B} and {C,D}.
+func TestOrQueryMultipleGroups(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+	type CompX struct{}
+	type CompC struct{}
+	type CompD struct{}
+
+	w := flecs.New()
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+	xID := flecs.RegisterComponent[CompX](w)
+	cID := flecs.RegisterComponent[CompC](w)
+	dID := flecs.RegisterComponent[CompD](w)
+
+	// Matches: has A, X, C.
+	eAXC := w.NewEntity()
+	flecs.Set(w, eAXC, CompA{})
+	flecs.Set(w, eAXC, CompX{})
+	flecs.Set(w, eAXC, CompC{})
+
+	// Matches: has B, X, D.
+	eBXD := w.NewEntity()
+	flecs.Set(w, eBXD, CompB{})
+	flecs.Set(w, eBXD, CompX{})
+	flecs.Set(w, eBXD, CompD{})
+
+	// No match: has A, X but neither C nor D.
+	eAXonly := w.NewEntity()
+	flecs.Set(w, eAXonly, CompA{})
+	flecs.Set(w, eAXonly, CompX{})
+
+	// No match: has A, C but no X.
+	eACnoX := w.NewEntity()
+	flecs.Set(w, eACnoX, CompA{})
+	flecs.Set(w, eACnoX, CompC{})
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.Or(aID),
+		flecs.Or(bID),
+		flecs.With(xID),
+		flecs.Or(cID),
+		flecs.Or(dID),
+	)
+
+	matched := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			matched[e] = true
+		}
+	})
+
+	if !matched[eAXC] {
+		t.Error("eAXC should match (A∈{A,B}, X, C∈{C,D})")
+	}
+	if !matched[eBXD] {
+		t.Error("eBXD should match (B∈{A,B}, X, D∈{C,D})")
+	}
+	if matched[eAXonly] {
+		t.Error("eAXonly should NOT match (missing {C,D})")
+	}
+	if matched[eACnoX] {
+		t.Error("eACnoX should NOT match (missing X and {C,D} group not fully satisfied)")
+	}
+}
+
+// TestOrQuerySingleTermGroup: Or(A) with no adjacent Or behaves like With(A).
+func TestOrQuerySingleTermGroup(t *testing.T) {
+	type CompA struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+
+	eWithA := w.NewEntity()
+	flecs.Set(w, eWithA, Position{X: 1})
+	flecs.Set(w, eWithA, CompA{})
+
+	eWithout := w.NewEntity()
+	flecs.Set(w, eWithout, Position{X: 2}) // no A
+
+	qOr := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Or(aID))
+	qAnd := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(aID))
+
+	count := func(q *flecs.Query) int {
+		n := 0
+		q.Each(func(it *flecs.QueryIter) { n += it.Count() })
+		return n
+	}
+
+	if count(qOr) != count(qAnd) {
+		t.Errorf("single-term Or(A) should behave like With(A): got Or=%d And=%d",
+			count(qOr), count(qAnd))
+	}
+	if count(qOr) != 1 {
+		t.Errorf("want 1 entity (eWithA), got %d", count(qOr))
+	}
+}
+
+// TestOrQueryOrPlusNot: [With(Pos), Or(A), Or(B), Without(Dead)].
+func TestOrQueryOrPlusNot(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+	type Dead struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+	deadID := flecs.RegisterComponent[Dead](w)
+
+	// Matches: Pos, A, no Dead.
+	eA := w.NewEntity()
+	flecs.Set(w, eA, Position{})
+	flecs.Set(w, eA, CompA{})
+
+	// Matches: Pos, B, no Dead.
+	eB := w.NewEntity()
+	flecs.Set(w, eB, Position{})
+	flecs.Set(w, eB, CompB{})
+
+	// No match: Pos, A, Dead.
+	eADead := w.NewEntity()
+	flecs.Set(w, eADead, Position{})
+	flecs.Set(w, eADead, CompA{})
+	flecs.Set(w, eADead, Dead{})
+
+	// No match: Pos, no A/B.
+	eNone := w.NewEntity()
+	flecs.Set(w, eNone, Position{})
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+		flecs.Without(deadID),
+	)
+
+	matched := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			matched[e] = true
+		}
+	})
+
+	if !matched[eA] {
+		t.Error("eA should match")
+	}
+	if !matched[eB] {
+		t.Error("eB should match")
+	}
+	if matched[eADead] {
+		t.Error("eADead should NOT match (has Dead)")
+	}
+	if matched[eNone] {
+		t.Error("eNone should NOT match (missing Or-group)")
+	}
+}
+
+// TestOrQueryOrPlusMaybe: [With(Pos), Or(A), Or(B), Maybe(C)].
+// All entities with (A or B) match; FieldMaybe[C] reports per-table presence.
+func TestOrQueryOrPlusMaybe(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+	type CompC struct{ V int }
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+	cID := flecs.RegisterComponent[CompC](w)
+
+	// Pos + A + C.
+	eAC := w.NewEntity()
+	flecs.Set(w, eAC, Position{})
+	flecs.Set(w, eAC, CompA{})
+	flecs.Set(w, eAC, CompC{V: 7})
+
+	// Pos + B, no C.
+	eB := w.NewEntity()
+	flecs.Set(w, eB, Position{})
+	flecs.Set(w, eB, CompB{})
+
+	// Pos only — should NOT match.
+	eNone := w.NewEntity()
+	flecs.Set(w, eNone, Position{})
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+		flecs.Maybe(cID),
+	)
+
+	type result struct{ hasC bool }
+	byEntity := make(map[flecs.ID]result)
+	q.Each(func(it *flecs.QueryIter) {
+		_, hasC := flecs.FieldMaybe[CompC](it, cID)
+		for _, e := range it.Entities() {
+			byEntity[e] = result{hasC}
+		}
+	})
+
+	if _, ok := byEntity[eAC]; !ok {
+		t.Error("eAC (Pos+A+C) should match")
+	} else if !byEntity[eAC].hasC {
+		t.Error("eAC: want hasC=true")
+	}
+
+	if _, ok := byEntity[eB]; !ok {
+		t.Error("eB (Pos+B) should match")
+	} else if byEntity[eB].hasC {
+		t.Error("eB: want hasC=false")
+	}
+
+	if _, ok := byEntity[eNone]; ok {
+		t.Error("eNone (Pos-only) should NOT match")
+	}
+}
+
+// ── OR panic cases ────────────────────────────────────────────────────────────
+
+func TestOrQueryPanicNoAnd(t *testing.T) {
+	w := flecs.New()
+	type CompA struct{}
+	type CompB struct{}
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for Or-only query (no TermAnd)")
+		}
+	}()
+	flecs.NewQueryFromTerms(w, flecs.Or(aID), flecs.Or(bID))
+}
+
+func TestOrQueryPanicDuplicateInGroup(t *testing.T) {
+	w := flecs.New()
+	type CompA struct{}
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for Or(A), Or(A) same group")
+		}
+	}()
+	flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Or(aID), flecs.Or(aID))
+}
+
+func TestOrQueryPanicCrossKindDuplicate(t *testing.T) {
+	w := flecs.New()
+	type CompA struct{}
+	aID := flecs.RegisterComponent[CompA](w)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for With(A) + Or(A)")
+		}
+	}()
+	flecs.NewQueryFromTerms(w, flecs.With(aID), flecs.Or(aID))
+}
+
+func TestOrQueryPanicZeroID(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for Or(0)")
+		}
+	}()
+	flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Or(0))
+}
+
+// ── CachedQuery with Or ───────────────────────────────────────────────────────
+
+func TestCachedQueryWithOr(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+
+	// Create entities before the cached query.
+	eA := w.NewEntity()
+	flecs.Set(w, eA, Position{})
+	flecs.Set(w, eA, CompA{})
+
+	eB := w.NewEntity()
+	flecs.Set(w, eB, Position{})
+	flecs.Set(w, eB, CompB{})
+
+	cq := flecs.NewCachedQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+	)
+	defer cq.Close()
+
+	if cq.Count() < 1 {
+		t.Fatalf("want ≥1 matching table(s), got %d", cq.Count())
+	}
+	initialTableCount := cq.Count()
+
+	matched := make(map[flecs.ID]bool)
+	cq.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			matched[e] = true
+		}
+	})
+	if !matched[eA] || !matched[eB] {
+		t.Error("both eA and eB should be in cached query results")
+	}
+
+	// New entity with neither A nor B must NOT grow the cache.
+	eNeither := w.NewEntity()
+	flecs.Set(w, eNeither, Position{})
+
+	if cq.Count() != initialTableCount {
+		t.Errorf("cache should not grow for Pos-only entity: want %d tables, got %d",
+			initialTableCount, cq.Count())
+	}
+
+	// Sanity: eNeither must not appear in results.
+	matched2 := make(map[flecs.ID]bool)
+	cq.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			matched2[e] = true
+		}
+	})
+	if matched2[eNeither] {
+		t.Error("eNeither (Pos-only) should not appear in Or-cached query results")
+	}
+}
+
+// TestCachedQueryWithOrNewMatchingTable: after construction, a new table that
+// satisfies the Or-group must be added to the cache automatically.
+func TestCachedQueryWithOrNewMatchingTable(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+	type Extra struct{ V int }
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+	_ = flecs.RegisterComponent[Extra](w) // registers Extra so migration tables can be created
+
+	cq := flecs.NewCachedQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+	)
+	defer cq.Close()
+
+	if cq.Count() != 0 {
+		t.Fatalf("empty world: want 0 tables, got %d", cq.Count())
+	}
+
+	// Create a [Pos, A] entity → new table, should be added.
+	e1 := w.NewEntity()
+	flecs.Set(w, e1, Position{})
+	flecs.Set(w, e1, CompA{})
+	if cq.Count() != 1 {
+		t.Fatalf("after [Pos,A] entity: want 1 table, got %d", cq.Count())
+	}
+
+	// Add Extra to e1 → migrates to [Pos,A,Extra], new table, should be added.
+	flecs.Set(w, e1, Extra{V: 5})
+	if cq.Count() != 2 {
+		t.Fatalf("after [Pos,A,Extra] migration: want 2 tables, got %d", cq.Count())
+	}
+
+	// Create [Pos, Extra] entity → table lacks A and B, should NOT be added.
+	e2 := w.NewEntity()
+	flecs.Set(w, e2, Position{})
+	flecs.Set(w, e2, Extra{V: 9})
+	if cq.Count() != 2 {
+		t.Fatalf("after [Pos,Extra] entity: want 2 tables (unchanged), got %d", cq.Count())
+	}
+}
+
+// ── FieldMaybe and Field on Or-group ids ─────────────────────────────────────
+
+// TestOrQueryFieldMaybe: entity with A but not B; FieldMaybe[A] = (slice, true),
+// FieldMaybe[B] = (nil, false).
+func TestOrQueryFieldMaybe(t *testing.T) {
+	type CompA struct{ V int }
+	type CompB struct{ V int }
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{X: 1})
+	flecs.Set(w, e, CompA{V: 42})
+	// no CompB
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+	)
+
+	found := false
+	q.Each(func(it *flecs.QueryIter) {
+		for _, ent := range it.Entities() {
+			if ent != e {
+				continue
+			}
+			found = true
+			aSlice, hasA := flecs.FieldMaybe[CompA](it, aID)
+			if !hasA {
+				t.Error("want hasA=true")
+			}
+			if len(aSlice) == 0 {
+				t.Error("want non-empty CompA slice")
+			}
+
+			_, hasB := flecs.FieldMaybe[CompB](it, bID)
+			if hasB {
+				t.Error("want hasB=false (entity lacks CompB)")
+			}
+		}
+	})
+	if !found {
+		t.Fatal("entity e not visited by query")
+	}
+}
+
+// TestOrQueryFieldPanicsWhenAbsent: Field[B] on an entity that has A but not B
+// must panic, enforcing FieldMaybe usage for Or-group ids.
+func TestOrQueryFieldPanicsWhenAbsent(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+
+	e := w.NewEntity()
+	flecs.Set(w, e, Position{})
+	flecs.Set(w, e, CompA{})
+	// no CompB
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+	)
+
+	foundPanic := false
+	q.Each(func(it *flecs.QueryIter) {
+		for _, ent := range it.Entities() {
+			if ent != e {
+				continue
+			}
+			_, hasB := flecs.FieldMaybe[CompB](it, bID)
+			if hasB {
+				return // wrong table, skip
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						foundPanic = true
+					}
+				}()
+				flecs.Field[CompB](it, bID)
+			}()
+		}
+	})
+	if !foundPanic {
+		t.Error("Field[CompB] on an entity lacking CompB should panic")
+	}
+}
+
+// ── TermsFull ordering with Or terms ─────────────────────────────────────────
+
+func TestOrQueryTermsFull(t *testing.T) {
+	type CompA struct{}
+	type CompB struct{}
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
+	deadID := w.NewEntity()
+	aID := flecs.RegisterComponent[CompA](w)
+	bID := flecs.RegisterComponent[CompB](w)
+
+	// [With(pos), Without(dead), Or(a), Or(b), Maybe(vel)]
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Without(deadID),
+		flecs.Or(aID),
+		flecs.Or(bID),
+		flecs.Maybe(velID),
+	)
+
+	full := q.TermsFull()
+	if len(full) != 5 {
+		t.Fatalf("want 5 terms, got %d: %+v", len(full), full)
+	}
+
+	// Expected order: And(pos), Not(dead), Or(a or b, sorted by ID), Optional(vel).
+	if full[0].Kind != flecs.TermAnd {
+		t.Errorf("full[0] should be TermAnd, got %v", full[0].Kind)
+	}
+	if full[1].Kind != flecs.TermNot {
+		t.Errorf("full[1] should be TermNot, got %v", full[1].Kind)
+	}
+	if full[2].Kind != flecs.TermOr {
+		t.Errorf("full[2] should be TermOr, got %v", full[2].Kind)
+	}
+	if full[3].Kind != flecs.TermOr {
+		t.Errorf("full[3] should be TermOr, got %v", full[3].Kind)
+	}
+	if full[4].Kind != flecs.TermOptional {
+		t.Errorf("full[4] should be TermOptional, got %v", full[4].Kind)
+	}
+
+	// Or terms should be sorted by ID within the group.
+	if full[2].ID >= full[3].ID {
+		t.Errorf("Or terms should be sorted by ID: full[2].ID=%v full[3].ID=%v", full[2].ID, full[3].ID)
+	}
+}
+
 // ── FieldMaybe works in CachedQuery iter ─────────────────────────────────────
 
 func TestCachedQueryFromTermsFieldMaybe(t *testing.T) {
