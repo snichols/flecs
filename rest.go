@@ -254,8 +254,12 @@ func restSnapshotPut(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "request body is not valid JSON")
 			return
 		}
-		if err := w.UnmarshalJSON(body); err != nil {
-			writeError(rw, http.StatusBadRequest, err.Error())
+		var unmarshalErr error
+		w.Write(func(fw *Writer) {
+			unmarshalErr = w.UnmarshalJSON(body)
+		})
+		if unmarshalErr != nil {
+			writeError(rw, http.StatusBadRequest, unmarshalErr.Error())
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)

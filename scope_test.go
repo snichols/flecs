@@ -205,9 +205,9 @@ func TestGetRefValidInsideScopeOnly(t *testing.T) {
 	})
 }
 
-// TestHookReceivesWriterContext verifies that a hook registered via OnSet
+// TestHookReceivesWriter verifies that a hook registered via OnSet
 // fires during flush of a Write scope and receives a non-nil *Writer.
-func TestHookReceivesWriterContext(t *testing.T) {
+func TestHookReceivesWriter(t *testing.T) {
 	w := flecs.New()
 	var e flecs.ID
 	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
@@ -375,6 +375,10 @@ func TestReaderMethods(t *testing.T) {
 		if fr.IsAlive(e3) {
 			t.Error("e3 should be dead after Write.Delete")
 		}
+		// ParentOf on a dead entity hits the nil-rec early-return path.
+		_, _ = fr.ParentOf(e3)
+		// EachChild with a fn that returns false exercises the early-stop path.
+		fr.EachChild(e1, func(_ flecs.ID) bool { return false })
 	})
 }
 

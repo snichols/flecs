@@ -352,9 +352,9 @@ func TestSetPairFiresPairTypeInfoHooks(t *testing.T) {
 	}
 }
 
-// ── TestHookReceivesWriter verifies that the *Writer passed to hooks is non-nil ──
-
-func TestHookReceivesWriter(t *testing.T) {
+// TestHookReceivesWriterDirect checks that a hook callback receives a non-nil
+// *Writer when triggered via a direct Set (outside a Write scope).
+func TestHookReceivesWriterDirect(t *testing.T) {
 	w := flecs.New()
 	var gotWriter *flecs.Writer
 	flecs.OnSet[Position](w, func(fw *flecs.Writer, _ flecs.ID, _ Position) {
