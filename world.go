@@ -47,6 +47,7 @@ type World struct {
 	frameCount       uint64                          // number of Progress calls
 	fixedTimestep    float32                         // fixed step size; 0 means disabled
 	fixedAccumulator float32                         // internal accumulator for fixed-step dispatch
+	lastFramePhases  [4]PhaseStats                   // per-phase timing from the most recent Progress call
 }
 
 // New initializes and returns an empty World.

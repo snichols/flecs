@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.0 — 2026-05-11
+
+Stats and per-phase frame timing for tooling and observability. No breaking
+changes; all existing public signatures are unchanged.
+
+### Added
+
+- **Stats and observability API** — `World.Stats()` returns a `Stats` snapshot
+  with world-level counters (`EntityCount`, `TableCount`, `QueryCount`,
+  `CachedQueryCount`, `SystemCount`, `FrameCount`, `Time`), per-phase wall-clock
+  timing from the most recent `Progress` call (`LastFramePhases []PhaseStats`),
+  and per-component table/entity counts (`ComponentStats []ComponentStat`).
+  `PhaseStats` holds `Name`, `SystemCount`, and `Duration` for each of the four
+  pipeline phases (PreUpdate[0], OnFixedUpdate[1], OnUpdate[2], PostUpdate[3]).
+  `OnFixedUpdate` sums durations across all fixed-step iterations. Phases with no
+  active systems report `Duration == 0`. `LastFramePhases` is nil until `Progress`
+  is called at least once.
+  `World.SystemCountInPhase(phase ID) int` is a convenience method for tooling;
+  panics on non-built-in phase IDs (mirrors `NewSystemInPhase` validation).
+  `QueryCount` is always 0 in this release (uncached queries are one-shot values
+  the world does not track). No new third-party dependencies; stdlib `time` only.
+
+---
+
 ## v0.4.0 — 2026-05-10
 
 Complete JSON serialization: ChildOf hierarchies, IsA prefabs, and custom
