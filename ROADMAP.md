@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (v0.2)
+## Shipped (v0.4)
 
 The following features are available in the current release:
 
@@ -20,6 +20,9 @@ The following features are available in the current release:
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
 - **NOT and Optional query terms** — `With`/`Without`/`Maybe` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]`.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
+- **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
+- **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
+- **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
 
 ## Future Work
 
@@ -32,9 +35,7 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 - Query-time IsA inheritance (match entities whose prefab has a component)
 
 ### Addons
-- Meta / reflection (runtime type introspection)
 - REST API
-- JSON serialization
 - Stats / metrics
 - Structured logging
 

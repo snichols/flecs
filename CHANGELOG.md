@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — 2026-05-10
+
+Complete JSON serialization: ChildOf hierarchies, IsA prefabs, and custom
+pair components (data + tag-only) all round-trip. The v1 format is preserved
+— all new fields are additive `omitempty`. No breaking changes.
 
 ### Added
 
-- **Phase 9.2.4: Custom pair component serialization** — `World.MarshalJSON`
+- **Custom pair component serialization** — `World.MarshalJSON`
   now serializes custom pair components (non-ChildOf, non-IsA) into a `"pairs"`
   array on each entity. Tag-only pairs emit `{"rel":<serial>,"tgt":<serial>}`;
   data-bearing pairs add `"dataType"` (the base Go type's `reflect.Type.String()`)
@@ -16,14 +20,14 @@
   is the corresponding internal helper. ChildOf and IsA pairs continue to use
   the dedicated `parent`/`prefabs` fields and are not duplicated in `pairs`.
   v1 format unchanged (additive field). Coverage ≥ 96.4% (flecs), 100% (component).
-- **Phase 9.2.3: IsA prefab serialization** — `World.MarshalJSON` now
+- **IsA prefab serialization** — `World.MarshalJSON` now
   serializes IsA relationships as a `"prefabs"` array of serials (omitted when
   empty; v1 format unchanged — the field is additive). Topo-sort is generalized
   to a combined ChildOf+IsA predecessor graph so prefabs always appear before
   their instances. `World.UnmarshalJSON` restores IsA relationships after ChildOf
   and before components, preserving first-prefab-wins inheritance semantics.
   Cycle detection spans both edge kinds in a single DFS.
-- **Phase 9.2.2: ChildOf hierarchy serialization** — `World.MarshalJSON` now
+- **ChildOf hierarchy serialization** — `World.MarshalJSON` now
   serializes single-parent `(ChildOf, parent)` relationships as a `"parent"`
   serial field (omitted when absent; v1 format unchanged). Entities are emitted
   in topological order (parents before children) via DFS, with sibling order
