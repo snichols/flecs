@@ -161,7 +161,8 @@ state during the window, so all ECS tables are safe to read concurrently.
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
-| Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` |
+| Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
+| Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
@@ -189,6 +190,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Up/Down traversal in queries | ❌ deferred | ✅ |
 | Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
 | Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
+| Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates scale linearly; deferred mutations serialize on shared queue until Phase 11.0) | ✅ |
 | REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |
 

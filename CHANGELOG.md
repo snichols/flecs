@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — v0.13.0 — Within-System Multi-Threaded Dispatch
+
+Port of C flecs' `multi_threaded` system flag. When a system calls
+`SetMultiThreaded(true)` and `World.SetWorkerCount(n) > 0`, the dispatcher
+fans out N concurrent worker jobs, each iterating a disjoint row slice of every
+matched table. Workers never share memory; in-place `Field[T]` updates scale
+linearly with core count. Deferred structural mutations (Set, Delete, AddID)
+remain safe via the existing mutex-protected queue but serialize under
+contention — Phase 11.0 (task #40) adds per-stage queues to fix that.
+
+### Added
+
+- **`(*System).SetMultiThreaded(bool)`** / **`(*System).MultiThreaded() bool`** — flag a system for within-system parallel dispatch. Default `false`.
+- **Iter clipping in `QueryIter`** — internal `clippedCopy(workerIdx, workerTotal)` method produces N independent iters, each seeing `[first, first+count)` rows per table. `Field[T]`, `FieldMaybe[T]`, `Entities()`, and `Count()` all respect the clipped range transparently.
+- **Multi-threaded dispatcher branch in `runPhase`** — multi-threaded systems are dispatched first (before parallel-batch logic), fan out N worker goroutines, and `sync.WaitGroup`-wait before continuing. Cannot batch with parallel siblings.
+- **Partition formula** — matches C `src/iter.c:970-993`: `first = (count/N)*i + min(i, count%N)`, `worker_count = count/N + (i < count%N ? 1 : 0)`. Workers with `count == 0` skip the table.
+
+### Tests
+
+- `TestMultiThreadedSystemProcessesEachEntityOnce` — 100k entities, WorkerCount ∈ {1,2,4,8}, in-place increment, sum verified.
+- `TestMultiThreadedSystemCannotBatchWithSiblings` — timing test verifying the parallel sibling waits for all MT workers.
+- `TestMultiThreadedSystemUnevenSplit` — 1000 rows / 3 workers → {334, 333, 333}.
+- `TestMultiThreadedSystemEmptyWorkers` — 2 rows / 4 workers → 2 active, 2 skip.
+- `TestMultiThreadedSystemWithDeferredMutations` — workers calling `w.Delete`; all deletes applied correctly.
+- All pass under `-race -count=10`.
+
+### Benchmarks
+
+- `BenchmarkMultiThreadedSystem` — 100k Vec3 entities, workers ∈ {1,2,4}; in-place Add; near-linear speedup expected.
+
 ## v0.12.0 — 2026-05-11 — Exclusive Access Ownership Assertion
 
 Always-on ownership assertion: every public `World` method panics with

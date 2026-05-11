@@ -322,6 +322,38 @@
 // parallel system are safe: they are queued through the deferred mechanism
 // (mutex-protected) and applied after the entire phase completes.
 //
+// # Multi-Threaded Systems
+//
+// [System.SetMultiThreaded] provides within-system parallelism: a single
+// system's iter is split across all workers, each receiving a disjoint row
+// slice of every matched table. Unlike [System.SetParallel] (which runs
+// different systems concurrently), SetMultiThreaded splits ONE system across N
+// goroutines. The two flags are orthogonal; a multi-threaded system cannot
+// batch with parallel siblings.
+//
+//	cq := flecs.NewCachedQuery(w, vecID)
+//	sys := flecs.NewSystem(w, cq, func(dt float32, it *flecs.QueryIter) {
+//	    for it.Next() {
+//	        vecs := flecs.Field[Vec3](it, vecID)
+//	        for i := range vecs { // only THIS worker's rows
+//	            vecs[i].X += dt
+//	        }
+//	    }
+//	})
+//	sys.SetMultiThreaded(true)
+//
+// Partition formula (matches C flecs src/iter.c:970-993): for worker i of N
+// on a table with count rows, first = (count/N)*i + min(i, count%N) and
+// worker_count = count/N + (i < count%N ? 1 : 0). Workers whose count is zero
+// skip the table silently. [Field], [FieldMaybe], and [QueryIter.Entities] all
+// return the worker's slice; the caller sees no difference from a full iter.
+//
+// In-place updates (mutating Field[T] slice elements directly) scale linearly
+// because workers never touch the same memory. Deferred structural mutations
+// (Set, Delete, AddID from inside the loop) are safe but contend on the single
+// mutex-protected defer queue; expect sub-linear scaling for those paths until
+// Phase 11.0 (per-stage command queues, task #40) ships.
+//
 // # Stats and Observability
 //
 // [World.Stats] returns a snapshot of world-level counters and per-phase frame

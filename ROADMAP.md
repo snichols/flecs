@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (v0.12)
+## Shipped (through v0.13)
 
 The following features are available in the current release:
 
@@ -24,6 +24,7 @@ The following features are available in the current release:
 - **REST API addon** — `NewRESTHandler(w)` returns an `http.Handler` exposing world inspection (stats, components, entities) and snapshot save/load over HTTP. Stdlib `net/http` only; users provide their own `*http.Server`.
 - **Structured logging** — `World.SetLogger(*slog.Logger)` installs an optional `log/slog` lifecycle logger. Ten DEBUG-level event sites (entity created/deleted, component registered, table created, system added/closed, observer registered/unsubscribed, snapshot serialized/loaded). Nil-default; zero overhead on the hot path when no logger is set.
 - **Opt-in parallel system dispatch** — `System.SetParallel(true)` + `World.SetWorkerCount(n)` runs parallel-safe systems in goroutines from a persistent worker pool. Systems with overlapping write sets are forced serial by the dispatcher (over-approximation; user can override via `System.SetWriteSet`). Defer queue is mutex-protected so deferred mutations from parallel systems are race-free. WorkerCount=0 (default) is bit-for-bit identical to v0.9.0 single-threaded behavior.
+- **Within-system multi-threaded dispatch** — `System.SetMultiThreaded(true)` + `World.SetWorkerCount(n)` splits a single system's iter across N workers, each receiving a disjoint row slice of every matched table. In-place `Field[T]` updates scale linearly with core count. Deferred mutations (Set/Delete) are safe but contend on the shared queue; Phase 11.0 (task #40) adds per-stage queues for linear scaling of deferred paths.
 - **Readonly concurrency window** — `World.ReadonlyBegin()` / `ReadonlyEnd()` / `Readonly(fn)` opens a window during which concurrent reads from any goroutine are safe. Faithful port of C flecs `ecs_readonly_begin`/`ecs_readonly_end`: no mutex on world state; an atomic flag plus the existing deferred-command queue route all writes during the window to a buffered queue that flushes on close. Readers (`Each1`/`Each2`/`Each3`/`Each4`, `Iter`, cached `Iter`) take no locks. REST handler GETs wrap their bodies in `Readonly` automatically.
 - **Exclusive-access ownership assertion** — always-on goroutine-safety check. `World.ExclusiveAccessBegin(name)` claims the world for the calling goroutine; any subsequent mutation or read from another goroutine panics with `ErrExclusiveAccessViolation`. `ExclusiveAccessEnd(lockWorld bool)` releases the claim (optionally entering a write-locked state where all goroutines receive a panic on mutation but reads still pass). Goroutine ID via `github.com/petermattis/goid`; common-case overhead is one `atomic.Load` per public method. No build tag — the check is on in every build.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
@@ -43,9 +44,8 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 - (all originally-planned addons shipped)
 
 ### Concurrency
-- Per-table parallelism within a single system (currently one system runs serially across its candidate tables)
 - Lock-free defer queue (currently mutex-protected)
-- Per-goroutine command stages (currently a single mutex-protected queue; C flecs uses per-stage queues)
+- Per-goroutine command stages (currently a single mutex-protected queue; C flecs uses per-stage queues — Phase 11.0, task #40 — will unlock linear scaling for deferred mutations from multi-threaded systems)
 - Debug-mode `exclusiveAccess` goroutine-ID assert (analog of C `FLECS_EXCLUSIVE_ACCESS`)
 
 ### Performance
