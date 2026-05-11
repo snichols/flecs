@@ -212,3 +212,42 @@ The existing benchmarks (`BenchmarkGetMissingComponent`, `BenchmarkGetExistingCo
   expected; Phase 8.3 can evaluate arena/pool strategies.
 - **`Field[T]`**: 24 B / 1 alloc per call — the reflect path allocates one
   `[]T` slice header per column access. An `unsafe.Slice` path would eliminate this.
+
+---
+
+## Phase 8.4 results
+
+**Root cause of Add/Remove asymmetry in `migrate()`:**
+
+Three allocation sites on the Remove path that were absent (or fewer) on the Add path:
+
+1. `world.go:438` — `newSig := make([]ID, 0, len(oldSig)+1)` always ran, even on edge-cache hits. Add and Remove both paid this; it was 1 of the 2 allocs in Add and 1 of the 4 in SwapComponent.
+
+2. `column.go:93` — `c.slice = c.slice.Slice(0, n+1)` in `appendZero()`. Each `reflect.Value.Slice()` call allocates a heap-resident slice header. Both paths pay this once (the destination column grows by one row). 1 alloc.
+
+3. `column.go:131` — `c.slice = c.slice.Slice(0, last)` in `removeSwap()`. Same issue, one per source column being removed. SwapComponent removes from a 2-column source table → 2 allocs here. Add removes from the empty table (0 columns) → 0 allocs.
+
+Summary: Add ([] → [benchPos]) had 2 allocs; SwapComponent ([benchPos, benchVel] → [benchPos]) had 4 allocs = 1 (newSig) + 1 (appendZero Slice) + 2 (removeSwap Slice for each source column). The extra 2 allocs were structural: SwapComponent's source table has 2 data columns vs Add's empty-table source.
+
+**Fixes applied:**
+
+A. `world.go`: moved the edge-cache check before `newSig` computation. On a cache hit the `make([]ID, ...)` is never reached, saving 1 alloc per repeated single-component migration.
+
+B. `column.go`: added `n int` to `Column` to track logical row count separately from `c.slice`. `c.slice` now always has `Len() == Cap()` (the full backing array). `appendZero` and `removeSwap` update `c.n` directly instead of calling `reflect.Value.Slice()`, eliminating the heap allocation per call.
+
+**Before / After (benchstat, 10 runs, same machine):**
+
+```
+                             │   before    │              after               │
+                             │   sec/op    │   sec/op     vs base             │
+AddOneComponent_CacheHit-128   214.8n ± 3%  143.7n ± 4%  -33.14% (p=0.000)
+RemoveOneComponent-128         161.5n ± 2%   87.2n ± 7%  -45.97% (p=0.000)
+SwapComponent-128              287.6n ± 3%  168.2n ± 2%  -41.54% (p=0.000)
+
+                             │  allocs/op  │  allocs/op  vs base              │
+AddOneComponent_CacheHit-128    2 ± 0%       0 ± 0%      -100.00% (p=0.000)
+RemoveOneComponent-128          2 ± 0%       0 ± 0%      -100.00% (p=0.000)
+SwapComponent-128               4 ± 0%       0 ± 0%      -100.00% (p=0.000)
+```
+
+All three benchmarks reach **0 allocs/op** on the cache-hit steady-state path. The remaining `B/op` (amortized memory from table growth) is from Go's `append` doubling on the plain `[]ID` entity column and from periodic `reflect.MakeSlice` growth in the component columns — both amortized to sub-1 alloc/op over many iterations.
