@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (v0.11)
+## Shipped (v0.12)
 
 The following features are available in the current release:
 
@@ -25,6 +25,7 @@ The following features are available in the current release:
 - **Structured logging** — `World.SetLogger(*slog.Logger)` installs an optional `log/slog` lifecycle logger. Ten DEBUG-level event sites (entity created/deleted, component registered, table created, system added/closed, observer registered/unsubscribed, snapshot serialized/loaded). Nil-default; zero overhead on the hot path when no logger is set.
 - **Opt-in parallel system dispatch** — `System.SetParallel(true)` + `World.SetWorkerCount(n)` runs parallel-safe systems in goroutines from a persistent worker pool. Systems with overlapping write sets are forced serial by the dispatcher (over-approximation; user can override via `System.SetWriteSet`). Defer queue is mutex-protected so deferred mutations from parallel systems are race-free. WorkerCount=0 (default) is bit-for-bit identical to v0.9.0 single-threaded behavior.
 - **Readonly concurrency window** — `World.ReadonlyBegin()` / `ReadonlyEnd()` / `Readonly(fn)` opens a window during which concurrent reads from any goroutine are safe. Faithful port of C flecs `ecs_readonly_begin`/`ecs_readonly_end`: no mutex on world state; an atomic flag plus the existing deferred-command queue route all writes during the window to a buffered queue that flushes on close. Readers (`Each1`/`Each2`/`Each3`/`Each4`, `Iter`, cached `Iter`) take no locks. REST handler GETs wrap their bodies in `Readonly` automatically.
+- **Exclusive-access ownership assertion** — always-on goroutine-safety check. `World.ExclusiveAccessBegin(name)` claims the world for the calling goroutine; any subsequent mutation or read from another goroutine panics with `ErrExclusiveAccessViolation`. `ExclusiveAccessEnd(lockWorld bool)` releases the claim (optionally entering a write-locked state where all goroutines receive a panic on mutation but reads still pass). Goroutine ID via `github.com/petermattis/goid`; common-case overhead is one `atomic.Load` per public method. No build tag — the check is on in every build.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.12.0 — Exclusive Access Ownership Assertion
+## v0.12.0 — 2026-05-11 — Exclusive Access Ownership Assertion
 
 Always-on ownership assertion: every public `World` method panics with
 `ErrExclusiveAccessViolation` if called from a goroutine other than the one that
