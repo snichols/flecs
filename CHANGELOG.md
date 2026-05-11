@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Phase 9.2.3: IsA prefab serialization** — `World.MarshalJSON` now
+  serializes IsA relationships as a `"prefabs"` array of serials (omitted when
+  empty; v1 format unchanged — the field is additive). Topo-sort is generalized
+  to a combined ChildOf+IsA predecessor graph so prefabs always appear before
+  their instances. `World.UnmarshalJSON` restores IsA relationships after ChildOf
+  and before components, preserving first-prefab-wins inheritance semantics.
+  Cycle detection spans both edge kinds in a single DFS.
 - **Phase 9.2.2: ChildOf hierarchy serialization** — `World.MarshalJSON` now
   serializes single-parent `(ChildOf, parent)` relationships as a `"parent"`
   serial field (omitted when absent; v1 format unchanged). Entities are emitted

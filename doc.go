@@ -119,15 +119,17 @@
 //
 // [World.MarshalJSON] and [World.UnmarshalJSON] implement [json.Marshaler] and
 // [json.Unmarshaler] for world persistence. Entities, names, ChildOf
-// parent-child hierarchies, and non-pair components are saved and restored.
-// IsA prefab relationships and custom pair components are not serialized in
-// this release (Phase 9.2.3–9.2.4).
+// parent-child hierarchies, IsA prefab relationships, and non-pair components
+// are saved and restored. Custom pair components are not serialized (Phase
+// 9.2.4).
 //
-// The v1 JSON format uses a "parent" field (omitted when zero) that holds the
-// serial number of the entity's ChildOf parent. Entities are emitted in
-// topological order (parents before children), so a single sequential pass
-// restores the full hierarchy. Only the first ChildOf parent is serialized for
-// entities that have multiple ChildOf relationships (a rare configuration).
+// The v1 JSON format uses a "parent" field (serial of the ChildOf parent,
+// omitted when absent) and an optional "prefabs" field (array of IsA target
+// serials in EachPrefab order, omitted when empty). Entities are emitted in
+// topological order over the combined ChildOf+IsA predecessor graph (parents
+// and prefabs before their dependents), so a single sequential pass restores
+// the full hierarchy. First-prefab-wins inheritance semantics are preserved by
+// the "prefabs" array order.
 //
 // All component types must be pre-registered before calling UnmarshalJSON:
 //
@@ -141,6 +143,26 @@
 //	flecs.RegisterComponent[Position](w2)
 //	flecs.RegisterComponent[Velocity](w2)
 //	err = w2.UnmarshalJSON(data)
+//
+// IsA prefab example — a prefab entity is serialized before its instances, and
+// inheritance is restored transparently after UnmarshalJSON:
+//
+//	prefab := w.NewEntity()
+//	flecs.Set(w, prefab, Position{X: 1, Y: 1})
+//
+//	inst := w.NewEntity()
+//	flecs.AddID(w, inst, flecs.MakePair(w.IsA(), prefab))
+//
+//	data, _ := w.MarshalJSON()
+//	// JSON: {"version":1,"entities":[
+//	//   {"serial":1,"components":{"pkg.Position":{"X":1,"Y":1}}},
+//	//   {"serial":2,"prefabs":[1]}
+//	// ]}
+//
+//	w2 := flecs.New()
+//	flecs.RegisterComponent[Position](w2)
+//	w2.UnmarshalJSON(data)
+//	// flecs.Get[Position](w2, restoredInst) returns Position{1, 1}.
 //
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs
