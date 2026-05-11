@@ -71,7 +71,7 @@ fans out N concurrent worker jobs, each iterating a disjoint row slice of every
 matched table. Workers never share memory; in-place `Field[T]` updates scale
 linearly with core count. Deferred structural mutations (Set, Delete, AddID)
 remain safe via the existing mutex-protected queue but serialize under
-contention — Phase 11.0 (task #40) adds per-stage queues to fix that.
+contention — a future per-stage-queue phase will fix that.
 
 ### Added
 

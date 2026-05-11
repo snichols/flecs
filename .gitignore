@@ -2,6 +2,8 @@
 *.out
 coverage.txt
 coverage.html
+cover.html
+cover.out
 
 # Compiled test binaries
 *.test
