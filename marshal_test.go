@@ -1328,3 +1328,539 @@ func TestMarshalIsATwoStepRoundTrip(t *testing.T) {
 		t.Fatalf("expected exactly 1 entity with prefabs in each marshal: got %d, %d", prefabCount1, prefabCount2)
 	}
 }
+
+// ── Phase 9.2.4: Custom pair component serialization tests ────────────────────
+
+type marshalEdge struct{ Weight float32 }
+type marshalEdge2 struct{ Label string }
+
+func TestMarshalTagOnlyPairRoundTrip(t *testing.T) {
+	w := flecs.New()
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+	flecs.AddID(w, alice, flecs.MakePair(follows, bob))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	w2 := flecs.New()
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	// Find the three user entities: follows, alice, bob in topo order.
+	skip := nonDataEntities(w2)
+	var ents []flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; !ok {
+			ents = append(ents, e)
+		}
+		return true
+	})
+	if len(ents) != 3 {
+		t.Fatalf("expected 3 user entities, got %d", len(ents))
+	}
+	// The pair (follows, bob) should exist on alice. We verify by checking any
+	// entity has a pair. Since the entities are anonymous we check via JSON structure.
+	var jw struct {
+		Entities []struct {
+			Pairs []struct {
+				Rel int `json:"rel"`
+				Tgt int `json:"tgt"`
+			} `json:"pairs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	hasPair := false
+	for _, e := range jw.Entities {
+		if len(e.Pairs) > 0 {
+			hasPair = true
+			if e.Pairs[0].Rel == 0 || e.Pairs[0].Tgt == 0 {
+				t.Errorf("pair has zero rel or tgt: %+v", e.Pairs[0])
+			}
+		}
+	}
+	if !hasPair {
+		t.Fatal("no entity has pairs in JSON")
+	}
+
+	// Verify pair is present in w2: one entity should have a pair component.
+	found := false
+	for _, e := range ents {
+		comps := w2.EntityComponents(e)
+		for _, cid := range comps {
+			if cid.IsPair() {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no entity has a pair component after unmarshal")
+	}
+}
+
+func TestMarshalDataBearingPairRoundTrip(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+	flecs.SetPair[marshalEdge](w, alice, follows, bob, marshalEdge{Weight: 0.8})
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	// Verify pairs array in JSON has dataType set.
+	var jw struct {
+		Entities []struct {
+			Pairs []struct {
+				Rel      int    `json:"rel"`
+				Tgt      int    `json:"tgt"`
+				DataType string `json:"dataType"`
+			} `json:"pairs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var pairEntry *struct {
+		Rel      int    `json:"rel"`
+		Tgt      int    `json:"tgt"`
+		DataType string `json:"dataType"`
+	}
+	for i := range jw.Entities {
+		for j := range jw.Entities[i].Pairs {
+			pairEntry = &jw.Entities[i].Pairs[j]
+		}
+	}
+	if pairEntry == nil {
+		t.Fatal("no pair found in JSON")
+	}
+	if !strings.Contains(pairEntry.DataType, "marshalEdge") {
+		t.Errorf("expected dataType to contain 'marshalEdge', got %q", pairEntry.DataType)
+	}
+
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	// Find alice (the entity with a pair).
+	skip := nonDataEntities(w2)
+	var aliceID2 flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; ok {
+			return true
+		}
+		for _, cid := range w2.EntityComponents(e) {
+			if cid.IsPair() {
+				aliceID2 = e
+			}
+		}
+		return true
+	})
+	if aliceID2 == 0 {
+		t.Fatal("no entity with pair found after unmarshal")
+	}
+
+	// Extract follows2 and bob2 from the pair.
+	var follows2, bob2 flecs.ID
+	for _, cid := range w2.EntityComponents(aliceID2) {
+		if cid.IsPair() {
+			follows2 = cid.First()
+			bob2 = cid.Second()
+		}
+	}
+	edge, ok := flecs.GetPair[marshalEdge](w2, aliceID2, follows2, bob2)
+	if !ok {
+		t.Fatal("expected marshalEdge pair on restored alice")
+	}
+	if edge.Weight != 0.8 {
+		t.Fatalf("edge weight: got %v, want 0.8", edge.Weight)
+	}
+}
+
+func TestMarshalMixedChildOfIsAPairRoundTrip(t *testing.T) {
+	// One entity has ChildOf(parent) + IsA(prefab) + custom pair(follows, bob).
+	// All three must serialize via their respective fields and round-trip correctly.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	parent := w.NewEntity()
+	w.SetName(parent, "parent")
+	follows := w.NewEntity()
+	w.SetName(follows, "follows")
+	bob := w.NewEntity()
+	w.SetName(bob, "bob")
+	alice := w.NewEntity()
+	w.SetName(alice, "alice")
+	flecs.AddID(w, alice, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w, alice, flecs.MakePair(w.IsA(), prefab))
+	flecs.SetPair[marshalEdge](w, alice, follows, bob, marshalEdge{Weight: 1.5})
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Name    string `json:"name"`
+			Parent  int    `json:"parent"`
+			Prefabs []int  `json:"prefabs"`
+			Pairs   []struct {
+				DataType string `json:"dataType"`
+			} `json:"pairs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var aliceEntry *struct {
+		Name    string `json:"name"`
+		Parent  int    `json:"parent"`
+		Prefabs []int  `json:"prefabs"`
+		Pairs   []struct {
+			DataType string `json:"dataType"`
+		} `json:"pairs"`
+	}
+	for i := range jw.Entities {
+		if jw.Entities[i].Name == "alice" {
+			aliceEntry = &jw.Entities[i]
+		}
+	}
+	if aliceEntry == nil {
+		t.Fatal("alice not found in JSON")
+	}
+	if aliceEntry.Parent == 0 {
+		t.Error("alice must have parent field")
+	}
+	if len(aliceEntry.Prefabs) != 1 {
+		t.Errorf("alice must have 1 prefab, got %d", len(aliceEntry.Prefabs))
+	}
+	if len(aliceEntry.Pairs) != 1 {
+		t.Errorf("alice must have 1 custom pair, got %d", len(aliceEntry.Pairs))
+	}
+
+	// Round-trip.
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	aliceID2, ok := w2.Lookup("parent.alice")
+	if !ok {
+		t.Fatal("alice not found in w2")
+	}
+	// ChildOf restored.
+	parentID2, ok := w2.Lookup("parent")
+	if !ok {
+		t.Fatal("parent not found in w2")
+	}
+	if p, ok2 := w2.ParentOf(aliceID2); !ok2 || p != parentID2 {
+		t.Error("ChildOf not restored correctly")
+	}
+	// IsA restored.
+	prefabID2, ok := w2.Lookup("prefab")
+	if !ok {
+		t.Fatal("prefab not found in w2")
+	}
+	if !flecs.HasID(w2, aliceID2, flecs.MakePair(w2.IsA(), prefabID2)) {
+		t.Error("IsA not restored correctly")
+	}
+	// Custom pair restored.
+	followsID2, ok := w2.Lookup("follows")
+	if !ok {
+		t.Fatal("follows not found in w2")
+	}
+	bobID2, ok := w2.Lookup("bob")
+	if !ok {
+		t.Fatal("bob not found in w2")
+	}
+	edge, ok := flecs.GetPair[marshalEdge](w2, aliceID2, followsID2, bobID2)
+	if !ok {
+		t.Fatal("custom pair not restored")
+	}
+	if edge.Weight != 1.5 {
+		t.Fatalf("edge weight: got %v, want 1.5", edge.Weight)
+	}
+}
+
+func TestMarshalMultipleCustomPairsRoundTrip(t *testing.T) {
+	// alice has (follows, bob), (follows, charlie), (likes, dave).
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	follows := w.NewEntity()
+	w.SetName(follows, "follows")
+	likes := w.NewEntity()
+	w.SetName(likes, "likes")
+	alice := w.NewEntity()
+	w.SetName(alice, "alice")
+	bob := w.NewEntity()
+	w.SetName(bob, "bob")
+	charlie := w.NewEntity()
+	w.SetName(charlie, "charlie")
+	dave := w.NewEntity()
+	w.SetName(dave, "dave")
+	flecs.SetPair[marshalEdge](w, alice, follows, bob, marshalEdge{Weight: 1.0})
+	flecs.SetPair[marshalEdge](w, alice, follows, charlie, marshalEdge{Weight: 2.0})
+	flecs.SetPair[marshalEdge](w, alice, likes, dave, marshalEdge{Weight: 3.0})
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	aliceID2, ok := w2.Lookup("alice")
+	if !ok {
+		t.Fatal("alice not found")
+	}
+	followsID2, _ := w2.Lookup("follows")
+	likesID2, _ := w2.Lookup("likes")
+	bobID2, _ := w2.Lookup("bob")
+	charlieID2, _ := w2.Lookup("charlie")
+	daveID2, _ := w2.Lookup("dave")
+
+	e1, ok := flecs.GetPair[marshalEdge](w2, aliceID2, followsID2, bobID2)
+	if !ok || e1.Weight != 1.0 {
+		t.Errorf("(follows, bob) pair: got %v ok=%v, want Weight=1.0", e1, ok)
+	}
+	e2, ok := flecs.GetPair[marshalEdge](w2, aliceID2, followsID2, charlieID2)
+	if !ok || e2.Weight != 2.0 {
+		t.Errorf("(follows, charlie) pair: got %v ok=%v, want Weight=2.0", e2, ok)
+	}
+	e3, ok := flecs.GetPair[marshalEdge](w2, aliceID2, likesID2, daveID2)
+	if !ok || e3.Weight != 3.0 {
+		t.Errorf("(likes, dave) pair: got %v ok=%v, want Weight=3.0", e3, ok)
+	}
+}
+
+func TestMarshalChildOfIsANotInPairsField(t *testing.T) {
+	// ChildOf and IsA pairs must NOT appear in the "pairs" field.
+	w := flecs.New()
+	parent := w.NewEntity()
+	w.SetName(parent, "parent")
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Name    string        `json:"name"`
+			Parent  int           `json:"parent"`
+			Prefabs []int         `json:"prefabs"`
+			Pairs   []interface{} `json:"pairs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for _, e := range jw.Entities {
+		if e.Name == "child" {
+			if e.Parent == 0 {
+				t.Error("child must have parent field")
+			}
+			if len(e.Prefabs) != 1 {
+				t.Errorf("child must have 1 prefab, got %d", len(e.Prefabs))
+			}
+			if len(e.Pairs) != 0 {
+				t.Errorf("child must have empty pairs field (ChildOf/IsA excluded), got %d pairs", len(e.Pairs))
+			}
+		}
+	}
+}
+
+func TestMarshalUnknownPairDataTypeError(t *testing.T) {
+	// Hand-crafted JSON with an unknown pair dataType should return an error.
+	data := []byte(`{"version":1,"entities":[
+		{"serial":1},
+		{"serial":2},
+		{"serial":3,"pairs":[{"rel":1,"tgt":2,"dataType":"pkg.NotRegistered","data":{}}]}
+	]}`)
+	w := flecs.New()
+	err := w.UnmarshalJSON(data)
+	if err == nil {
+		t.Fatal("expected error for unregistered pair data type")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("error should mention 'not registered': %v", err)
+	}
+}
+
+func TestMarshalUnknownPairRelSerialError(t *testing.T) {
+	data := []byte(`{"version":1,"entities":[
+		{"serial":1,"pairs":[{"rel":999,"tgt":1}]}
+	]}`)
+	w := flecs.New()
+	err := w.UnmarshalJSON(data)
+	if err == nil {
+		t.Fatal("expected error for unknown pair rel serial")
+	}
+	if !strings.Contains(err.Error(), "pair rel serial 999") {
+		t.Errorf("error should mention 'pair rel serial 999': %v", err)
+	}
+}
+
+func TestMarshalUnknownPairTgtSerialError(t *testing.T) {
+	data := []byte(`{"version":1,"entities":[
+		{"serial":1},
+		{"serial":2,"pairs":[{"rel":1,"tgt":999}]}
+	]}`)
+	w := flecs.New()
+	err := w.UnmarshalJSON(data)
+	if err == nil {
+		t.Fatal("expected error for unknown pair tgt serial")
+	}
+	if !strings.Contains(err.Error(), "pair tgt serial 999") {
+		t.Errorf("error should mention 'pair tgt serial 999': %v", err)
+	}
+}
+
+func TestSetPairByIDAutoRegisters(t *testing.T) {
+	w := flecs.New()
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+	w.SetPairByID(alice, follows, bob, marshalEdge{Weight: 0.5})
+
+	// Verify the pair is set.
+	pairID := flecs.MakePair(follows, bob)
+	info, ok := w.ComponentInfo(pairID)
+	if !ok {
+		t.Fatal("pair not registered after SetPairByID")
+	}
+	if info.Size == 0 {
+		t.Fatal("pair should have non-zero size")
+	}
+	if !strings.Contains(info.Name, "marshalEdge") {
+		t.Errorf("pair info name should mention 'marshalEdge', got %q", info.Name)
+	}
+
+	// GetByID should return the value.
+	v, ok := w.GetByID(alice, pairID)
+	if !ok {
+		t.Fatal("GetByID returned false for pair")
+	}
+	edge, ok := v.(marshalEdge)
+	if !ok {
+		t.Fatalf("expected marshalEdge, got %T", v)
+	}
+	if edge.Weight != 0.5 {
+		t.Fatalf("weight: got %v, want 0.5", edge.Weight)
+	}
+}
+
+func TestSetPairByIDTypeMismatchPanics(t *testing.T) {
+	w := flecs.New()
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+	w.SetPairByID(alice, follows, bob, marshalEdge{Weight: 1.0})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on type mismatch")
+		}
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, "already registered") {
+			t.Errorf("panic message should mention 'already registered': %v", msg)
+		}
+	}()
+	w.SetPairByID(alice, follows, bob, marshalEdge2{Label: "x"})
+}
+
+func TestSetPairByIDFiresHooks(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	follows := w.NewEntity()
+	alice := w.NewEntity()
+	bob := w.NewEntity()
+
+	var onSetCount int
+	flecs.OnSet[marshalEdge](w, func(_ flecs.ID, _ *marshalEdge) {
+		onSetCount++
+	})
+
+	w.SetPairByID(alice, follows, bob, marshalEdge{Weight: 2.0})
+	if onSetCount == 0 {
+		t.Fatal("OnSet hook did not fire for SetPairByID")
+	}
+}
+
+func TestMarshalPairsTwoStepRoundTripStable(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w)
+	follows := w.NewEntity()
+	w.SetName(follows, "follows")
+	alice := w.NewEntity()
+	w.SetName(alice, "alice")
+	bob := w.NewEntity()
+	w.SetName(bob, "bob")
+	flecs.SetPair[marshalEdge](w, alice, follows, bob, marshalEdge{Weight: 0.7})
+
+	data1 := mustMarshal(t, w)
+
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalEdge](w2)
+	if err := w2.UnmarshalJSON(data1); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	data2 := mustMarshal(t, w2)
+
+	if !json.Valid(data1) || !json.Valid(data2) {
+		t.Fatal("invalid JSON in two-step round-trip")
+	}
+
+	type pairShape struct {
+		DataType string `json:"dataType"`
+	}
+	type entShape struct {
+		Pairs []pairShape `json:"pairs"`
+	}
+	var jw1, jw2 struct {
+		Entities []entShape `json:"entities"`
+	}
+	if err := json.Unmarshal(data1, &jw1); err != nil {
+		t.Fatalf("parse data1: %v", err)
+	}
+	if err := json.Unmarshal(data2, &jw2); err != nil {
+		t.Fatalf("parse data2: %v", err)
+	}
+	if len(jw1.Entities) != len(jw2.Entities) {
+		t.Fatalf("entity count: %d vs %d", len(jw1.Entities), len(jw2.Entities))
+	}
+	count1, count2 := 0, 0
+	for _, e := range jw1.Entities {
+		count1 += len(e.Pairs)
+	}
+	for _, e := range jw2.Entities {
+		count2 += len(e.Pairs)
+	}
+	if count1 != 1 || count2 != 1 {
+		t.Fatalf("expected 1 pair in each marshal, got %d and %d", count1, count2)
+	}
+}
