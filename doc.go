@@ -194,5 +194,30 @@
 //	w2.UnmarshalJSON(data)
 //	// flecs.Get[Position](w2, restoredInst) returns Position{1, 1}.
 //
+// # Stats and Observability
+//
+// [World.Stats] returns a snapshot of world-level counters and per-phase frame
+// timing. The snapshot allocates once per call and is designed for tooling, not
+// hot-path use. [World.SystemCountInPhase] returns the active system count for
+// a specific pipeline phase.
+//
+//	stats := w.Stats()
+//	fmt.Printf("entities: %d\n", stats.EntityCount)
+//	fmt.Printf("tables:   %d\n", stats.TableCount)
+//	fmt.Printf("queries:  %d (cached: %d)\n", stats.QueryCount, stats.CachedQueryCount)
+//	fmt.Printf("systems:  %d\n", stats.SystemCount)
+//	fmt.Printf("frame:    %d\n", stats.FrameCount)
+//	fmt.Printf("time:     %.3fs\n", stats.Time)
+//
+//	// Per-phase timing of the LAST frame (nil until Progress is called):
+//	for _, phase := range stats.LastFramePhases {
+//	    fmt.Printf("  %s: %v (%d systems)\n", phase.Name, phase.Duration, phase.SystemCount)
+//	}
+//
+//	// Per-component table and entity counts:
+//	for _, c := range stats.ComponentStats {
+//	    fmt.Printf("  %s: %d tables, %d entities\n", c.Name, c.TableCount, c.EntityCount)
+//	}
+//
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs

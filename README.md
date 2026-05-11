@@ -134,6 +134,7 @@ within a table.
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
+| Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 
 ---
 

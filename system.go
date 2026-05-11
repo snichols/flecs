@@ -1,6 +1,9 @@
 package flecs
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // System is an opaque handle returned by NewSystem or NewSystemInPhase. It
 // links a CachedQuery to a callback that runs once per World.Progress call
@@ -167,22 +170,59 @@ func (w *World) Progress(dt float32) {
 		})
 	}
 
-	// PreUpdate with real dt.
-	runPhase(w.preUpdateID, dt)
+	countPhase := func(p ID) int {
+		n := 0
+		for _, s := range w.systems {
+			if !s.removed && s.phase == p {
+				n++
+			}
+		}
+		return n
+	}
 
-	// OnFixedUpdate: accumulator loop; each iteration is its own Defer block.
-	if w.fixedTimestep > 0 {
-		w.fixedAccumulator += dt
-		for w.fixedAccumulator >= w.fixedTimestep {
-			step := w.fixedTimestep
-			runPhase(w.onFixedUpdateID, step)
-			w.fixedAccumulator -= step
+	runTimed := func(phaseIdx int, name string, p ID, phaseDT float32) {
+		count := countPhase(p)
+		w.lastFramePhases[phaseIdx].Name = name
+		w.lastFramePhases[phaseIdx].SystemCount = count
+		if count > 0 {
+			start := time.Now()
+			runPhase(p, phaseDT)
+			w.lastFramePhases[phaseIdx].Duration = time.Since(start)
+		} else {
+			runPhase(p, phaseDT)
+			w.lastFramePhases[phaseIdx].Duration = 0
 		}
 	}
 
+	// PreUpdate with real dt.
+	runTimed(0, "PreUpdate", w.preUpdateID, dt)
+
+	// OnFixedUpdate: accumulator loop; sum durations across all iterations.
+	{
+		count := countPhase(w.onFixedUpdateID)
+		w.lastFramePhases[1].Name = "OnFixedUpdate"
+		w.lastFramePhases[1].SystemCount = count
+		var total time.Duration
+		if w.fixedTimestep > 0 {
+			w.fixedAccumulator += dt
+			for w.fixedAccumulator >= w.fixedTimestep {
+				step := w.fixedTimestep
+				if count > 0 {
+					start := time.Now()
+					runPhase(w.onFixedUpdateID, step)
+					total += time.Since(start)
+				} else {
+					runPhase(w.onFixedUpdateID, step)
+				}
+				w.fixedAccumulator -= step
+			}
+		}
+		w.lastFramePhases[1].Duration = total
+	}
+
 	// OnUpdate and PostUpdate with real dt.
-	runPhase(w.onUpdateID, dt)
-	runPhase(w.postUpdateID, dt)
+	runTimed(2, "OnUpdate", w.onUpdateID, dt)
+	runTimed(3, "PostUpdate", w.postUpdateID, dt)
 }
 
 // SystemCount returns the number of currently registered (non-closed) systems.
