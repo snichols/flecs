@@ -14,9 +14,11 @@ import (
 //   - TermAnd: the table's signature must include the term's ID.
 //   - TermNot: the table's signature must NOT include the term's ID.
 //   - TermOptional: matching is unaffected; the table may or may not include the ID.
+//   - TermOr: adjacent Or terms form an OR-group; the matched table must contain
+//     at least one ID from the group. Use FieldMaybe to read Or-group columns.
 //
-// Only TermAnd terms are eligible to seed iteration. Not and Optional terms
-// cannot seed because they have no finite candidate set of their own.
+// Only TermAnd terms are eligible to seed iteration. Not, Optional, and Or
+// terms cannot seed because they have no finite candidate set of their own.
 type TermKind int
 
 const (
@@ -27,7 +29,29 @@ const (
 	// TermOptional does not affect table matching. Use FieldMaybe to read
 	// the column when present; Field panics if the column is absent.
 	TermOptional TermKind = 2
+	// TermOr contributes to an OR-group. Adjacent Or terms form a single group;
+	// the group is broken by any non-Or term. A table matches the OR-group if it
+	// contains at least one of the group's IDs. An OR-group of size 1 is
+	// degenerate but allowed (behaves identically to TermAnd for matching).
+	// Use FieldMaybe — not Field — to access Or-group columns.
+	TermOr TermKind = 3
 )
+
+// String returns a human-readable name for the TermKind.
+func (k TermKind) String() string {
+	switch k {
+	case TermAnd:
+		return "And"
+	case TermNot:
+		return "Not"
+	case TermOptional:
+		return "Optional"
+	case TermOr:
+		return "Or"
+	default:
+		return fmt.Sprintf("TermKind(%d)", int(k))
+	}
+}
 
 // Term is a structured query term combining a component/pair/tag ID with a TermKind.
 type Term struct {
@@ -45,8 +69,16 @@ func Without(id ID) Term { return Term{id, TermNot} }
 // be present in matched tables. Use FieldMaybe to access the column when present.
 func Maybe(id ID) Term { return Term{id, TermOptional} }
 
+// Or returns a TermOr term that contributes to an OR-group. Adjacent Or terms
+// in the query's term slice form a single group (broken by any non-Or term); a
+// table matches the group if it contains at least one of the group's IDs.
+// An OR-group of size 1 is degenerate but allowed (behaves like With).
+// Use FieldMaybe — not Field — to access Or-group columns per entity.
+func Or(id ID) Term { return Term{id, TermOr} }
+
 // Query holds a structured list of query terms used to match archetype tables.
 // Terms are stored sorted: TermAnd first (by ID), then TermNot (by ID), then
+// TermOr-groups (preserving group adjacency, within-group sorted by ID), then
 // TermOptional (by ID).
 //
 // Mutation warning: calling Set, Remove, or Delete on the World from inside
@@ -54,9 +86,10 @@ func Maybe(id ID) Term { return Term{id, TermOptional} }
 // snapshot of the seed table list taken at Iter() time and does not handle
 // structural changes.
 type Query struct {
-	w      *World
-	terms  []Term // sorted: And first (by ID), Not second, Optional third
-	andIDs []ID   // pre-extracted And-term IDs; returned by Terms() for backward compat
+	w        *World
+	terms    []Term // sorted: And first (by ID), Not second, Or-groups third, Optional last
+	andIDs   []ID   // pre-extracted And-term IDs; returned by Terms() for backward compat
+	orGroups [][]ID // each inner slice is one OR-group; tables must match all groups
 }
 
 // NewQuery constructs a query over w for the given component IDs (all TermAnd).
@@ -87,21 +120,36 @@ func NewQuery(w *World, ids ...ID) *Query {
 
 // NewQueryFromTerms constructs a query over w for the given structured terms.
 //
+// Terms can be [With] (TermAnd), [Without] (TermNot), [Maybe] (TermOptional),
+// or [Or] (TermOr). Adjacent Or terms form an OR-group; a table matches the
+// group if it contains at least one of the group's IDs. Example:
+//
+//	// Match entities with Position AND (Sleeping OR Working OR Playing).
+//	q := flecs.NewQueryFromTerms(w,
+//	    flecs.With(posID),
+//	    flecs.Or(sleepID),
+//	    flecs.Or(workID),
+//	    flecs.Or(playID),
+//	)
+//
 // Panics if:
 //   - w is nil.
 //   - no terms are provided.
-//   - no TermAnd term is present (queries with only Not/Optional terms would
+//   - no TermAnd term is present (queries with only Not/Optional/Or terms would
 //     match an unbounded entity set and are not supported).
-//   - any two terms share the same ID (e.g. With(P) + Without(P) is contradictory).
+//   - any two terms share the same ID across any term kinds.
+//   - an Or term's ID is zero/invalid.
+//   - two Or terms within the same group share the same ID.
 //
 // Terms are copied and sorted internally: TermAnd first (by ID), TermNot
-// second (by ID), TermOptional last (by ID). The caller's slice is not retained.
+// second (by ID), TermOr-groups third (preserving group adjacency), TermOptional
+// last (by ID). The caller's slice is not retained.
 func NewQueryFromTerms(w *World, terms ...Term) *Query {
 	if w == nil {
 		panic("flecs: NewQueryFromTerms: world must not be nil")
 	}
-	cp, andIDs := validateAndSortTerms("flecs: NewQueryFromTerms", terms)
-	return &Query{w: w, terms: cp, andIDs: andIDs}
+	cp, andIDs, orGroups := validateAndSortTerms("flecs: NewQueryFromTerms", terms)
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -114,7 +162,7 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 func (q *Query) Terms() []ID { return q.andIDs }
 
 // TermsFull returns a copy of the full structured term list in sorted order
-// (TermAnd first, TermNot second, TermOptional last).
+// (TermAnd first, TermNot second, TermOr-groups third, TermOptional last).
 func (q *Query) TermsFull() []Term {
 	cp := make([]Term, len(q.terms))
 	copy(cp, q.terms)
@@ -150,6 +198,7 @@ func (q *Query) Iter() *QueryIter {
 	return &QueryIter{
 		q:          q,
 		terms:      q.terms,
+		orGroups:   q.orGroups,
 		candidates: candidates,
 		pos:        -1,
 	}
@@ -173,7 +222,8 @@ func (q *Query) Each(fn func(*QueryIter)) {
 // iterator is active produces undefined behaviour.
 type QueryIter struct {
 	q          *Query         // nil for CachedQuery-derived iters; use terms for term access
-	terms      []Term         // full term list (And + Not + Optional), set by Iter constructors
+	terms      []Term         // full term list (And + Not + Or + Optional), set by Iter constructors
+	orGroups   [][]ID         // OR-groups mirrored from Query/CachedQuery for matchesTable
 	candidates []*table.Table // seed-table snapshot (uncached) or cache reference (cached)
 	pos        int            // index into candidates; -1 = before first Next
 	current    *table.Table   // non-nil only when positioned on a matching table
@@ -181,7 +231,7 @@ type QueryIter struct {
 	// candidate list is pre-filtered by CachedQuery. When false (the default),
 	// every candidate is evaluated against the term list.
 	cached          bool
-	optionalPresent map[ID]bool // Optional-term presence for the current table; nil if no Optional terms
+	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table
 }
 
 // Next advances to the next matching table. Returns true when positioned on a
@@ -209,8 +259,8 @@ func (it *QueryIter) Next() bool {
 	}
 }
 
-// matchesTable returns true if t satisfies all TermAnd and TermNot terms.
-// TermOptional terms are ignored during matching.
+// matchesTable returns true if t satisfies all TermAnd, TermNot, and OR-group
+// terms. TermOptional terms are ignored during matching.
 func (it *QueryIter) matchesTable(t *table.Table) bool {
 	for _, term := range it.terms {
 		switch term.Kind {
@@ -224,18 +274,30 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 			}
 		}
 	}
+	for _, group := range it.orGroups {
+		matched := false
+		for _, id := range group {
+			if t.HasComponent(id) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
 	return true
 }
 
-// updateOptionalPresence records which TermOptional IDs are present in t.
-// Called once per table transition inside Next. O(optional-term-count).
-// Skipped entirely when there are no Optional terms (common case: zero allocs).
+// updateOptionalPresence records which TermOptional and TermOr IDs are present
+// in t. Called once per table transition inside Next. Skipped when there are no
+// Optional or Or terms (common case: zero allocs).
 func (it *QueryIter) updateOptionalPresence(t *table.Table) {
 	for k := range it.optionalPresent {
 		delete(it.optionalPresent, k)
 	}
 	for _, term := range it.terms {
-		if term.Kind == TermOptional {
+		if term.Kind == TermOptional || term.Kind == TermOr {
 			if it.optionalPresent == nil {
 				it.optionalPresent = make(map[ID]bool)
 			}
@@ -315,10 +377,12 @@ func Field[T any](it *QueryIter, id ID) []T {
 }
 
 // FieldMaybe returns a typed []T slice and a presence flag for a TermOptional
-// query term id.
+// or TermOr query term id.
 //
-// Panics if id is not a TermOptional term in this iter's query. For TermAnd
-// terms, use Field instead.
+// Panics if id is not a TermOptional or TermOr term in this iter's query.
+// For TermAnd terms, use Field instead. For TermOr terms, Field also panics if
+// the current table does not contain id — always prefer FieldMaybe for Or-group
+// IDs to safely disambiguate which members are present in the current table.
 //
 // Returns (nil, false) if the current table does not contain id.
 // Returns (slice, true) if the current table contains id — identical semantics
@@ -330,8 +394,8 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 		if term.ID != id {
 			continue
 		}
-		if term.Kind != TermOptional {
-			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not a TermOptional term; use Field for TermAnd terms",
+		if term.Kind != TermOptional && term.Kind != TermOr {
+			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not a TermOptional or TermOr term; use Field for TermAnd terms",
 				reflect.TypeFor[T](), id))
 		}
 		if !it.optionalPresent[id] {
@@ -357,10 +421,11 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 }
 
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
-// copies and sorts them (And first by ID, Not second by ID, Optional last by ID),
-// and returns the sorted terms and pre-extracted And-term IDs.
+// builds OR-groups by scanning consecutive TermOr entries, copies and sorts terms
+// (And first by ID, Not second by ID, Or-groups third preserving adjacency, Optional
+// last by ID), and returns the sorted terms, pre-extracted And-term IDs, and OR-groups.
 // Panics with messages prefixed by caller on invalid input.
-func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID) {
+func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID, [][]ID) {
 	if len(terms) == 0 {
 		panic(caller + ": at least one term is required")
 	}
@@ -372,8 +437,46 @@ func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID) {
 		}
 	}
 	if !hasAnd {
-		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional terms would match an unbounded entity set")
+		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional/Or terms would match an unbounded entity set")
 	}
+
+	// Build OR-groups by scanning for consecutive TermOr sequences.
+	// Simultaneously validate zero IDs on Or terms.
+	var orGroups [][]ID
+	termGroup := make([]int, len(terms)) // group index for TermOr terms; -1 for non-Or
+	for i := range termGroup {
+		termGroup[i] = -1
+	}
+	inGroup := false
+	for i, t := range terms {
+		if t.Kind == TermOr {
+			if t.ID.Index() == 0 {
+				panic(fmt.Sprintf("%s: Or term at index %d has zero/invalid ID", caller, i))
+			}
+			if !inGroup {
+				orGroups = append(orGroups, nil)
+				inGroup = true
+			}
+			g := len(orGroups) - 1
+			termGroup[i] = g
+			orGroups[g] = append(orGroups[g], t.ID)
+		} else {
+			inGroup = false
+		}
+	}
+
+	// Check for duplicate IDs within each OR-group.
+	for _, g := range orGroups {
+		seen := make(map[ID]struct{}, len(g))
+		for _, id := range g {
+			if _, dup := seen[id]; dup {
+				panic(fmt.Sprintf("%s: duplicate id in OR-group: id %d appears more than once", caller, id))
+			}
+			seen[id] = struct{}{}
+		}
+	}
+
+	// Check for cross-kind duplicate IDs.
 	seen := make(map[ID]struct{}, len(terms))
 	for _, t := range terms {
 		if _, dup := seen[t.ID]; dup {
@@ -381,21 +484,49 @@ func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID) {
 		}
 		seen[t.ID] = struct{}{}
 	}
-	cp := make([]Term, len(terms))
-	copy(cp, terms)
-	sort.Slice(cp, func(i, j int) bool {
-		if cp[i].Kind != cp[j].Kind {
-			return cp[i].Kind < cp[j].Kind
+
+	// Build sorted term list: And (by ID), Not (by ID), Or-groups (group order,
+	// within-group by ID), Optional (by ID).
+	var andTerms, notTerms, optTerms []Term
+	for _, t := range terms {
+		switch t.Kind {
+		case TermAnd:
+			andTerms = append(andTerms, t)
+		case TermNot:
+			notTerms = append(notTerms, t)
+		case TermOptional:
+			optTerms = append(optTerms, t)
 		}
-		return cp[i].ID < cp[j].ID
-	})
-	// And terms are first; collect their IDs until the kind changes.
-	var andIDs []ID
-	for _, t := range cp {
-		if t.Kind != TermAnd {
-			break
-		}
-		andIDs = append(andIDs, t.ID)
 	}
-	return cp, andIDs
+	sort.Slice(andTerms, func(i, j int) bool { return andTerms[i].ID < andTerms[j].ID })
+	sort.Slice(notTerms, func(i, j int) bool { return notTerms[i].ID < notTerms[j].ID })
+	sort.Slice(optTerms, func(i, j int) bool { return optTerms[i].ID < optTerms[j].ID })
+
+	// Build Or section: groups in original order; within each group sorted by ID.
+	var orTerms []Term
+	for _, g := range orGroups {
+		ids := make([]ID, len(g))
+		copy(ids, g)
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
+			orTerms = append(orTerms, Term{ID: id, Kind: TermOr})
+		}
+	}
+
+	cp := make([]Term, 0, len(terms))
+	cp = append(cp, andTerms...)
+	cp = append(cp, notTerms...)
+	cp = append(cp, orTerms...)
+	cp = append(cp, optTerms...)
+
+	// Extract And-term IDs (already sorted).
+	andIDs := make([]ID, len(andTerms))
+	for i, t := range andTerms {
+		andIDs[i] = t.ID
+	}
+	if len(andIDs) == 0 {
+		andIDs = nil
+	}
+
+	return cp, andIDs, orGroups
 }

@@ -59,7 +59,7 @@
 // # Structured Query Terms
 //
 // [NewQueryFromTerms] and [NewCachedQueryFromTerms] accept a mix of [TermKind]
-// values to express NOT and Optional patterns:
+// values to express NOT, Optional, and OR patterns:
 //
 //	posID  := flecs.RegisterComponent[Position](w)
 //	velID  := flecs.RegisterComponent[Velocity](w)
@@ -88,8 +88,32 @@
 //	    }
 //	})
 //
-// At least one [TermAnd] ([With]) term is required; queries with only Not/Optional
+//	// Match entities with Position AND (Sleeping OR Working OR Playing).
+//	// Adjacent Or terms form one OR-group; multiple Or sequences (separated by
+//	// non-Or terms) each form independent groups. A table matches an OR-group
+//	// when it contains at least one of the group's IDs.
+//	type Sleeping struct{}
+//	type Working struct{}
+//	sleepID := flecs.RegisterComponent[Sleeping](w)
+//	workID  := flecs.RegisterComponent[Working](w)
+//	q3 := flecs.NewQueryFromTerms(w,
+//	    flecs.With(posID),
+//	    flecs.Or(sleepID),
+//	    flecs.Or(workID),
+//	)
+//	flecs.Each(q3, func(it *flecs.QueryIter) {
+//	    for it.Next() {
+//	        // Use FieldMaybe to disambiguate which Or-group member is present.
+//	        _, isSleeping := flecs.FieldMaybe[Sleeping](it, sleepID)
+//	        _, isWorking  := flecs.FieldMaybe[Working](it, workID)
+//	        _ = isSleeping
+//	        _ = isWorking
+//	    }
+//	})
+//
+// At least one [TermAnd] ([With]) term is required; queries with only Not/Optional/Or
 // terms are rejected. Duplicate IDs across terms also panic at construction.
+// An Or term with a zero/invalid ID panics. Duplicate IDs within one OR-group panic.
 //
 // # Deferred Mutation
 //

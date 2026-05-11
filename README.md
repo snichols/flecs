@@ -131,6 +131,7 @@ within a table.
 | Observers (multi) | `Observe[T]`, `ObserveID`, `Observe2[T]`, `Unsubscribe` |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
+| OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
@@ -152,7 +153,7 @@ within a table.
 | 4-phase pipeline | ✅ | ✅ |
 | Fixed timestep | ✅ | ✅ |
 | NOT / Optional query terms | ✅ (`With`, `Without`, `Maybe`) | ✅ |
-| OR query terms | ❌ deferred | ✅ |
+| OR query terms | ✅ (`Or`, `TermOr`, `FieldMaybe` on Or-group IDs) | ✅ |
 | Up/Down traversal in queries | ❌ deferred | ✅ |
 | Change detection | ❌ deferred | ✅ |
 | Multi-threading | ❌ deferred | ✅ |

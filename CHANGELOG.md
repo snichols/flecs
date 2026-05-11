@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **OR query terms** — `TermOr` (value 3) and the `Or(id)` constructor complete
+  the structured-term API. Adjacent `Or` terms in a `NewQueryFromTerms` /
+  `NewCachedQueryFromTerms` call form an OR-group; a table matches the group when
+  it contains at least one of the group's IDs. Multiple OR-groups in one query are
+  each independent. `FieldMaybe[T]` is extended to accept `TermOr` terms in
+  addition to `TermOptional` — use it to disambiguate which members of an OR-group
+  are present in the current table; `Field[T]` on an Or-group ID panics if the
+  current table lacks it. Validation: `Or(0)` panics; duplicate IDs within an
+  OR-group panic; cross-kind duplicate IDs panic (matching Phase 3.3 rules). The
+  smallest-seed strategy and `CachedQuery` incremental cache maintenance are both
+  Or-aware. `TermKind.String()` now returns `"Or"` for `TermOr`. Sort order for
+  `TermsFull()` is: And, Not, Or-groups, Optional. No breaking changes.
+
+---
+
 ## v0.5.0 — 2026-05-11
 
 Stats and per-phase frame timing for tooling and observability. No breaking
