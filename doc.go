@@ -9,7 +9,9 @@
 //
 //	w := flecs.New()
 //
-// World is NOT goroutine-safe; external synchronization is required.
+// Concurrent access is safe: multiple goroutines may call read-only methods
+// (Get, Has, Stats, Count, Each1–4, etc.) simultaneously while [World.Progress]
+// runs in a dedicated goroutine. See "Concurrent Access" below.
 //
 // # Components
 //
@@ -376,10 +378,51 @@
 //	// GET  /snapshot           → full world MarshalJSON output
 //	// PUT  /snapshot           → load a snapshot into the world (replaces state; not transactional)
 //
-// Concurrency: all GET endpoints treat the world as read-only; they must not
-// run while the world is being mutated. PUT /snapshot mutates world state and
-// must not run concurrently with any other world operation. Add your own mutex
-// if multiple goroutines share the world.
+// Concurrency: GET endpoints each acquire the world's read lock for the
+// duration of the handler, so multiple concurrent GET requests — including
+// requests issued while Progress runs — are safe. PUT /snapshot acquires the
+// world's write lock; it blocks until any in-progress Progress call or
+// concurrent GET finishes.
+//
+// # Concurrent Access
+//
+// [World] embeds a [sync.RWMutex] that guards all world state. Every public
+// mutator (Set, Remove, Delete, AddID, Progress, …) acquires the write lock
+// internally; every read-only accessor (Get, Has, Stats, Count, …) acquires
+// the read lock. Multiple goroutines may therefore read the world simultaneously,
+// and Progress can run concurrently with any number of readers:
+//
+//	go func() {
+//	    for {
+//	        w.Progress(dt)   // holds write lock for the full frame
+//	    }
+//	}()
+//
+//	// Safe concurrent reads — the REST handler, a dashboard goroutine, etc.
+//	go func() {
+//	    for {
+//	        stats := w.Stats()   // acquires read lock, concurrent with Progress
+//	        _ = stats.EntityCount
+//	    }
+//	}()
+//
+// For an atomic multi-call read snapshot, acquire the read lock explicitly:
+//
+//	w.RLock()
+//	count := w.Count()
+//	stats := w.Stats()
+//	w.RUnlock()
+//
+// Constraints:
+//
+//   - Do not call [World.Lock] or any mutator while holding [World.RLock]; that
+//     will deadlock.
+//   - Do not call RLock or Lock from within a system fn — Progress already holds
+//     the write lock, and a second Lock from the same goroutine deadlocks.
+//   - [sync.RWMutex] does not support re-entrant locking. If a reader goroutine
+//     tries to RLock again while a writer is pending, it will deadlock. Use the
+//     private (unlocked) helpers if you need to compose operations inside a held
+//     lock.
 //
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs

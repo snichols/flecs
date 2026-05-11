@@ -12,15 +12,14 @@ import (
 //
 // # Concurrency
 //
-// *World is NOT goroutine-safe. The REST handler treats the world as read-only
-// for all GET endpoints; concurrent GET requests must be externally serialized,
-// or the world must not be mutated while they run.
+// GET endpoints (stats, components, entities, snapshot) each acquire the
+// world's read lock ([World.RLock]) for the duration of the handler. Multiple
+// concurrent GET requests proceed in parallel and are safe to issue while a
+// goroutine runs [World.Progress].
 //
-// PUT /snapshot replaces world state and MUST NOT run concurrently with any
-// other world operation — whether another GET request, a direct Set/Delete
-// call, or a second PUT /snapshot. Callers that need concurrent access must
-// add their own mutex or run all HTTP requests on the same goroutine as the
-// world.
+// PUT /snapshot acquires the world's write lock for the duration of the
+// unmarshal. It may not run concurrently with Progress or any other write;
+// Progress will block until the PUT completes, and vice versa.
 //
 // # Routes
 //
@@ -108,15 +107,17 @@ func restStats(w *World) http.HandlerFunc {
 
 func restComponents(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		ids := w.Components()
+		w.RLock()
+		ids := w.registry.IDs()
 		out := make([]componentInfoResponse, 0, len(ids))
 		for _, id := range ids {
-			info, ok := w.ComponentInfo(id)
+			info, ok := componentInfoUnlocked(w, id)
 			if !ok {
 				continue
 			}
 			out = append(out, toComponentInfoResponse(info))
 		}
+		w.RUnlock()
 		writeJSON(rw, http.StatusOK, out)
 	}
 }
@@ -128,7 +129,9 @@ func restComponentByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
-		info, ok := w.ComponentInfo(id)
+		w.RLock()
+		info, ok := componentInfoUnlocked(w, id)
+		w.RUnlock()
 		if !ok {
 			writeError(rw, http.StatusNotFound, "component not found")
 			return
@@ -148,18 +151,20 @@ func restEntities(w *World) http.HandlerFunc {
 			}
 			limit = n
 		}
+		w.RLock()
 		out := make([]entityListItem, 0, limit)
-		w.EachEntity(func(e ID) bool {
+		w.index.EachID(func(e ID) bool {
 			if len(out) >= limit {
 				return false
 			}
 			item := entityListItem{ID: strconv.FormatUint(uint64(e), 10)}
-			if name, ok := w.GetName(e); ok {
+			if name, ok := getNameUnlocked(w, e); ok {
 				item.Name = name
 			}
 			out = append(out, item)
 			return true
 		})
+		w.RUnlock()
 		writeJSON(rw, http.StatusOK, out)
 	}
 }
@@ -171,7 +176,10 @@ func restEntityByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
-		if !w.IsAlive(id) {
+		w.RLock()
+		alive := w.index.IsAlive(id)
+		if !alive {
+			w.RUnlock()
 			writeError(rw, http.StatusNotFound, "entity not found")
 			return
 		}
@@ -179,19 +187,23 @@ func restEntityByID(w *World) http.HandlerFunc {
 			ID:         strconv.FormatUint(uint64(id), 10),
 			Components: []componentInfoResponse{},
 		}
-		if name, nameOK := w.GetName(id); nameOK {
+		if name, nameOK := getNameUnlocked(w, id); nameOK {
 			resp.Name = name
 		}
-		if parent, parentOK := w.ParentOf(id); parentOK {
+		if parent, parentOK := parentOfUnlocked(w, id); parentOK {
 			resp.Parent = strconv.FormatUint(uint64(parent), 10)
 		}
-		w.EachPrefab(id, func(prefab ID) bool {
-			resp.Prefabs = append(resp.Prefabs, strconv.FormatUint(uint64(prefab), 10))
-			return true
-		})
-		childOfIdx := w.ChildOf().Index()
-		isAIdx := w.IsA().Index()
-		for _, cid := range w.EntityComponents(id) {
+		rec := w.index.Get(id)
+		if rec != nil && rec.Table != nil {
+			isAIdx := w.isAID.Index()
+			eachPairTarget(rec.Table.Type(), isAIdx, func(prefab ID) bool {
+				resp.Prefabs = append(resp.Prefabs, strconv.FormatUint(uint64(prefab), 10))
+				return true
+			})
+		}
+		childOfIdx := w.childOfID.Index()
+		isAIdx := w.isAID.Index()
+		for _, cid := range entityComponentsUnlocked(w, id) {
 			if cid.IsPair() {
 				firstIdx := cid.First().Index()
 				if firstIdx == childOfIdx || firstIdx == isAIdx {
@@ -200,12 +212,13 @@ func restEntityByID(w *World) http.HandlerFunc {
 				resp.Pairs = append(resp.Pairs, strconv.FormatUint(uint64(cid), 10))
 				continue
 			}
-			info, infoOK := w.ComponentInfo(cid)
+			info, infoOK := componentInfoUnlocked(w, cid)
 			if !infoOK {
 				continue
 			}
 			resp.Components = append(resp.Components, toComponentInfoResponse(info))
 		}
+		w.RUnlock()
 		writeJSON(rw, http.StatusOK, resp)
 	}
 }

@@ -98,21 +98,23 @@ func (m *marshaler) visit(e ID) error {
 //
 // Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	skip := map[ID]struct{}{
-		w.ChildOf():       {},
-		w.IsA():           {},
-		w.Name():          {},
-		w.PreUpdate():     {},
-		w.OnUpdate():      {},
-		w.PostUpdate():    {},
-		w.OnFixedUpdate(): {},
+		w.childOfID:       {},
+		w.isAID:           {},
+		w.nameID:          {},
+		w.preUpdateID:     {},
+		w.onUpdateID:      {},
+		w.postUpdateID:    {},
+		w.onFixedUpdateID: {},
 	}
-	for _, cid := range w.Components() {
+	for _, cid := range w.registry.IDs() {
 		skip[cid] = struct{}{}
 	}
 
 	var userEnts []ID
-	w.EachEntity(func(e ID) bool {
+	w.index.EachID(func(e ID) bool {
 		if _, isBuiltin := skip[e]; !isBuiltin {
 			userEnts = append(userEnts, e)
 		}
@@ -129,19 +131,23 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		idToSerial:     make(map[ID]int, len(userEnts)),
 		indexToSerial:  make(map[uint32]int, len(userEnts)),
 	}
+	isAIdx := w.isAID.Index()
 	for _, e := range userEnts {
 		var preds []ID
-		if p, ok := w.ParentOf(e); ok {
+		if p, ok := parentOfUnlocked(w, e); ok {
 			if _, isBuiltin := skip[p]; !isBuiltin {
 				preds = append(preds, p)
 			}
 		}
-		w.EachPrefab(e, func(prefab ID) bool {
-			if _, isBuiltin := skip[prefab]; !isBuiltin {
-				preds = append(preds, prefab)
-			}
-			return true
-		})
+		rec := w.index.Get(e)
+		if rec != nil && rec.Table != nil {
+			eachPairTarget(rec.Table.Type(), isAIdx, func(prefab ID) bool {
+				if _, isBuiltin := skip[prefab]; !isBuiltin {
+					preds = append(preds, prefab)
+				}
+				return true
+			})
+		}
 		if len(preds) > 0 {
 			m.predecessorsOf[e] = preds
 		}
@@ -159,19 +165,18 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		m.indexToSerial[e.Index()] = i + 1
 	}
 
-	nameID := w.Name()
-	childOfIdx := w.ChildOf().Index()
-	isAIdx := w.IsA().Index()
+	nameID := w.nameID
+	childOfIdx := w.childOfID.Index()
 	var entities []jsonEntity
 
 	for _, e := range m.order {
 		je := jsonEntity{Serial: m.idToSerial[e]}
 
-		if name, ok := w.GetName(e); ok {
+		if name, ok := getNameUnlocked(w, e); ok {
 			je.Name = name
 		}
 
-		if p, ok := w.ParentOf(e); ok {
+		if p, ok := parentOfUnlocked(w, e); ok {
 			if _, isBuiltin := skip[p]; !isBuiltin {
 				if serial, ok := m.idToSerial[p]; ok {
 					je.Parent = serial
@@ -180,17 +185,20 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		}
 
 		// Populate Prefabs after serials are assigned so idToSerial lookups work.
-		w.EachPrefab(e, func(prefab ID) bool {
-			if _, isBuiltin := skip[prefab]; isBuiltin {
+		rec := w.index.Get(e)
+		if rec != nil && rec.Table != nil {
+			eachPairTarget(rec.Table.Type(), isAIdx, func(prefab ID) bool {
+				if _, isBuiltin := skip[prefab]; isBuiltin {
+					return true
+				}
+				if serial, ok := m.idToSerial[prefab]; ok {
+					je.Prefabs = append(je.Prefabs, serial)
+				}
 				return true
-			}
-			if serial, ok := m.idToSerial[prefab]; ok {
-				je.Prefabs = append(je.Prefabs, serial)
-			}
-			return true
-		})
+			})
+		}
 
-		for _, cid := range w.EntityComponents(e) {
+		for _, cid := range entityComponentsUnlocked(w, e) {
 			if cid.IsPair() {
 				relIdx := uint32(cid.First())
 				tgtIdx := uint32(cid.Second())
@@ -206,9 +214,9 @@ func (w *World) MarshalJSON() ([]byte, error) {
 					continue
 				}
 				jp := jsonPair{Rel: relSerial, Tgt: tgtSerial}
-				info, hasInfo := w.ComponentInfo(cid)
+				info, hasInfo := componentInfoUnlocked(w, cid)
 				if hasInfo && info.Size > 0 && info.Type != nil {
-					v, vok := w.GetByID(e, cid)
+					v, vok := getByIDUnlocked(w, e, cid)
 					if vok {
 						raw, err := json.Marshal(v)
 						if err != nil {
@@ -224,11 +232,11 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			if cid == nameID {
 				continue
 			}
-			info, ok := w.ComponentInfo(cid)
+			info, ok := componentInfoUnlocked(w, cid)
 			if !ok {
 				continue
 			}
-			v, ok := w.GetByID(e, cid)
+			v, ok := getByIDUnlocked(w, e, cid)
 			if !ok {
 				continue
 			}
@@ -293,10 +301,12 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("flecs: unmarshal failed: unsupported version %d (only v1 supported)", jw.Version)
 	}
 
-	compByName := make(map[string]ComponentInfo)
-	typeStringToType := make(map[string]reflect.Type)
-	for _, cid := range w.Components() {
-		info, ok := w.ComponentInfo(cid)
+	w.rwmu.RLock()
+	ids := w.registry.IDs()
+	compByName := make(map[string]ComponentInfo, len(ids))
+	typeStringToType := make(map[string]reflect.Type, len(ids))
+	for _, cid := range ids {
+		info, ok := componentInfoUnlocked(w, cid)
 		if !ok {
 			continue
 		}
@@ -308,6 +318,7 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			}
 		}
 	}
+	w.rwmu.RUnlock()
 
 	// Phase 1: allocate all entities so future phases can resolve serial→ID.
 	serialToID := make(map[int]ID, len(jw.Entities))

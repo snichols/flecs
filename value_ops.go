@@ -26,6 +26,14 @@ import (
 // Fires OnAdd (when the pair is newly added) and OnSet on every call via
 // SetByID. Honors the Defer queue.
 func (w *World) SetPairByID(e, rel, tgt ID, v any) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	if v == nil {
 		panic("flecs: SetPairByID: v must not be nil")
 	}
@@ -64,6 +72,14 @@ func (w *World) SetPairByID(e, rel, tgt ID, v any) {
 // Performance: each successful call allocates one interface header to box the
 // returned value. For performance-critical paths prefer Get[T].
 func (w *World) GetByID(e ID, id ID) (any, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return getByIDUnlocked(w, e, id)
+}
+
+// getByIDUnlocked is the lock-free body of GetByID. Callers must hold the read
+// or write lock, or have inProgress set.
+func getByIDUnlocked(w *World, e ID, id ID) (any, bool) {
 	info, ok := w.registry.LookupByID(id)
 	if !ok {
 		return nil, false
@@ -155,6 +171,14 @@ func getViaIsAByID(w *World, e ID, id ID, info *component.TypeInfo, seen map[ID]
 // Performance: one extra allocation per call for a bounce buffer that makes v
 // addressable for the unsafe column write.
 func (w *World) SetByID(e ID, id ID, v any) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v

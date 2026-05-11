@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.10.1 — 2026-05-11 — Concurrent-Read RWMutex
+
+`*World` now embeds a `sync.RWMutex` that guards all world state. Read-only
+consumers (dashboards, REST handlers, debuggers) may safely call read accessors
+concurrently with a goroutine running `Progress`. Multiple concurrent readers
+proceed without blocking each other; `Progress` is the only exclusive writer
+during frame execution.
+
+### Added
+
+- **`(*World).RLock() / RUnlock()`** — public read-lock API for callers that
+  need an atomic multi-call read snapshot across several operations.
+- **`(*World).Lock() / Unlock()`** — public write-lock API for explicit batched
+  writes that must span multiple operations.
+- **Read-safe accessors** — `Get`, `Has`, `Owns`, `IsAlive`, `Count`, `Stats`,
+  `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`,
+  `AliveEntities`, `TablesFor`, `EachTableFor`, `GetName`, `LookupChild`,
+  `Lookup`, `PathOf`, `ParentOf`, `PrefabOf`, `EachPrefab`, `EachChild`,
+  `GetByID`, `HasID`, `OwnsID`, `GetPair`, `GetUp`, `HasUp`, `TargetUp`,
+  `WorkerCount`, `Logger`, `Time`, `FrameCount`, `FixedTimestep`,
+  `SystemCountInPhase`, `CachedQuery.Changed` — each acquires the read lock
+  internally.
+- **Write-exclusive mutators** — `Set`, `Remove`, `Delete`, `AddID`, `RemoveID`,
+  `NewEntity`, `SetPair`, `SetPairByID`, `SetByID`, `RegisterComponent`,
+  `NewSystem`, `NewSystemInPhase`, `SetFixedTimestep`, `SetWorkerCount`,
+  `SetLogger`, `DeferEnd` (flush), `Observe`, `ObserveID`, `Observe2`,
+  `OnAdd`, `OnSet`, `OnRemove`, `NewCachedQuery`, `CachedQuery.Close`,
+  `Observer.Unsubscribe`, `System.SetParallel`, `System.SetWriteSet`,
+  `System.Close`, `MarshalJSON` (RLock), `UnmarshalJSON` (Lock per-op) —
+  each acquires the write lock (or read lock for MarshalJSON) internally.
+- **`Progress` holds the write lock** for the entire frame (including system
+  callbacks, hook dispatch, and observer dispatch). Systems may call mutators
+  without acquiring any additional lock.
+- **`DeferEnd` flush holds the write lock** (sets `inProgress = true`) so that
+  queued closures — including observer callbacks that call `Set` — do not
+  attempt nested lock acquisition.
+- **REST handler locking** — `NewRESTHandler` GET endpoints now hold the read
+  lock for the duration of each request; PUT `/snapshot` holds the write lock.
+  Concurrent GET requests are safe alongside a running `Progress` loop.
+- **`MarshalJSON` atomic snapshot** — acquires the read lock once at the top and
+  uses lock-free internal helpers throughout, producing a consistent snapshot
+  of the world state.
+- **`concurrent_test.go`** — race-detector tests for concurrent reads during
+  Progress, RLock/RUnlock API, concurrent Get+Set, concurrent Stats+Progress,
+  Each1 during Progress, and RLock blocking semantics.
+
+### Documentation
+
+- `doc.go`: replaced "NOT goroutine-safe" note with a "Concurrent Access"
+  section covering the RWMutex model, usage patterns, and constraints.
+
+---
+
 ## v0.10.0 — 2026-05-11 — Parallel System Dispatch
 
 Opt-in parallel system dispatch within a phase. Systems flagged as

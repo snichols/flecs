@@ -17,6 +17,14 @@ import (
 // T need not be registered as a component entity before calling OnAdd; if
 // unregistered, its type metadata is auto-registered idempotently.
 func OnAdd[T any](w *World, fn func(e ID, v *T)) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnAdd = nil
@@ -36,6 +44,14 @@ func OnAdd[T any](w *World, fn func(e ID, v *T)) {
 // For zero-size types (tags), the callback receives a nil pointer; the value
 // is meaningless. OnSet does not fire for AddID (which carries no value).
 func OnSet[T any](w *World, fn func(e ID, v *T)) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnSet = nil
@@ -63,6 +79,14 @@ func OnSet[T any](w *World, fn func(e ID, v *T)) {
 // the entity currently being observed have undefined behavior; defer them to
 // Phase 5.3.
 func OnRemove[T any](w *World, fn func(e ID, v *T)) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnRemove = nil
@@ -80,7 +104,18 @@ func OnRemove[T any](w *World, fn func(e ID, v *T)) {
 // ptr is a pointer to the newly-added slot; nil for zero-size components.
 func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnAdd != nil {
-		info.Hooks.OnAdd(w, e, ptr)
+		// Release write lock so the hook can call world read methods (IsAlive, Get, …)
+		// without deadlocking. An inner function with a deferred reacquire ensures the
+		// lock is restored even if the hook panics, so the caller's defer-Unlock is safe.
+		w.inProgress.Store(false)
+		w.rwmu.Unlock()
+		func() {
+			defer func() {
+				w.rwmu.Lock()
+				w.inProgress.Store(true)
+			}()
+			info.Hooks.OnAdd(w, e, ptr)
+		}()
 	}
 	w.dispatchObservers(id, EventOnAdd, e, ptr)
 }
@@ -91,7 +126,15 @@ func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 // ptr is a pointer to the component slot after the value was written.
 func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnSet != nil {
-		info.Hooks.OnSet(w, e, ptr)
+		w.inProgress.Store(false)
+		w.rwmu.Unlock()
+		func() {
+			defer func() {
+				w.rwmu.Lock()
+				w.inProgress.Store(true)
+			}()
+			info.Hooks.OnSet(w, e, ptr)
+		}()
 	}
 	w.dispatchObservers(id, EventOnSet, e, ptr)
 }
@@ -102,7 +145,15 @@ func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 // ptr is a pointer to the source slot; the value is still valid at call time.
 func (w *World) fireOnRemove(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnRemove != nil {
-		info.Hooks.OnRemove(w, e, ptr)
+		w.inProgress.Store(false)
+		w.rwmu.Unlock()
+		func() {
+			defer func() {
+				w.rwmu.Lock()
+				w.inProgress.Store(true)
+			}()
+			info.Hooks.OnRemove(w, e, ptr)
+		}()
 	}
 	w.dispatchObservers(id, EventOnRemove, e, ptr)
 }

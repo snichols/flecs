@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
@@ -29,8 +30,12 @@ import (
 // (8 bytes per uint64 ID, host byte-order) for use as a map key. This encoding
 // is stable within a single process but not across processes or machines.
 //
-// *World is NOT goroutine-safe; external synchronization is required.
+// Concurrent access: use [World.RLock]/[World.RUnlock] to hold a read lock across
+// multiple operations, and [World.Lock]/[World.Unlock] for explicit batched writes.
+// Progress acquires the write lock internally for the entire frame. See doc.go for
+// the full concurrency model.
 type World struct {
+	rwmu             sync.RWMutex                    // guards all world state; embedded by value
 	index            *entityindex.Index
 	registry         *component.Registry
 	tables           map[string]*table.Table         // sigKey(sorted []ID) → table
@@ -51,7 +56,8 @@ type World struct {
 	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
 	workerCount      int                             // number of persistent goroutines in the worker pool; 0 = serial
 	workerCh         chan func()                     // job channel; nil when workerCount == 0
-	inProgress       bool                            // true while Progress is executing
+	inProgress       atomic.Bool                     // true while the write lock is held by the current goroutine (re-entrancy guard)
+	inDispatch       atomic.Bool                     // true for the entire duration of a Progress call (behavioral guard)
 	time             float32                         // total accumulated simulation time
 	frameCount       uint64                          // number of Progress calls
 	fixedTimestep    float32                         // fixed step size; 0 means disabled
@@ -126,6 +132,45 @@ func New() *World {
 	return w
 }
 
+// RLock acquires the world's read lock. Multiple goroutines may hold the read
+// lock simultaneously. RLock blocks while a writer holds the lock.
+//
+// Use RLock/RUnlock to perform an atomic multi-call read snapshot:
+//
+//	w.RLock()
+//	defer w.RUnlock()
+//	stats := w.Stats()
+//	count := w.Count()
+//
+// Cannot upgrade to a write lock: calling [World.Lock] or any mutator
+// (Set, Remove, Delete, etc.) while holding RLock will deadlock.
+// Do not call RLock from within a system fn — Progress holds the write lock
+// and RLock from the same goroutine while Lock is held will deadlock.
+func (w *World) RLock() { w.rwmu.RLock() }
+
+// RUnlock releases the world's read lock. Panics if not holding the read lock.
+func (w *World) RUnlock() { w.rwmu.RUnlock() }
+
+// Lock acquires the world's write lock. Blocks while any reader or writer holds
+// the lock. Rarely needed directly; mutators (Set, Remove, Delete, etc.) acquire
+// the lock internally.
+//
+// Use Lock/Unlock for explicit batched writes where the write lock must span
+// multiple operations:
+//
+//	w.Lock()
+//	defer w.Unlock()
+//	flecs.Set(w, e1, pos1)
+//	flecs.Set(w, e2, pos2)
+//
+// Do not call Lock from within a system fn — Progress already holds the write
+// lock, and a second Lock call from the same goroutine will deadlock.
+// Cannot be upgraded from RLock.
+func (w *World) Lock() { w.rwmu.Lock() }
+
+// Unlock releases the world's write lock. Panics if not holding the write lock.
+func (w *World) Unlock() { w.rwmu.Unlock() }
+
 // PreUpdate returns the ID of the built-in PreUpdate pipeline phase entity.
 // Systems in this phase run first in each Progress call.
 func (w *World) PreUpdate() ID { return w.preUpdateID }
@@ -145,13 +190,25 @@ func (w *World) PostUpdate() ID { return w.postUpdateID }
 func (w *World) OnFixedUpdate() ID { return w.onFixedUpdateID }
 
 // Time returns the total simulated time accumulated across all Progress calls.
-func (w *World) Time() float32 { return w.time }
+func (w *World) Time() float32 {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.time
+}
 
 // FrameCount returns the number of Progress calls made on this world.
-func (w *World) FrameCount() uint64 { return w.frameCount }
+func (w *World) FrameCount() uint64 {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.frameCount
+}
 
 // FixedTimestep returns the current fixed step size. Zero means disabled.
-func (w *World) FixedTimestep() float32 { return w.fixedTimestep }
+func (w *World) FixedTimestep() float32 {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.fixedTimestep
+}
 
 // SetFixedTimestep sets the fixed step size used by the OnFixedUpdate accumulator.
 // A step of 0 disables OnFixedUpdate dispatch entirely. Panics if step < 0.
@@ -164,6 +221,14 @@ func (w *World) FixedTimestep() float32 { return w.fixedTimestep }
 func (w *World) SetFixedTimestep(step float32) {
 	if step < 0 {
 		panic("flecs: SetFixedTimestep: step must be >= 0")
+	}
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
 	}
 	w.fixedTimestep = step
 }
@@ -186,9 +251,11 @@ func (w *World) SetWorkerCount(n int) {
 	if n < 0 {
 		panic("flecs: SetWorkerCount: n must be >= 0")
 	}
-	if w.inProgress {
+	if w.inDispatch.Load() {
 		return
 	}
+	w.rwmu.Lock()
+	defer w.rwmu.Unlock()
 	if w.workerCh != nil {
 		close(w.workerCh)
 		w.workerCh = nil
@@ -209,11 +276,29 @@ func (w *World) SetWorkerCount(n int) {
 
 // WorkerCount returns the current number of worker goroutines. Zero means
 // serial dispatch (the default).
-func (w *World) WorkerCount() int { return w.workerCount }
+func (w *World) WorkerCount() int {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.workerCount
+}
 
 // NewEntity allocates a new entity, places it in the empty-signature table,
 // and returns its ID.
 func (w *World) NewEntity() ID {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
+	return w.newEntityLocked()
+}
+
+// newEntityLocked allocates a new entity without acquiring the world lock.
+// Callers must hold the write lock or have inProgress set.
+func (w *World) newEntityLocked() ID {
 	e := w.index.Alloc()
 	rec := w.index.Get(e)
 	rec.Table = w.empty
@@ -267,6 +352,14 @@ func (w *World) deleteOne(e ID) bool {
 //
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		if !w.index.IsAlive(e) {
@@ -320,16 +413,38 @@ func deleteImmediate(w *World, e ID) bool {
 }
 
 // IsAlive reports whether e is currently alive.
-func (w *World) IsAlive(e ID) bool { return w.index.IsAlive(e) }
+func (w *World) IsAlive(e ID) bool {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.index.IsAlive(e)
+}
 
 // Count returns the number of currently alive entities (including component entities).
-func (w *World) Count() int { return w.index.Count() }
+func (w *World) Count() int {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.index.Count()
+}
 
 // RegisterComponent registers T as a component-entity in w and returns its ID.
 // Idempotent: if T is already registered with a component ID, returns that ID.
 // The component itself is an entity, mirroring the flecs convention that
 // components are first-class entities.
 func RegisterComponent[T any](w *World) ID {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
+	return registerComponentNoLock[T](w)
+}
+
+// registerComponentNoLock is the lock-free body of RegisterComponent. Callers
+// must hold the write lock or have inProgress set.
+func registerComponentNoLock[T any](w *World) ID {
 	info, ok := component.LookupByType[T](w.registry)
 	if ok && info.Component != 0 {
 		return info.Component
@@ -358,6 +473,14 @@ func RegisterComponent[T any](w *World) ID {
 // queued and applied on DeferEnd. Reads (Get/Has/Owns/IsAlive) still see the
 // CURRENT state, not the deferred future state.
 func Set[T any](w *World, e ID, v T) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v
@@ -372,7 +495,7 @@ func Set[T any](w *World, e ID, v T) {
 }
 
 func setImmediate[T any](w *World, e ID, v T) {
-	cid := RegisterComponent[T](w)
+	cid := registerComponentNoLock[T](w)
 	info, _ := component.LookupByType[T](w.registry)
 	setImmediateByPtr(w, e, cid, unsafe.Pointer(&v), info)
 }
@@ -382,6 +505,8 @@ func setImmediate[T any](w *World, e ID, v T) {
 // Returns (zero, false) if T is not registered, e is not alive, or no IsA
 // path yields T. Does NOT auto-register T.
 func Get[T any](w *World, e ID) (T, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
@@ -405,9 +530,16 @@ func Get[T any](w *World, e ID) (T, bool) {
 }
 
 // Has reports whether entity e has component T — locally or via an IsA chain.
-// Auto-registers T so the answer is meaningful; an unregistered type yields false.
+// Returns false if T is not registered, e is not alive, or no path yields T.
+// Does NOT auto-register T; call [RegisterComponent][T] first if needed.
 func Has[T any](w *World, e ID) bool {
-	cid := RegisterComponent[T](w)
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	info, ok := component.LookupByType[T](w.registry)
+	if !ok || info.Component == 0 {
+		return false
+	}
+	cid := info.Component
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -422,9 +554,16 @@ func Has[T any](w *World, e ID) bool {
 
 // Owns reports whether entity e locally owns component T — T is present in
 // e's own archetype table rather than inherited via an IsA chain.
-// Auto-registers T (matches Has[T] policy). Returns false if e is not alive.
+// Returns false if T is not registered or e is not alive.
+// Does NOT auto-register T; call [RegisterComponent][T] first if needed.
 func Owns[T any](w *World, e ID) bool {
-	cid := RegisterComponent[T](w)
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	info, ok := component.LookupByType[T](w.registry)
+	if !ok || info.Component == 0 {
+		return false
+	}
+	cid := info.Component
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -439,6 +578,14 @@ func Owns[T any](w *World, e ID) bool {
 // Within a deferred block, the operation is queued; returns true if T is
 // currently present on e (at queue time).
 func Remove[T any](w *World, e ID) bool {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		info, ok := component.LookupByType[T](w.registry)
@@ -623,6 +770,8 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 // componentID, in registration order. Returns an empty (non-nil) slice when no
 // tables are registered for componentID.
 func (w *World) TablesFor(componentID ID) []*table.Table {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	return w.compIndex.TablesFor(componentID)
 }
 
@@ -630,6 +779,8 @@ func (w *World) TablesFor(componentID ID) []*table.Table {
 // registration order. fn returns false to stop iteration early. No allocation
 // is performed; this is the hot path for Phase 3 query iteration.
 func (w *World) EachTableFor(componentID ID, fn func(*table.Table) bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	w.compIndex.Each(componentID, fn)
 }
 
@@ -683,10 +834,24 @@ func sigKey(sig []ID) string {
 // Note: lifecycle events that occur inside World.New (empty table creation,
 // built-in entity allocation) are not logged because SetLogger cannot be
 // called until after New() returns.
-func (w *World) SetLogger(l *slog.Logger) { w.logger = l }
+func (w *World) SetLogger(l *slog.Logger) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
+	w.logger = l
+}
 
 // Logger returns the current logger, or nil if none is installed.
-func (w *World) Logger() *slog.Logger { return w.logger }
+func (w *World) Logger() *slog.Logger {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return w.logger
+}
 
 // formatSig returns a space-separated string of decimal component IDs for use
 // as the "signature" attribute on "table created" log records.

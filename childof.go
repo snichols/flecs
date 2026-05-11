@@ -17,6 +17,8 @@ func (w *World) ChildOf() ID { return w.childOfID }
 // Behavior is undefined if fn calls Delete, AddID, RemoveID, or Set during
 // iteration; any of those operations may mutate the table being iterated.
 func (w *World) EachChild(parent ID, fn func(child ID) bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	pairID := MakePair(w.childOfID, parent)
 	w.compIndex.Each(pairID, func(t *table.Table) bool {
 		for _, child := range t.Entities() {
@@ -36,6 +38,13 @@ func (w *World) EachChild(parent ID, fn func(child ID) bool) {
 //
 // Returns (0, false) if e is not alive or has no ChildOf relationship.
 func (w *World) ParentOf(e ID) (ID, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return parentOfUnlocked(w, e)
+}
+
+// parentOfUnlocked is the lock-free body of ParentOf.
+func parentOfUnlocked(w *World, e ID) (ID, bool) {
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return 0, false

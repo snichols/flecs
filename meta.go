@@ -37,6 +37,8 @@ type ComponentInfo struct {
 // After World.New(), Components() contains exactly one entry: the Name component.
 // Mutating the returned slice does not affect the world.
 func (w *World) Components() []ID {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	return w.registry.IDs()
 }
 
@@ -49,6 +51,13 @@ func (w *World) Components() []ID {
 // The EnsureID path auto-registers zero-size tag TypeInfos for raw entity IDs
 // and pair IDs used as tags; those entries return (info, true) with Size==0.
 func (w *World) ComponentInfo(id ID) (ComponentInfo, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return componentInfoUnlocked(w, id)
+}
+
+// componentInfoUnlocked is the lock-free body of ComponentInfo.
+func componentInfoUnlocked(w *World, id ID) (ComponentInfo, bool) {
 	info, ok := w.registry.LookupByID(id)
 	if !ok {
 		return ComponentInfo{}, false
@@ -73,6 +82,13 @@ func (w *World) ComponentInfo(id ID) (ComponentInfo, bool) {
 // The returned slice is a copy of the table's signature; mutating it does not
 // affect the world. Includes pair IDs (e.g. MakePair(ChildOf, parent)).
 func (w *World) EntityComponents(e ID) []ID {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return entityComponentsUnlocked(w, e)
+}
+
+// entityComponentsUnlocked is the lock-free body of EntityComponents.
+func entityComponentsUnlocked(w *World, e ID) []ID {
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return nil
@@ -97,6 +113,8 @@ func (w *World) EntityComponents(e ID) []ID {
 // Behavior is undefined if fn calls Set/Add/Remove/Delete during iteration;
 // wrap in Defer for safe mutation.
 func (w *World) EachEntity(fn func(e ID) bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	w.index.EachID(fn)
 }
 
@@ -105,6 +123,8 @@ func (w *World) EachEntity(fn func(e ID) bool) {
 //
 // For hot paths, prefer EachEntity to avoid the allocation.
 func (w *World) AliveEntities() []ID {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	out := make([]ID, 0, w.index.Count())
 	w.index.EachID(func(e ID) bool {
 		out = append(out, e)

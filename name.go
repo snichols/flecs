@@ -1,6 +1,11 @@
 package flecs
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/snichols/flecs/internal/component"
+	"github.com/snichols/flecs/internal/storage/table"
+)
 
 // Name is the built-in name component. Entities with a Name can be addressed
 // by dot-separated path strings and located via Lookup / LookupChild. Names
@@ -27,8 +32,35 @@ func (w *World) SetName(e ID, name string) {
 // Value is the empty string. An empty Value is treated as "unnamed" for path
 // purposes. Inherited names via IsA are visible (same as Get[Name] semantics).
 func (w *World) GetName(e ID) (string, bool) {
+	// Get[Name] acquires RLock internally; no additional locking needed here.
 	n, ok := Get[Name](w, e)
 	if !ok || n.Value == "" {
+		return "", false
+	}
+	return n.Value, true
+}
+
+// getNameUnlocked returns the name of entity e without acquiring the world lock.
+// Callers must hold the read or write lock, or have inProgress set.
+func getNameUnlocked(w *World, e ID) (string, bool) {
+	info, ok := component.LookupByType[Name](w.registry)
+	if !ok || info.Component == 0 {
+		return "", false
+	}
+	rec := w.index.Get(e)
+	if rec == nil {
+		return "", false
+	}
+	t := rec.Table
+	if t == nil || !t.HasComponent(info.Component) {
+		return "", false
+	}
+	ptr := t.Get(int(rec.Row), info.Component)
+	if ptr == nil {
+		return "", false
+	}
+	n := *(*Name)(ptr)
+	if n.Value == "" {
 		return "", false
 	}
 	return n.Value, true
@@ -47,14 +79,24 @@ func (w *World) RemoveName(e ID) bool {
 // When sibling names collide, the first match in iteration order is returned.
 // Behavior is undefined when sibling names collide; do not rely on ordering.
 func (w *World) LookupChild(parent ID, name string) (ID, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return lookupChildUnlocked(w, parent, name)
+}
+
+// lookupChildUnlocked is the lock-free body of LookupChild.
+func lookupChildUnlocked(w *World, parent ID, name string) (ID, bool) {
 	if parent != 0 {
 		var found ID
-		w.EachChild(parent, func(child ID) bool {
-			if n, ok := w.GetName(child); ok && n == name {
-				found = child
-				return false
+		pairID := MakePair(w.childOfID, parent)
+		w.compIndex.Each(pairID, func(t *table.Table) bool {
+			for _, child := range t.Entities() {
+				if n, ok := getNameUnlocked(w, child); ok && n == name {
+					found = child
+					return false
+				}
 			}
-			return true
+			return found == 0
 		})
 		if found != 0 {
 			return found, true
@@ -67,13 +109,19 @@ func (w *World) LookupChild(parent ID, name string) (ID, bool) {
 		if found != 0 {
 			return
 		}
-		if !Owns[Name](w, id) {
+		// Check if entity locally has Name component (no auto-register).
+		info, ok := component.LookupByType[Name](w.registry)
+		if !ok || info.Component == 0 {
 			return
 		}
-		if _, hasParent := w.ParentOf(id); hasParent {
+		rec := w.index.Get(id)
+		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
 			return
 		}
-		if n, ok := w.GetName(id); ok && n == name {
+		if _, hasParent := parentOfUnlocked(w, id); hasParent {
+			return
+		}
+		if n, ok := getNameUnlocked(w, id); ok && n == name {
 			found = id
 		}
 	})
@@ -100,10 +148,12 @@ func (w *World) Lookup(path string) (ID, bool) {
 			return 0, false
 		}
 	}
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	var current ID // 0 = root scope
 	for _, seg := range segments {
 		var ok bool
-		current, ok = w.LookupChild(current, seg)
+		current, ok = lookupChildUnlocked(w, current, seg)
 		if !ok {
 			return 0, false
 		}
@@ -122,7 +172,9 @@ func (w *World) Lookup(path string) (ID, bool) {
 //     ancestor. For example, if "wheel" → "car" (unnamed) → "scene", PathOf
 //     returns "wheel", not "car.wheel" or "scene.car.wheel".
 func (w *World) PathOf(e ID) string {
-	name, ok := w.GetName(e)
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	name, ok := getNameUnlocked(w, e)
 	if !ok {
 		return ""
 	}
@@ -130,7 +182,7 @@ func (w *World) PathOf(e ID) string {
 	cur := e
 	seen := map[ID]struct{}{e: {}}
 	for {
-		parent, hasParent := w.ParentOf(cur)
+		parent, hasParent := parentOfUnlocked(w, cur)
 		if !hasParent {
 			break
 		}
@@ -138,7 +190,7 @@ func (w *World) PathOf(e ID) string {
 			break // cycle guard
 		}
 		seen[parent] = struct{}{}
-		pname, ok := w.GetName(parent)
+		pname, ok := getNameUnlocked(w, parent)
 		if !ok {
 			break // unnamed ancestor: stop here
 		}

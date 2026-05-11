@@ -193,8 +193,10 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	// seedIdx is always valid: NewQuery/NewQueryFromTerms guarantee >= 1 TermAnd.
+	// Call compIndex.TablesFor directly (bypassing the lock in w.TablesFor) so
+	// that callers which already hold rwmu can call Iter safely.
 	seedID := q.terms[seedIdx].ID
-	candidates := q.w.TablesFor(seedID)
+	candidates := q.w.compIndex.TablesFor(seedID)
 	return &QueryIter{
 		q:          q,
 		terms:      q.terms,

@@ -55,6 +55,18 @@ func (w *World) DeferEnd() {
 	queue := w.deferred
 	w.deferred = nil
 	w.deferMu.Unlock()
+	// Acquire the write lock for the flush unless we are already inside a
+	// locked context (Progress or another outer Lock holder). Set inProgress
+	// so that nested calls inside queued closures (e.g. observer callbacks
+	// calling Set) skip re-acquiring the lock they'd deadlock on.
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	for _, fn := range queue {
 		fn(w)
 	}

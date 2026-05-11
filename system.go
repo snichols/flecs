@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -63,6 +64,14 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 	if q.w != w {
 		panic("flecs: NewSystem: query belongs to a different world")
 	}
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 
 	// Compact removed entries lazily before appending.
 	live := w.systems[:0]
@@ -106,6 +115,14 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	if q.w != w {
 		panic("flecs: NewSystemInPhase: query belongs to a different world")
 	}
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 
 	// Compact removed entries lazily before appending.
 	live := w.systems[:0]
@@ -134,7 +151,17 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 // owns its own iterator. Structural mutations (Set, Remove, Delete) from
 // within a parallel system are queued through the deferred mechanism and
 // applied after the phase completes.
-func (s *System) SetParallel(v bool) { s.parallel = v }
+func (s *System) SetParallel(v bool) {
+	if !s.w.inProgress.Load() {
+		s.w.rwmu.Lock()
+		s.w.inProgress.Store(true)
+		defer func() {
+			s.w.inProgress.Store(false)
+			s.w.rwmu.Unlock()
+		}()
+	}
+	s.parallel = v
+}
 
 // Parallel reports whether this system is flagged for parallel dispatch.
 func (s *System) Parallel() bool { return s.parallel }
@@ -150,6 +177,14 @@ func (s *System) Parallel() bool { return s.parallel }
 // over-approximates: even read-only access to a component that another system
 // writes is treated as a conflict unless SetWriteSet([]) is explicitly used.
 func (s *System) SetWriteSet(ids []ID) {
+	if !s.w.inProgress.Load() {
+		s.w.rwmu.Lock()
+		s.w.inProgress.Store(true)
+		defer func() {
+			s.w.inProgress.Store(false)
+			s.w.rwmu.Unlock()
+		}()
+	}
 	m := make(map[ID]struct{}, len(ids))
 	for _, id := range ids {
 		m[id] = struct{}{}
@@ -187,6 +222,14 @@ func (s *System) effectiveWriteSet() map[ID]struct{} {
 func (s *System) Close() {
 	if s.removed {
 		return
+	}
+	if !s.w.inProgress.Load() {
+		s.w.rwmu.Lock()
+		s.w.inProgress.Store(true)
+		defer func() {
+			s.w.inProgress.Store(false)
+			s.w.rwmu.Unlock()
+		}()
 	}
 	s.removed = true
 	if s.w.logger != nil {
@@ -227,10 +270,39 @@ func (w *World) Progress(dt float32) {
 	if dt < 0 {
 		panic("flecs: Progress: dt must be >= 0")
 	}
-	w.inProgress = true
-	defer func() { w.inProgress = false }()
+	w.rwmu.Lock()
+	w.inProgress.Store(true)
+	w.inDispatch.Store(true)
+	defer func() {
+		w.inProgress.Store(false)
+		w.inDispatch.Store(false)
+		w.rwmu.Unlock()
+	}()
 	w.frameCount++
 	w.time += dt
+
+	// runFn executes a single system function with the write lock released so that
+	// the system fn can safely call world read methods (Get, Has, IsAlive, etc.).
+	// The lock is reacquired — even on panic — before runFn returns, ensuring the
+	// DeferEnd flush that follows always runs under the write lock.
+	//
+	// Re-acquisition uses TryLock in a spin loop rather than Lock() to avoid
+	// creating a pending-writer barrier: Lock() would block new RLock calls,
+	// deadlocking callers who hold w.RLock() and call a read method internally.
+	runFn := func(s *System, phaseDT float32) {
+		it := s.query.Iter()
+		w.inProgress.Store(false)
+		w.rwmu.Unlock()
+		func() {
+			defer func() {
+				for !w.rwmu.TryLock() {
+					runtime.Gosched()
+				}
+				w.inProgress.Store(true)
+			}()
+			s.fn(phaseDT, it)
+		}()
+	}
 
 	runPhase := func(p ID, phaseDT float32) {
 		w.Defer(func() {
@@ -241,10 +313,10 @@ func (w *World) Progress(dt float32) {
 				}
 			}
 			if w.workerCount == 0 {
-				// Serial dispatch: single-threaded behavior unchanged.
+				// Serial dispatch: release write lock around each system fn so the fn
+				// can call world read methods without deadlocking.
 				for _, s := range active {
-					it := s.query.Iter()
-					s.fn(phaseDT, it)
+					runFn(s, phaseDT)
 				}
 				return
 			}
@@ -256,8 +328,7 @@ func (w *World) Progress(dt float32) {
 			for i < len(active) {
 				s := active[i]
 				if !s.parallel {
-					it := s.query.Iter()
-					s.fn(phaseDT, it)
+					runFn(s, phaseDT)
 					i++
 					continue
 				}
@@ -288,23 +359,34 @@ func (w *World) Progress(dt float32) {
 				batch := active[batchStart:i]
 				if len(batch) <= 1 {
 					if len(batch) == 1 {
-						it := batch[0].query.Iter()
-						batch[0].fn(phaseDT, it)
+						runFn(batch[0], phaseDT)
 					}
 					continue
 				}
 				// Dispatch all systems in the batch as concurrent jobs.
-				var wg sync.WaitGroup
-				for _, bs := range batch {
-					bs := bs
-					wg.Add(1)
-					w.workerCh <- func() {
-						defer wg.Done()
-						it := bs.query.Iter()
-						bs.fn(phaseDT, it)
+				// Release write lock so that worker goroutines can call world read methods.
+				// TryLock spin on reacquire (same rationale as runFn above).
+				w.inProgress.Store(false)
+				w.rwmu.Unlock()
+				func() {
+					defer func() {
+						for !w.rwmu.TryLock() {
+							runtime.Gosched()
+						}
+						w.inProgress.Store(true)
+					}()
+					var wg sync.WaitGroup
+					for _, bs := range batch {
+						bs := bs
+						wg.Add(1)
+						w.workerCh <- func() {
+							defer wg.Done()
+							it := bs.query.Iter()
+							bs.fn(phaseDT, it)
+						}
 					}
-				}
-				wg.Wait()
+					wg.Wait()
+				}()
 			}
 		})
 	}
@@ -366,6 +448,8 @@ func (w *World) Progress(dt float32) {
 
 // SystemCount returns the number of currently registered (non-closed) systems.
 func (w *World) SystemCount() int {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	n := 0
 	for _, s := range w.systems {
 		if !s.removed {

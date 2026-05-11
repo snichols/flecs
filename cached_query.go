@@ -135,6 +135,14 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 // must be the pre-extracted And-term IDs; orGroups must be the pre-built OR-groups
 // (nil for queries with no TermOr terms).
 func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID) *CachedQuery {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	cq := &CachedQuery{w: w, terms: terms, andIDs: andIDs, orGroups: orGroups, tables: make([]*table.Table, 0)}
 
 	// Initial population: check every existing table.
@@ -240,6 +248,14 @@ func (cq *CachedQuery) EntityCount() int {
 // After Close, Iter/Each/Terms/Count/EntityCount return empty results, and
 // future table-creation notifications are ignored. O(1), 0 allocs.
 func (cq *CachedQuery) Close() {
+	if !cq.w.inProgress.Load() {
+		cq.w.rwmu.Lock()
+		cq.w.inProgress.Store(true)
+		defer func() {
+			cq.w.inProgress.Store(false)
+			cq.w.rwmu.Unlock()
+		}()
+	}
 	cq.removed = true
 }
 
@@ -317,6 +333,14 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 //
 // Returns false after Close.
 func (cq *CachedQuery) Changed() bool {
+	if !cq.w.inProgress.Load() {
+		cq.w.rwmu.Lock()
+		cq.w.inProgress.Store(true)
+		defer func() {
+			cq.w.inProgress.Store(false)
+			cq.w.rwmu.Unlock()
+		}()
+	}
 	if cq.removed {
 		return false
 	}

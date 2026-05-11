@@ -66,6 +66,14 @@ func (o *Observer) Unsubscribe() {
 	if len(o.nodes) == 0 {
 		return
 	}
+	if o.w != nil && !o.w.inProgress.Load() {
+		o.w.rwmu.Lock()
+		o.w.inProgress.Store(true)
+		defer func() {
+			o.w.inProgress.Store(false)
+			o.w.rwmu.Unlock()
+		}()
+	}
 	for _, n := range o.nodes {
 		n.removed = true
 	}
@@ -81,7 +89,15 @@ func (o *Observer) Unsubscribe() {
 // registered for the same (T, event), and after observers registered earlier.
 // Returns an *Observer handle; call Unsubscribe to cancel.
 func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
-	id := RegisterComponent[T](w)
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
+	id := registerComponentNoLock[T](w)
 	callback := func(e ID, ptr unsafe.Pointer) {
 		fn(e, (*T)(ptr))
 	}
@@ -102,6 +118,14 @@ func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
 // helper call (AddID, Set, SetPair, Delete paths).
 // Returns an *Observer handle; call Unsubscribe to cancel.
 func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointer)) *Observer {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, fn)
 	obs.nodes = append(obs.nodes, node)
@@ -118,7 +142,15 @@ func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointe
 // function to handle Add, Set, and Remove events. Returns a single *Observer
 // handle; Unsubscribe cancels all subscriptions.
 func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID, v *T)) *Observer {
-	id := RegisterComponent[T](w)
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
+	id := registerComponentNoLock[T](w)
 	obs := &Observer{w: w}
 	for _, ev := range events {
 		ev := ev
@@ -173,6 +205,17 @@ func (w *World) dispatchObservers(id ID, event EventKind, e ID, ptr unsafe.Point
 		if n.removed {
 			continue
 		}
-		n.callback(e, ptr)
+		// Release write lock so observer callbacks can call world read methods without
+		// deadlocking. An inner function with a deferred reacquire ensures the lock is
+		// restored even if the callback panics.
+		w.inProgress.Store(false)
+		w.rwmu.Unlock()
+		func() {
+			defer func() {
+				w.rwmu.Lock()
+				w.inProgress.Store(true)
+			}()
+			n.callback(e, ptr)
+		}()
 	}
 }

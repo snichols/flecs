@@ -74,12 +74,21 @@ type ComponentStat struct {
 // ComponentStats includes all registered components: data types (Size > 0),
 // tag types (Size == 0), and pair types (both data-bearing and tag-only).
 func (w *World) Stats() Stats {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	// Access all fields directly to avoid nested lock acquisition.
+	sysCount := 0
+	for _, s := range w.systems {
+		if !s.removed {
+			sysCount++
+		}
+	}
 	s := Stats{
-		EntityCount:      w.Count(),
+		EntityCount:      w.index.Count(),
 		TableCount:       len(w.tables),
 		QueryCount:       0,
 		CachedQueryCount: w.cachedQueryCount(),
-		SystemCount:      w.SystemCount(),
+		SystemCount:      sysCount,
 		FrameCount:       w.frameCount,
 		Time:             float64(w.time),
 	}
@@ -99,6 +108,8 @@ func (w *World) SystemCountInPhase(phase ID) int {
 	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
 		panic(fmt.Sprintf("flecs: SystemCountInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
 	}
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	n := 0
 	for _, s := range w.systems {
 		if !s.removed && s.phase == phase {
@@ -121,7 +132,7 @@ func (w *World) cachedQueryCount() int {
 
 // buildComponentStats builds per-component table and entity counts for Stats().
 func (w *World) buildComponentStats() []ComponentStat {
-	ids := w.Components()
+	ids := w.registry.IDs()
 	if len(ids) == 0 {
 		return nil
 	}

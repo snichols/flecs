@@ -140,6 +140,7 @@ within a table.
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 | REST API | `NewRESTHandler(w)` — read-only HTTP inspection + snapshot save/load (`GET /stats`, `/components`, `/entities`, `/snapshot`; `PUT /snapshot`) |
 | Structured logging | `w.SetLogger(*slog.Logger)` — lifecycle events at DEBUG level; nil-logger fast path (single pointer compare) |
+| Concurrent reads | `w.RLock()`/`w.RUnlock()`, `w.Lock()`/`w.Unlock()` — built-in `sync.RWMutex`; read accessors are safe to call concurrently with `Progress` |
 
 ---
 

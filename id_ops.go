@@ -23,6 +23,14 @@ import (
 // Within a deferred block, the operation is queued; returns true if e does not
 // currently have id (at queue time).
 func AddID(w *World, e ID, e2 ID) bool {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
@@ -64,6 +72,14 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 // Within a deferred block, the operation is queued; returns true if e currently
 // has id (at queue time).
 func RemoveID(w *World, e ID, id ID) bool {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		rec := w.index.Get(e)
@@ -97,6 +113,8 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 // locally or via an IsA chain. Returns false if e is not alive or id is not
 // reachable. Does NOT auto-register.
 func HasID(w *World, e ID, id ID) bool {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -112,6 +130,14 @@ func HasID(w *World, e ID, id ID) bool {
 // by id. Local-only: does not walk the IsA chain. Does not auto-register.
 // Returns false if e is not alive.
 func OwnsID(w *World, e ID, id ID) bool {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
+	return ownsIDUnlocked(w, e, id)
+}
+
+// ownsIDUnlocked is the lock-free body of OwnsID. Callers must hold the world
+// lock (read or write) or have inProgress set.
+func ownsIDUnlocked(w *World, e ID, id ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -134,6 +160,14 @@ func OwnsID(w *World, e ID, id ID) bool {
 //
 // Within a deferred block, the operation is queued and applied on DeferEnd.
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
+	if !w.inProgress.Load() {
+		w.rwmu.Lock()
+		w.inProgress.Store(true)
+		defer func() {
+			w.inProgress.Store(false)
+			w.rwmu.Unlock()
+		}()
+	}
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
 		captured := v
@@ -175,6 +209,8 @@ func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 //
 // GetPair does NOT auto-register; a missing registration returns (zero, false).
 func GetPair[T any](w *World, e ID, rel ID, tgt ID) (T, bool) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	var zero T
 	pairID := MakePair(rel, tgt)
 	info, ok := w.registry.LookupByID(pairID)
