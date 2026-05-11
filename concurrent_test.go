@@ -9,7 +9,6 @@ import (
 )
 
 type readonlyPos struct{ X, Y float32 }
-type readonlyVel struct{ DX, DY float32 }
 
 // TestReadonlyAllowsConcurrentReaders verifies that N goroutines can each
 // iterate via Each1 while the main goroutine holds a Readonly window open,
