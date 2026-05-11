@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — 2026-05-11
+
+Completes the structured-term query API with OR support. No breaking
+changes.
 
 ### Added
 
