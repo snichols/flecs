@@ -84,22 +84,26 @@ func (q *Query) Each(fn func(*QueryIter)) {
 	}
 }
 
-// QueryIter is a pull-style iterator over the tables matching a Query.
-// Obtain via Query.Iter; the zero value is unusable.
+// QueryIter is a pull-style iterator over the tables matching a Query or
+// CachedQuery. Obtain via Query.Iter or CachedQuery.Iter; the zero value is
+// unusable.
 //
 // Mutation warning: calling Set, Remove, or Delete on the World while this
 // iterator is active produces undefined behaviour.
 type QueryIter struct {
 	q          *Query
-	candidates []*table.Table // seed-table snapshot from Iter()
+	candidates []*table.Table // seed-table snapshot (uncached) or cache reference (cached)
 	pos        int            // index into candidates; -1 = before first Next
 	current    *table.Table   // non-nil only when positioned on a matching table
+	// cached, when true, skips the per-candidate HasComponent check in Next:
+	// the candidate list is pre-filtered by CachedQuery. When false (the
+	// default), every candidate is checked against q.terms.
+	cached bool
 }
 
 // Next advances to the next matching table. Returns true when positioned on a
 // valid table; returns false when iteration is exhausted.
 func (it *QueryIter) Next() bool {
-	terms := it.q.terms
 	for {
 		it.pos++
 		if it.pos >= len(it.candidates) {
@@ -107,8 +111,14 @@ func (it *QueryIter) Next() bool {
 			return false
 		}
 		t := it.candidates[it.pos]
+		if it.cached {
+			// Cache is pre-filtered by CachedQuery.tryMatchTable; every
+			// candidate is already a match.
+			it.current = t
+			return true
+		}
 		match := true
-		for _, id := range terms {
+		for _, id := range it.q.terms {
 			if !t.HasComponent(id) {
 				match = false
 				break

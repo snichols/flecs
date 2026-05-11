@@ -37,3 +37,10 @@ func EachTableForCount(w *World, componentID ID, stopAfter int) int {
 	})
 	return count
 }
+
+// CachedQuerySliceLen returns the length of the world's internal cachedQueries
+// slice, including entries that have been marked removed but not yet compacted.
+// For tests only: used to verify amortized compaction behaviour.
+func CachedQuerySliceLen(w *World) int {
+	return len(w.cachedQueries)
+}
