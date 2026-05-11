@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 — 2026-05-11
 
 Structured lifecycle logging via `log/slog`. No breaking changes.
 
