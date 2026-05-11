@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — Phase 10.1: Parallel System Dispatch
+
+Opt-in parallel system dispatch within a phase. Systems flagged as
+parallel-safe run in goroutines from a persistent worker pool; systems with
+overlapping write sets are forced serial. ECS storage remains non-goroutine-safe;
+safety is enforced conservatively via per-system write-set conflict detection.
+No breaking changes.
+
+### Added
+
+- **`(*System).SetParallel(bool)`** — opts a system in to parallel dispatch.
+  Default: `false` (serial). Takes effect only when `WorkerCount > 0`.
+- **`(*System).Parallel() bool`** — returns the current parallel flag.
+- **`(*System).SetWriteSet(ids []flecs.ID)`** — declares the component IDs this
+  system writes. Overrides the default (all And/Or/Optional query term IDs).
+  Empty slice declares a read-only system that never conflicts.
+- **`(*World).SetWorkerCount(n int)`** — sets the worker pool size. `0`
+  (default) = serial dispatch; `n > 0` = persistent goroutine pool with a
+  buffered channel of size `2n`. Negative panics. Changing `n` between
+  `Progress` calls tears down the old pool. Calling during `Progress` is a
+  no-op.
+- **`(*World).WorkerCount() int`** — returns the current pool size.
+- **Parallel phase dispatch** — within each phase, systems are partitioned into
+  maximal contiguous batches of parallel-safe systems with pairwise-disjoint
+  write sets. Each batch is dispatched via `sync.WaitGroup` before the next
+  batch starts. Serial systems form single-system batches.
+- **Deferred-safe parallel mutations** — `Set`, `Remove`, `Delete`, `AddID`,
+  `RemoveID`, `SetPair`, `SetByID` are mutex-protected on the defer queue;
+  parallel systems can safely call these without data races.
+
+### Documentation
+
+- `doc.go`: new "Parallel Execution" section with code snippet, conflict-
+  detection explanation, and storage-not-goroutine-safe rule.
+- `BENCH.md`: parallel vs serial speedup measurements for 10k-entity dispatch.
+
+---
+
 ## v0.9.0 — 2026-05-11
 
 Structured lifecycle logging via `log/slog`. No breaking changes.

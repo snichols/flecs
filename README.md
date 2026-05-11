@@ -133,6 +133,7 @@ within a table.
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
+| Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
@@ -159,7 +160,7 @@ within a table.
 | OR query terms | ✅ (`Or`, `TermOr`, `FieldMaybe` on Or-group IDs) | ✅ |
 | Up/Down traversal in queries | ❌ deferred | ✅ |
 | Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
-| Multi-threading | ❌ deferred | ✅ |
+| Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
 | REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |
 

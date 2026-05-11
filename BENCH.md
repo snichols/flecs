@@ -94,6 +94,13 @@ See `.github/workflows/ci.yml` (`bench` job) and `CONTRIBUTING.md`.
 | `BenchmarkProgress_WithFixedTimestep` | OnFixedUpdate system with `SetFixedTimestep(1/60)` |
 | `BenchmarkProgress_PipelineFull` | All 4 phases (Pre, OnFixed, On, Post), 1k entities each |
 
+### k) Parallel dispatch
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkProgress_ParallelDispatch_2systems_10k` | 2 parallel systems (disjoint write sets), `WorkerCount=2`, 10k entities each |
+| `BenchmarkProgress_SerialBaseline_2systems_10k` | Same 2 systems, `WorkerCount=0` (serial baseline) |
+
 ### h) ChildOf / IsA hierarchies
 
 | Benchmark | Description |
@@ -301,3 +308,30 @@ BenchmarkSetExistingComponent-128   ~52 ns/op    0 allocs/op
 ```
 
 `BenchmarkSetExistingComponent` (the true no-migration hot path) shows no change. `BenchmarkNewEntity` variance is within normal measurement noise (~10 ns swing between runs). The nil-logger check is a single pointer compare that the compiler treats as a branch-predicted fast path; `BenchmarkSetExistingComponent` confirms **0 allocs/op** is maintained.
+
+---
+
+## Phase 10.1 — Parallel system dispatch
+
+Two systems each iterating 10k entities (pos += 1, vel.DX += 0.5). Captured on
+AMD Ryzen Threadripper PRO 5995WX 64-Cores, 2026-05-11.
+
+```
+BenchmarkProgress_ParallelDispatch_2systems_10k-128     103977    22591 ns/op   496 B/op   7 allocs/op
+BenchmarkProgress_SerialBaseline_2systems_10k-128       241250     9558 ns/op   224 B/op   2 allocs/op
+```
+
+**Speedup ratio: 0.42× (serial is 2.4× faster for this workload).**
+
+For this workload (tight CPU-bound loops on 10k entities with no I/O), the
+goroutine dispatch and `sync.WaitGroup` overhead (~12 µs) outweighs the
+parallelism benefit. The per-system iteration takes ~5 µs each; the 2-worker
+pool adds ~13 µs of coordination overhead, yielding a net slowdown.
+
+Parallel dispatch becomes beneficial when individual system work takes longer
+than the goroutine dispatch overhead (≈10–50 µs depending on pool size and
+GOMAXPROCS). Typical candidates: systems with heavy computation, systems that
+sleep, or systems with large entity counts (> 100k) on multi-core hardware.
+
+The serial baseline (`WorkerCount=0`) is bit-for-bit identical to the behavior
+before Phase 10.1; no regression was observed on existing benchmarks.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -16,13 +17,21 @@ import (
 // it.Next() in a loop; Field[T] and other iterator helpers work normally inside
 // the callback.
 //
+// Parallel execution: call SetParallel(true) to opt in. Parallel systems in
+// the same phase with disjoint write sets run concurrently in the world's
+// worker pool. Each parallel system receives its own *QueryIter; callers must
+// NOT call Field on another system's QueryIter from a parallel callback.
+//
 // *System is NOT goroutine-safe; external synchronization is required.
 type System struct {
-	w       *World
-	query   *CachedQuery
-	fn      func(dt float32, it *QueryIter)
-	phase   ID // which pipeline phase this system belongs to
-	removed bool
+	w             *World
+	query         *CachedQuery
+	fn            func(dt float32, it *QueryIter)
+	phase         ID // which pipeline phase this system belongs to
+	removed       bool
+	parallel      bool            // opt-in parallel dispatch; default false
+	writeSetFixed bool            // true after SetWriteSet called
+	writeSet      map[ID]struct{} // nil = derive from query terms; non-nil (incl. empty) = explicit
 }
 
 // NewSystem registers a new system on w in the OnUpdate phase that runs q's
@@ -116,6 +125,56 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	return sys
 }
 
+// SetParallel sets whether this system is eligible for parallel dispatch.
+// Default is false (serial). When true and the world's WorkerCount is > 0,
+// this system may run concurrently with other parallel systems in the same
+// phase whose write sets are pairwise disjoint.
+//
+// Parallel systems must not call Field on each other's QueryIter; each system
+// owns its own iterator. Structural mutations (Set, Remove, Delete) from
+// within a parallel system are queued through the deferred mechanism and
+// applied after the phase completes.
+func (s *System) SetParallel(v bool) { s.parallel = v }
+
+// Parallel reports whether this system is flagged for parallel dispatch.
+func (s *System) Parallel() bool { return s.parallel }
+
+// SetWriteSet declares the set of component IDs this system writes. This
+// overrides the default, which is derived from the system's query terms
+// (all And, Or, and Optional IDs).
+//
+// Pass an empty slice to declare a read-only system that never conflicts with
+// any other parallel system.
+//
+// Conflict detection uses the write set for O(1) overlap checks. The world
+// over-approximates: even read-only access to a component that another system
+// writes is treated as a conflict unless SetWriteSet([]) is explicitly used.
+func (s *System) SetWriteSet(ids []ID) {
+	m := make(map[ID]struct{}, len(ids))
+	for _, id := range ids {
+		m[id] = struct{}{}
+	}
+	s.writeSet = m
+	s.writeSetFixed = true
+}
+
+// effectiveWriteSet returns the write set used for conflict detection.
+// Returns the explicitly set map when SetWriteSet was called, otherwise
+// derives it from the system's query terms (And, Or, Optional IDs).
+func (s *System) effectiveWriteSet() map[ID]struct{} {
+	if s.writeSetFixed {
+		return s.writeSet
+	}
+	terms := s.query.TermsFull()
+	m := make(map[ID]struct{}, len(terms))
+	for _, t := range terms {
+		if t.Kind == TermAnd || t.Kind == TermOr || t.Kind == TermOptional {
+			m[t.ID] = struct{}{}
+		}
+	}
+	return m
+}
+
 // Close marks this system as removed. Idempotent: safe to call multiple times.
 // After Close returns, the system will be skipped in subsequent Progress calls.
 //
@@ -168,6 +227,8 @@ func (w *World) Progress(dt float32) {
 	if dt < 0 {
 		panic("flecs: Progress: dt must be >= 0")
 	}
+	w.inProgress = true
+	defer func() { w.inProgress = false }()
 	w.frameCount++
 	w.time += dt
 
@@ -179,9 +240,71 @@ func (w *World) Progress(dt float32) {
 					active = append(active, s)
 				}
 			}
-			for _, s := range active {
-				it := s.query.Iter()
-				s.fn(phaseDT, it)
+			if w.workerCount == 0 {
+				// Serial dispatch: single-threaded behavior unchanged.
+				for _, s := range active {
+					it := s.query.Iter()
+					s.fn(phaseDT, it)
+				}
+				return
+			}
+			// Parallel batch dispatch: partition active systems into maximal
+			// contiguous runs of parallel-safe systems with pairwise-disjoint
+			// write sets. Serial systems form single-system batches and run on
+			// the calling goroutine before the next batch starts.
+			i := 0
+			for i < len(active) {
+				s := active[i]
+				if !s.parallel {
+					it := s.query.Iter()
+					s.fn(phaseDT, it)
+					i++
+					continue
+				}
+				// Collect a batch: advance i while systems are parallel and
+				// their write sets are disjoint with the running union.
+				batchStart := i
+				var batchUnion map[ID]struct{}
+				for i < len(active) && active[i].parallel {
+					ws := active[i].effectiveWriteSet()
+					conflict := false
+					for id := range ws {
+						if _, ok := batchUnion[id]; ok {
+							conflict = true
+							break
+						}
+					}
+					if conflict {
+						break
+					}
+					if batchUnion == nil {
+						batchUnion = make(map[ID]struct{}, len(ws))
+					}
+					for id := range ws {
+						batchUnion[id] = struct{}{}
+					}
+					i++
+				}
+				batch := active[batchStart:i]
+				if len(batch) <= 1 {
+					if len(batch) == 1 {
+						it := batch[0].query.Iter()
+						batch[0].fn(phaseDT, it)
+					}
+					continue
+				}
+				// Dispatch all systems in the batch as concurrent jobs.
+				var wg sync.WaitGroup
+				for _, bs := range batch {
+					bs := bs
+					wg.Add(1)
+					w.workerCh <- func() {
+						defer wg.Done()
+						it := bs.query.Iter()
+						bs.fn(phaseDT, it)
+					}
+				}
+				wg.Wait()
 			}
 		})
 	}

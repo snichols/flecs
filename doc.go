@@ -246,6 +246,53 @@
 // not provide Changed(). Use [NewCachedQuery] or [NewCachedQueryFromTerms] when
 // change detection is needed.
 //
+// # Parallel Execution
+//
+// Systems can be dispatched concurrently within a phase by opting in to
+// parallel execution and configuring a worker pool:
+//
+//	w := flecs.New()
+//	w.SetWorkerCount(4) // 0 (default) = serial; positive = parallel pool
+//
+//	posID := flecs.RegisterComponent[Position](w)
+//	velID := flecs.RegisterComponent[Velocity](w)
+//
+//	moveQ := flecs.NewCachedQuery(w, posID, velID)
+//	moveSys := flecs.NewSystem(w, moveQ, func(dt float32, it *flecs.QueryIter) {
+//	    for it.Next() {
+//	        pos := flecs.Field[Position](it, posID)
+//	        vel := flecs.Field[Velocity](it, velID)
+//	        for i := range pos {
+//	            pos[i].X += vel[i].DX * dt
+//	        }
+//	    }
+//	})
+//	moveSys.SetParallel(true)
+//	moveSys.SetWriteSet([]flecs.ID{posID}) // declares written components
+//
+//	w.Progress(dt)
+//
+// Conflict detection: two parallel systems in the same phase are placed in the
+// same batch only when their write sets are pairwise disjoint. The world
+// over-approximates: unless [System.SetWriteSet] is called explicitly, the
+// default write set contains all And, Or, and Optional query term IDs. Even
+// read-only access to a component that another system writes is treated as a
+// conflict unless SetWriteSet([]flecs.ID{}) is used to declare a read-only
+// system.
+//
+// Storage is NOT goroutine-safe; the world prevents parallel writes by
+// enforcing disjoint write sets. The ECS tables are NOT goroutine-safe — only
+// systems in the same batch with disjoint write sets are allowed to run
+// concurrently. Reading a component that another parallel system writes
+// produces undefined behaviour.
+//
+// Parallel systems must NOT call [Field] on each other's [QueryIter]; each
+// system owns its iterator for the duration of its callback.
+//
+// Structural mutations ([Set], [Remove], [Delete], [AddID]) from within a
+// parallel system are safe: they are queued through the deferred mechanism
+// (mutex-protected) and applied after the entire phase completes.
+//
 // # Stats and Observability
 //
 // [World.Stats] returns a snapshot of world-level counters and per-phase frame

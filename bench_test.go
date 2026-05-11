@@ -870,3 +870,95 @@ func BenchmarkCachedQueryChangedAfterSet(b *testing.B) {
 		_ = cq.Changed()
 	}
 }
+
+// ---- k) Parallel dispatch ----
+
+// BenchmarkProgress_ParallelDispatch_2systems_10k measures two parallel systems
+// with disjoint write sets (pos and vel) dispatched concurrently via a 2-worker
+// pool over 10k entities.
+func BenchmarkProgress_ParallelDispatch_2systems_10k(b *testing.B) {
+	b.ReportAllocs()
+	w := flecs.New()
+	w.SetWorkerCount(2)
+	posID := flecs.RegisterComponent[benchPos](w)
+	velID := flecs.RegisterComponent[benchVel](w)
+	for range 10_000 {
+		e := w.NewEntity()
+		flecs.Set(w, e, benchPos{X: 1})
+		flecs.Set(w, e, benchVel{DX: 1})
+	}
+
+	cqPos := flecs.NewCachedQuery(w, posID)
+	sysA := flecs.NewSystem(w, cqPos, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			col := flecs.Field[benchPos](it, posID)
+			for i := range col {
+				col[i].X += 1
+			}
+		}
+	})
+	sysA.SetParallel(true)
+	sysA.SetWriteSet([]flecs.ID{posID})
+
+	cqVel := flecs.NewCachedQuery(w, velID)
+	sysB := flecs.NewSystem(w, cqVel, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			col := flecs.Field[benchVel](it, velID)
+			for i := range col {
+				col[i].DX += 0.5
+			}
+		}
+	})
+	sysB.SetParallel(true)
+	sysB.SetWriteSet([]flecs.ID{velID})
+
+	b.ResetTimer()
+	for range b.N {
+		w.Progress(1.0 / 60.0)
+	}
+}
+
+// BenchmarkProgress_SerialBaseline_2systems_10k is the serial baseline for
+// comparison with BenchmarkProgress_ParallelDispatch_2systems_10k.
+// WorkerCount=0 preserves the existing single-threaded behavior.
+func BenchmarkProgress_SerialBaseline_2systems_10k(b *testing.B) {
+	b.ReportAllocs()
+	w := flecs.New()
+	// WorkerCount defaults to 0 (serial).
+	posID := flecs.RegisterComponent[benchPos](w)
+	velID := flecs.RegisterComponent[benchVel](w)
+	for range 10_000 {
+		e := w.NewEntity()
+		flecs.Set(w, e, benchPos{X: 1})
+		flecs.Set(w, e, benchVel{DX: 1})
+	}
+
+	cqPos := flecs.NewCachedQuery(w, posID)
+	sysA := flecs.NewSystem(w, cqPos, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			col := flecs.Field[benchPos](it, posID)
+			for i := range col {
+				col[i].X += 1
+			}
+		}
+	})
+	sysA.SetParallel(true) // flagged parallel but pool size 0 → runs serial
+	sysA.SetWriteSet([]flecs.ID{posID})
+
+	cqVel := flecs.NewCachedQuery(w, velID)
+	sysB := flecs.NewSystem(w, cqVel, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			col := flecs.Field[benchVel](it, velID)
+			for i := range col {
+				col[i].DX += 0.5
+			}
+		}
+	})
+	sysB.SetParallel(true)
+	sysB.SetWriteSet([]flecs.ID{velID})
+
+	b.ResetTimer()
+	for range b.N {
+		w.Progress(1.0 / 60.0)
+	}
+}
