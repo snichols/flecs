@@ -119,19 +119,29 @@
 //
 // [World.MarshalJSON] and [World.UnmarshalJSON] implement [json.Marshaler] and
 // [json.Unmarshaler] for world persistence. Entities, names, ChildOf
-// parent-child hierarchies, IsA prefab relationships, and non-pair components
-// are saved and restored. Custom pair components are not serialized (Phase
-// 9.2.4).
+// parent-child hierarchies, IsA prefab relationships, custom pair components
+// (data-bearing and tag-only), and regular components are saved and restored.
+// Built-in entities are skipped.
 //
 // The v1 JSON format uses a "parent" field (serial of the ChildOf parent,
-// omitted when absent) and an optional "prefabs" field (array of IsA target
-// serials in EachPrefab order, omitted when empty). Entities are emitted in
-// topological order over the combined ChildOf+IsA predecessor graph (parents
-// and prefabs before their dependents), so a single sequential pass restores
-// the full hierarchy. First-prefab-wins inheritance semantics are preserved by
-// the "prefabs" array order.
+// omitted when absent), an optional "prefabs" field (array of IsA target
+// serials in EachPrefab order, omitted when empty), an optional "pairs" array
+// for custom pair components (omitted when empty), and a "components" map.
+// Entities are emitted in topological order over the combined ChildOf+IsA
+// predecessor graph (parents and prefabs before their dependents), so a single
+// sequential pass restores the full hierarchy.
 //
-// All component types must be pre-registered before calling UnmarshalJSON:
+// Each entry in the "pairs" array has the form:
+//
+//	{"rel":<serial>,"tgt":<serial>}                              // tag-only pair
+//	{"rel":<serial>,"tgt":<serial>,"dataType":"pkg.T","data":{}} // data-bearing pair
+//
+// DataType is the base Go type's reflect.Type.String() (not the "pair(T)"
+// wrapper name). Pre-register the base type via RegisterComponent[T] before
+// calling UnmarshalJSON for data-bearing pairs; tag-only pairs need no
+// pre-registration.
+//
+// All regular component types must be pre-registered before calling UnmarshalJSON:
 //
 //	// Save:
 //	data, err := w.MarshalJSON()
@@ -143,6 +153,26 @@
 //	flecs.RegisterComponent[Position](w2)
 //	flecs.RegisterComponent[Velocity](w2)
 //	err = w2.UnmarshalJSON(data)
+//
+// Custom pair example — tag pair and data-bearing pair round-trip:
+//
+//	type Edge struct{ Weight float32 }
+//
+//	follows := w.NewEntity()
+//	alice, bob, charlie := w.NewEntity(), w.NewEntity(), w.NewEntity()
+//	flecs.SetPair[Edge](w, alice, follows, bob, Edge{Weight: 0.8})
+//	flecs.AddID(w, alice, flecs.MakePair(follows, charlie)) // tag-only
+//
+//	data, _ := w.MarshalJSON()
+//	// JSON for alice: {"serial":2,"pairs":[
+//	//   {"rel":1,"tgt":3,"dataType":"pkg.Edge","data":{"Weight":0.8}},
+//	//   {"rel":1,"tgt":4}
+//	// ]}
+//
+//	w2 := flecs.New()
+//	flecs.RegisterComponent[Edge](w2)
+//	w2.UnmarshalJSON(data)
+//	// flecs.GetPair[Edge](w2, alice2, follows2, bob2) returns Edge{0.8}.
 //
 // IsA prefab example — a prefab entity is serialized before its instances, and
 // inheritance is restored transparently after UnmarshalJSON:

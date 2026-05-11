@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Phase 9.2.4: Custom pair component serialization** — `World.MarshalJSON`
+  now serializes custom pair components (non-ChildOf, non-IsA) into a `"pairs"`
+  array on each entity. Tag-only pairs emit `{"rel":<serial>,"tgt":<serial>}`;
+  data-bearing pairs add `"dataType"` (the base Go type's `reflect.Type.String()`)
+  and `"data"`. `World.UnmarshalJSON` restores pairs after prefabs and before
+  components: tag pairs via `AddID`, data pairs via the new `SetPairByID`.
+  A new `(*World).SetPairByID(e, rel, tgt ID, v any)` method auto-registers
+  the pair TypeInfo on first use and delegates to `SetByID`, firing
+  hooks/observers and honoring the Defer queue. `component.RegisterPairDataByType`
+  is the corresponding internal helper. ChildOf and IsA pairs continue to use
+  the dedicated `parent`/`prefabs` fields and are not duplicated in `pairs`.
+  v1 format unchanged (additive field). Coverage ≥ 96.4% (flecs), 100% (component).
 - **Phase 9.2.3: IsA prefab serialization** — `World.MarshalJSON` now
   serializes IsA relationships as a `"prefabs"` array of serials (omitted when
   empty; v1 format unchanged — the field is additive). Topo-sort is generalized

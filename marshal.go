@@ -18,7 +18,18 @@ type jsonEntity struct {
 	Name       string                     `json:"name,omitempty"`
 	Parent     int                        `json:"parent,omitempty"`
 	Prefabs    []int                      `json:"prefabs,omitempty"`
+	Pairs      []jsonPair                 `json:"pairs,omitempty"`
 	Components map[string]json.RawMessage `json:"components,omitempty"`
+}
+
+// jsonPair is the JSON representation of a single custom pair on an entity.
+// ChildOf and IsA pairs are serialized via the parent/prefabs fields instead.
+// Tag-only pairs omit DataType and Data; data-bearing pairs include both.
+type jsonPair struct {
+	Rel      int             `json:"rel"`
+	Tgt      int             `json:"tgt"`
+	DataType string          `json:"dataType,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
 }
 
 // marshaler holds state for a single MarshalJSON run: the combined ChildOf+IsA
@@ -29,6 +40,7 @@ type marshaler struct {
 	visiting       map[ID]struct{}
 	order          []ID
 	idToSerial     map[ID]int
+	indexToSerial  map[uint32]int // entity index → serial; used for pair rel/tgt lookup
 }
 
 func (m *marshaler) visit(e ID) error {
@@ -58,12 +70,19 @@ func (m *marshaler) visit(e ID) error {
 // Format (v1): version=1, entities array with serial numbers (starting at 1),
 // optional name field, optional parent field (serial of the ChildOf parent),
 // optional prefabs field (serials of IsA targets in EachPrefab order),
+// optional pairs array (custom pair components not handled by parent/prefabs),
 // and components map keyed by ComponentInfo.Name.
 //
+// The pairs array contains entries of the form
+// {"rel":<serial>,"tgt":<serial>} for tag-only pairs and
+// {"rel":<serial>,"tgt":<serial>,"dataType":"pkg.T","data":{...}} for
+// data-bearing pairs. DataType is info.Type.String() of the base Go type
+// (not the "pair(T)" wrapper name). ChildOf and IsA pairs are NOT duplicated
+// in the pairs array; they are handled exclusively via parent and prefabs.
+//
 // Built-in entities (ChildOf, IsA, Name component entity, PreUpdate, OnUpdate,
-// PostUpdate, OnFixedUpdate) are skipped. Pair components are skipped (deferred
-// to Phase 9.2.4). The Name component value is surfaced as the "name" field,
-// not as a components map entry.
+// PostUpdate, OnFixedUpdate) are skipped. The Name component value is surfaced
+// as the "name" field, not as a components map entry.
 //
 // Entities are emitted in topological order over the combined ChildOf+IsA
 // predecessor graph so that UnmarshalJSON can restore all relationships with a
@@ -106,6 +125,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		visiting:       make(map[ID]struct{}),
 		order:          make([]ID, 0, len(userEnts)),
 		idToSerial:     make(map[ID]int, len(userEnts)),
+		indexToSerial:  make(map[uint32]int, len(userEnts)),
 	}
 	for _, e := range userEnts {
 		var preds []ID
@@ -131,12 +151,15 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	// Assign serials in topo order; build reverse map for Prefabs lookup below.
+	// Assign serials in topo order; build reverse maps for Prefabs and pair lookups.
 	for i, e := range m.order {
 		m.idToSerial[e] = i + 1
+		m.indexToSerial[e.Index()] = i + 1
 	}
 
 	nameID := w.Name()
+	childOfIdx := w.ChildOf().Index()
+	isAIdx := w.IsA().Index()
 	var entities []jsonEntity
 
 	for _, e := range m.order {
@@ -167,6 +190,33 @@ func (w *World) MarshalJSON() ([]byte, error) {
 
 		for _, cid := range w.EntityComponents(e) {
 			if cid.IsPair() {
+				relIdx := uint32(cid.First())
+				tgtIdx := uint32(cid.Second())
+				if relIdx == childOfIdx || relIdx == isAIdx {
+					continue
+				}
+				relSerial, ok := m.indexToSerial[relIdx]
+				if !ok {
+					continue
+				}
+				tgtSerial, ok := m.indexToSerial[tgtIdx]
+				if !ok {
+					continue
+				}
+				jp := jsonPair{Rel: relSerial, Tgt: tgtSerial}
+				info, hasInfo := w.ComponentInfo(cid)
+				if hasInfo && info.Size > 0 && info.Type != nil {
+					v, vok := w.GetByID(e, cid)
+					if vok {
+						raw, err := json.Marshal(v)
+						if err != nil {
+							return nil, err
+						}
+						jp.DataType = info.Type.String()
+						jp.Data = raw
+					}
+				}
+				je.Pairs = append(je.Pairs, jp)
 				continue
 			}
 			if cid == nameID {
@@ -204,22 +254,27 @@ func (w *World) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON restores entities, names, ChildOf parent-child relationships,
-// IsA prefab relationships, and components from JSON produced by MarshalJSON.
-// The world need not be empty; new entities are added to existing ones.
+// IsA prefab relationships, custom pair components, and regular components from
+// JSON produced by MarshalJSON. The world need not be empty; new entities are
+// added to existing ones.
 //
 // All component types present in the JSON must be pre-registered via
-// RegisterComponent[T] before calling UnmarshalJSON. Custom pair components
-// are not restored (Phase 9.2.4).
+// RegisterComponent[T] before calling UnmarshalJSON. This applies to both
+// regular components and the base data types of custom pairs. Tag-only pairs
+// (no dataType field) are restored via AddID without pre-registration.
 //
 // Restoration order per entity: name → ChildOf parent → IsA prefabs (in
-// "prefabs" array order) → components. The prefabs array preserves the
-// first-prefab-wins inheritance semantics of the original world.
+// "prefabs" array order) → pairs (in "pairs" array order) → components. The
+// prefabs array preserves the first-prefab-wins inheritance semantics of the
+// original world.
 //
 // Error cases:
 //   - JSON parse error → wrapped error.
 //   - Unsupported version → descriptive error.
 //   - Parent serial not found in document → descriptive error.
 //   - Unknown prefab serial → "unknown prefab serial N".
+//   - Unknown pair rel/tgt serial → "pair rel serial N not found".
+//   - Unregistered pair data type → descriptive error.
 //   - Unregistered component → descriptive error.
 //   - Type mismatch → wrapped json error.
 func (w *World) UnmarshalJSON(data []byte) error {
@@ -232,12 +287,19 @@ func (w *World) UnmarshalJSON(data []byte) error {
 	}
 
 	compByName := make(map[string]ComponentInfo)
+	typeStringToType := make(map[string]reflect.Type)
 	for _, cid := range w.Components() {
 		info, ok := w.ComponentInfo(cid)
 		if !ok {
 			continue
 		}
 		compByName[info.Name] = info
+		if info.Type != nil {
+			ts := info.Type.String()
+			if _, exists := typeStringToType[ts]; !exists {
+				typeStringToType[ts] = info.Type
+			}
+		}
 	}
 
 	// Phase 1: allocate all entities so future phases can resolve serial→ID.
@@ -265,6 +327,29 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				return fmt.Errorf("flecs: unmarshal failed: unknown prefab serial %d", prefabSerial)
 			}
 			AddID(w, e, MakePair(w.IsA(), prefabID))
+		}
+		for _, pair := range je.Pairs {
+			relID, ok := serialToID[pair.Rel]
+			if !ok {
+				return fmt.Errorf("flecs: unmarshal failed: pair rel serial %d not found", pair.Rel)
+			}
+			tgtID, ok := serialToID[pair.Tgt]
+			if !ok {
+				return fmt.Errorf("flecs: unmarshal failed: pair tgt serial %d not found", pair.Tgt)
+			}
+			if pair.DataType == "" {
+				AddID(w, e, MakePair(relID, tgtID))
+			} else {
+				foundType, ok := typeStringToType[pair.DataType]
+				if !ok {
+					return fmt.Errorf("flecs: unmarshal failed: pair data type %q is not registered in the world", pair.DataType)
+				}
+				vPtr := reflect.New(foundType)
+				if err := json.Unmarshal(pair.Data, vPtr.Interface()); err != nil {
+					return fmt.Errorf("flecs: unmarshal failed: pair data type %q: %w", pair.DataType, err)
+				}
+				w.SetPairByID(e, relID, tgtID, vPtr.Elem().Interface())
+			}
 		}
 		for compName, raw := range je.Components {
 			info, ok := compByName[compName]

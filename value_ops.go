@@ -8,6 +8,40 @@ import (
 	"github.com/snichols/flecs/internal/component"
 )
 
+// SetPairByID sets the pair (rel, tgt) on entity e with the dynamic value v.
+// This is the runtime-dynamic analog of SetPair[T]: prefer SetPair[T] when the
+// type is known at compile time. Use SetPairByID when only a reflect.Value or
+// any is available — for example, during JSON deserialization.
+//
+// On first use for that pair ID, the pair is auto-registered with v's
+// reflect.Type and size metadata (a per-pair TypeInfo distinct from v's base
+// component TypeInfo). If the pair was previously registered with a different
+// Go type, SetPairByID panics with a descriptive message.
+//
+// Panics if:
+//   - v is nil
+//   - e is not alive (delegated to SetByID)
+//   - the pair is already registered with a different type than reflect.TypeOf(v)
+//
+// Fires OnAdd (when the pair is newly added) and OnSet on every call via
+// SetByID. Honors the Defer queue.
+func (w *World) SetPairByID(e, rel, tgt ID, v any) {
+	if v == nil {
+		panic("flecs: SetPairByID: v must not be nil")
+	}
+	pairID := MakePair(rel, tgt)
+	vType := reflect.TypeOf(v)
+	if existing, ok := w.registry.LookupByID(pairID); ok {
+		if existing.Type != vType {
+			panic(fmt.Sprintf("flecs: SetPairByID: pair (rel=%d, tgt=%d) is already registered with type %s, cannot set with type %s",
+				uint64(rel), uint64(tgt), existing.Type, vType))
+		}
+	} else {
+		component.RegisterPairDataByType(w.registry, pairID, vType)
+	}
+	w.SetByID(e, pairID, v)
+}
+
 // GetByID reads the value of the component identified by id from entity e and
 // returns it boxed in an any (interface{}). This is the runtime-dynamic analog
 // of Get[T]: prefer Get[T] when the component type is known at compile time.

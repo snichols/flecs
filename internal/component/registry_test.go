@@ -343,6 +343,79 @@ func TestEnsureIDReturnsExistingTypeInfo(t *testing.T) {
 	}
 }
 
+// ── RegisterPairDataByType ────────────────────────────────────────────────────
+
+func TestRegisterPairDataByTypeBasic(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 2000
+	posType := reflect.TypeFor[Position]()
+	info := component.RegisterPairDataByType(r, pairID, posType)
+
+	if info == nil {
+		t.Fatal("RegisterPairDataByType returned nil")
+	}
+	if info.Size != uintptr(unsafe.Sizeof(Position{})) {
+		t.Errorf("Size want %d, got %d", unsafe.Sizeof(Position{}), info.Size)
+	}
+	if info.Type != posType {
+		t.Error("Type mismatch")
+	}
+	if info.Component != pairID {
+		t.Errorf("Component want %d, got %d", pairID, info.Component)
+	}
+	if info.Name == "" {
+		t.Error("Name is empty")
+	}
+	if got, ok := r.LookupByID(pairID); !ok || got != info {
+		t.Fatal("LookupByID returned different *TypeInfo than RegisterPairDataByType")
+	}
+}
+
+func TestRegisterPairDataByTypeIdempotent(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 2001
+	posType := reflect.TypeFor[Position]()
+	a := component.RegisterPairDataByType(r, pairID, posType)
+	b := component.RegisterPairDataByType(r, pairID, posType)
+	if a != b {
+		t.Fatal("RegisterPairDataByType not idempotent: returned different pointers for same (type, pairID)")
+	}
+}
+
+func TestRegisterPairDataByTypeConflictPanics(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 2002
+	component.RegisterPairDataByType(r, pairID, reflect.TypeFor[Position]())
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("RegisterPairDataByType with conflicting type should panic, got none")
+		}
+	}()
+	component.RegisterPairDataByType(r, pairID, reflect.TypeFor[Velocity]())
+}
+
+func TestRegisterPairDataByTypeCopiesHooks(t *testing.T) {
+	r := component.NewRegistry()
+	const pairID ids.ID = 2003
+	base := component.Register[Position](r)
+	base.Hooks.OnSet = func(_ any, _ ids.ID, _ unsafe.Pointer) {}
+	info := component.RegisterPairDataByType(r, pairID, reflect.TypeFor[Position]())
+	if info.Hooks.OnSet == nil {
+		t.Fatal("RegisterPairDataByType did not copy OnSet hook from base TypeInfo")
+	}
+}
+
+func TestRegisterPairDataByTypeNoBaseHooks(t *testing.T) {
+	// Without pre-registered base type, hooks should be empty.
+	r := component.NewRegistry()
+	const pairID ids.ID = 2004
+	info := component.RegisterPairDataByType(r, pairID, reflect.TypeFor[Position]())
+	if info.Hooks.OnSet != nil || info.Hooks.OnAdd != nil {
+		t.Fatal("hooks should be empty when no base TypeInfo is registered")
+	}
+}
+
 // ── RegisterPairData ──────────────────────────────────────────────────────────
 
 func TestRegisterPairDataBasic(t *testing.T) {

@@ -146,6 +146,38 @@ func (r *Registry) IDs() []ids.ID {
 	return out
 }
 
+// RegisterPairDataByType is the reflect.Type analog of RegisterPairData[T].
+// It ensures that pairID is associated with a per-pair TypeInfo whose metadata
+// matches t, with Name "pair(<t.String()>)". Used by SetPairByID for dynamic
+// pair registration when only a reflect.Type is available.
+//
+// If the base TypeInfo for t is already registered (e.g. via RegisterComponent),
+// its current Hooks are copied into the pair TypeInfo, matching RegisterPairData[T]
+// semantics. Idempotent when called with the same t and pairID. Panics if
+// pairID is already associated with a different Go type.
+func RegisterPairDataByType(r *Registry, pairID ids.ID, t reflect.Type) *TypeInfo {
+	if existing, ok := r.byID[pairID]; ok {
+		if existing.Type != t {
+			panic(fmt.Sprintf("component: RegisterPairData: pair ID already associated with type %v; cannot associate with %v",
+				existing.Type, t))
+		}
+		return existing
+	}
+	var hooks Hooks
+	if base, ok := r.LookupByReflectType(t); ok {
+		hooks = base.Hooks
+	}
+	pairInfo := &TypeInfo{
+		Size:  t.Size(),
+		Align: uintptr(t.Align()),
+		Name:  "pair(" + t.String() + ")",
+		Hooks: hooks,
+		Type:  t,
+	}
+	r.AssociateID(pairInfo, pairID)
+	return pairInfo
+}
+
 // RegisterPairData ensures that pairID is associated with a per-pair TypeInfo
 // whose metadata (Size, Align, Type, Hooks) matches T's base TypeInfo, but with
 // a pointer-distinct instance and Name "pair(<base-name>)".

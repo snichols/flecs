@@ -133,7 +133,7 @@ within a table.
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
-| JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names; no pairs/hierarchies yet) |
+| JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 
 ---
 
