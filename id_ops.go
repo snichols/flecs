@@ -95,13 +95,13 @@ func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	t := rec.Table
 	if t != nil && t.HasComponent(pairID) {
 		t.Set(int(rec.Row), pairID, unsafe.Pointer(&v))
-		w.fireOnSet(pairInfo, e, t.Get(int(rec.Row), pairID))
+		w.fireOnSet(pairInfo, pairID, e, t.Get(int(rec.Row), pairID))
 		return
 	}
 	w.migrate(e, pairID, 0, unsafe.Pointer(&v))
 	// OnAdd fired inside migrate; fire OnSet now.
 	rec = w.index.Get(e)
-	w.fireOnSet(pairInfo, e, rec.Table.Get(int(rec.Row), pairID))
+	w.fireOnSet(pairInfo, pairID, e, rec.Table.Get(int(rec.Row), pairID))
 }
 
 // GetPair returns the value of pair (rel, tgt) on entity e.

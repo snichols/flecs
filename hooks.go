@@ -73,36 +73,36 @@ func OnRemove[T any](w *World, fn func(e ID, v *T)) {
 	}
 }
 
-// fireOnAdd invokes info.Hooks.OnAdd synchronously if it is set.
-// ptr is a pointer to the newly-added component slot in the destination table
-// after migration and value copy; nil for zero-size (tag) components.
-// No-op when info is nil or the hook is unset.
-func (w *World) fireOnAdd(info *component.TypeInfo, e ID, ptr unsafe.Pointer) {
-	if info == nil || info.Hooks.OnAdd == nil {
-		return
+// fireOnAdd invokes the OnAdd hook (if set) then dispatches observers for id.
+// Dispatch order: hook first, then observers in registration order.
+// id must be the component/tag/pair entity ID being added; info may be nil
+// (e.g. raw tag IDs with no TypeInfo), in which case only observers fire.
+// ptr is a pointer to the newly-added slot; nil for zero-size components.
+func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
+	if info != nil && info.Hooks.OnAdd != nil {
+		info.Hooks.OnAdd(w, e, ptr)
 	}
-	info.Hooks.OnAdd(w, e, ptr)
+	w.dispatchObservers(id, EventOnAdd, e, ptr)
 }
 
-// fireOnSet invokes info.Hooks.OnSet synchronously if it is set.
-// ptr is a pointer to the component slot in the destination table after the
-// value was written; nil for zero-size components.
-// No-op when info is nil or the hook is unset.
-func (w *World) fireOnSet(info *component.TypeInfo, e ID, ptr unsafe.Pointer) {
-	if info == nil || info.Hooks.OnSet == nil {
-		return
+// fireOnSet invokes the OnSet hook (if set) then dispatches observers for id.
+// Dispatch order: hook first, then observers in registration order.
+// id must be the component/pair entity ID being set; info may be nil.
+// ptr is a pointer to the component slot after the value was written.
+func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
+	if info != nil && info.Hooks.OnSet != nil {
+		info.Hooks.OnSet(w, e, ptr)
 	}
-	info.Hooks.OnSet(w, e, ptr)
+	w.dispatchObservers(id, EventOnSet, e, ptr)
 }
 
-// fireOnRemove invokes info.Hooks.OnRemove synchronously if it is set.
-// ptr is a pointer to the component slot in the source table before the storage
-// migration; the value remains valid at the time of the call.
-// nil for zero-size (tag) components.
-// No-op when info is nil or the hook is unset.
-func (w *World) fireOnRemove(info *component.TypeInfo, e ID, ptr unsafe.Pointer) {
-	if info == nil || info.Hooks.OnRemove == nil {
-		return
+// fireOnRemove invokes the OnRemove hook (if set) then dispatches observers for id.
+// Dispatch order: hook first, then observers in registration order.
+// id must be the component/tag/pair entity ID being removed; info may be nil.
+// ptr is a pointer to the source slot; the value is still valid at call time.
+func (w *World) fireOnRemove(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
+	if info != nil && info.Hooks.OnRemove != nil {
+		info.Hooks.OnRemove(w, e, ptr)
 	}
-	info.Hooks.OnRemove(w, e, ptr)
+	w.dispatchObservers(id, EventOnRemove, e, ptr)
 }
