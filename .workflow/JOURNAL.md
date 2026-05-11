@@ -6,3 +6,7 @@ Implemented exclusive access checking (debug build, -tags flecs_exclusive_access
 
 Fixed coverage regression: split exclusive_access.go into build-tagged files (exclusive_access_release.go with empty no-op stubs, exclusive_access_debug.go with full implementation). The original file had unreachable dead-code after `if !flecsExclusiveAccess { return }` guards that Go's coverage tool counted as uncovered statements, dropping coverage from 95.6% to 94.4%. Empty stubs contribute zero statements to coverage arithmetic. Coverage is now 95.7% (≥95% requirement met). Also removed the now-unnecessary goid() stub from exclusive_access_off.go. Both builds pass go test -race -count=3 and go vet clean.
 
+## iterate iteration 3 (2026-05-11)
+
+Fixed golangci-lint unused errors on both builds: added //nolint:unused to const flecsExclusiveAccess in exclusive_access_on/off.go and to World fields exclusiveAccess/exclusiveThread in world.go. Both golangci-lint runs (release and debug tag) are now clean. All tests pass on both builds with -race -count=3.
+
