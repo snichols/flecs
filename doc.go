@@ -103,5 +103,17 @@
 //	    })
 //	})
 //
+// # Dynamic Value Access
+//
+// [World.GetByID] and [World.SetByID] provide runtime-dynamic access when only
+// the component ID is known — for example, in a serializer iterating
+// EntityComponents. They are the non-generic analogs of Get[T] and Set[T]:
+//
+//	v, ok := w.GetByID(e, posID)     // returns any; inheritance-aware
+//	w.SetByID(e, posID, Position{1}) // panics on type mismatch
+//
+// Use Get[T]/Set[T] when the type is known at compile time; use GetByID/SetByID
+// only when the component ID is the sole available handle.
+//
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs
