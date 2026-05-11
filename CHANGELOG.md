@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Readonly Concurrency Window
+## v0.11.0 — 2026-05-11 — Readonly Concurrency Window
 
 Faithful Go port of the C flecs readonly concurrency model (`ecs_readonly_begin` /
 `ecs_readonly_end`). No mutex on world state; concurrency is enforced by an

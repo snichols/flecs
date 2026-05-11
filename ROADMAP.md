@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (v0.10)
+## Shipped (v0.11)
 
 The following features are available in the current release:
 
@@ -24,6 +24,7 @@ The following features are available in the current release:
 - **REST API addon** — `NewRESTHandler(w)` returns an `http.Handler` exposing world inspection (stats, components, entities) and snapshot save/load over HTTP. Stdlib `net/http` only; users provide their own `*http.Server`.
 - **Structured logging** — `World.SetLogger(*slog.Logger)` installs an optional `log/slog` lifecycle logger. Ten DEBUG-level event sites (entity created/deleted, component registered, table created, system added/closed, observer registered/unsubscribed, snapshot serialized/loaded). Nil-default; zero overhead on the hot path when no logger is set.
 - **Opt-in parallel system dispatch** — `System.SetParallel(true)` + `World.SetWorkerCount(n)` runs parallel-safe systems in goroutines from a persistent worker pool. Systems with overlapping write sets are forced serial by the dispatcher (over-approximation; user can override via `System.SetWriteSet`). Defer queue is mutex-protected so deferred mutations from parallel systems are race-free. WorkerCount=0 (default) is bit-for-bit identical to v0.9.0 single-threaded behavior.
+- **Readonly concurrency window** — `World.ReadonlyBegin()` / `ReadonlyEnd()` / `Readonly(fn)` opens a window during which concurrent reads from any goroutine are safe. Faithful port of C flecs `ecs_readonly_begin`/`ecs_readonly_end`: no mutex on world state; an atomic flag plus the existing deferred-command queue route all writes during the window to a buffered queue that flushes on close. Readers (`Each1`/`Each2`/`Each3`/`Each4`, `Iter`, cached `Iter`) take no locks. REST handler GETs wrap their bodies in `Readonly` automatically.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
@@ -41,9 +42,10 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 - (all originally-planned addons shipped)
 
 ### Concurrency
-- Read-only concurrent query iteration (parallel writers within a phase already supported via `System.SetParallel`)
 - Per-table parallelism within a single system (currently one system runs serially across its candidate tables)
 - Lock-free defer queue (currently mutex-protected)
+- Per-goroutine command stages (currently a single mutex-protected queue; C flecs uses per-stage queues)
+- Debug-mode `exclusiveAccess` goroutine-ID assert (analog of C `FLECS_EXCLUSIVE_ACCESS`)
 
 ### Performance
 - Custom allocators / `sync.Pool` for hot paths
