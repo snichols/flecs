@@ -2,15 +2,25 @@
 
 ## v0.3.0 — 2026-05-10
 
-Phase 9.2.1: basic JSON serialization. No breaking changes.
+Introspection API, dynamic value access, and basic JSON serialization. No
+breaking changes.
 
 ### Added
 
+- **Introspection (meta) API** — `World.Components()`, `World.ComponentInfo(id)`,
+  `World.EntityComponents(e)`, `World.EachEntity(fn)`, `World.AliveEntities()`.
+  Public access to registered components and alive entities; no exposure of
+  internal storage types.
+- **Dynamic value access** — `World.GetByID(e, id) (any, bool)` and
+  `World.SetByID(e, id, v any)` for component reads/writes when the type is
+  only known at runtime. IsA inheritance-aware on Get; type-safety panic on
+  Set with a mismatched value. Honors the Defer queue; fires hooks and
+  observers like the typed paths.
 - **JSON serialization** — `World.MarshalJSON()` and `World.UnmarshalJSON()`
   implement `json.Marshaler` / `json.Unmarshaler`. Saves and restores entities,
   non-pair components, and entity names. Built-in entities and pair components
-  are skipped. Pair components (Phase 9.2.4), ChildOf hierarchies (Phase 9.2.2),
-  and IsA prefabs (Phase 9.2.3) are not yet serialized.
+  are skipped. Pair components, ChildOf hierarchies, and IsA prefabs will be
+  added in subsequent 0.3.x or 0.4.x releases.
 
 ---
 
