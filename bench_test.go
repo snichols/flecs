@@ -759,6 +759,55 @@ func BenchmarkIsAGet_MissedChain(b *testing.B) {
 	}
 }
 
+// ---- i) Traversal (Phase 6.2) ----
+
+func BenchmarkGetUp_SelfHit(b *testing.B) {
+	// GetUp on an entity that locally owns the component: depth-0 fast path,
+	// no seen-map allocation.
+	b.ReportAllocs()
+	w := flecs.New()
+	parent := w.NewEntity()
+	child := w.NewEntity()
+	flecs.Set(w, child, benchPos{X: 1, Y: 2})
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	b.ResetTimer()
+	for range b.N {
+		_, _ = flecs.GetUp[benchPos](w, child, w.ChildOf())
+	}
+}
+
+func BenchmarkGetUp_Depth1(b *testing.B) {
+	// GetUp one hop up: parent owns the component, child does not.
+	b.ReportAllocs()
+	w := flecs.New()
+	parent := w.NewEntity()
+	child := w.NewEntity()
+	flecs.Set(w, parent, benchPos{X: 1, Y: 2})
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	b.ResetTimer()
+	for range b.N {
+		_, _ = flecs.GetUp[benchPos](w, child, w.ChildOf())
+	}
+}
+
+func BenchmarkGetUp_Depth5(b *testing.B) {
+	// GetUp five hops up: only the 5th ancestor owns the component.
+	b.ReportAllocs()
+	w := flecs.New()
+	entities := make([]flecs.ID, 6)
+	for i := range entities {
+		entities[i] = w.NewEntity()
+	}
+	for i := 0; i < 5; i++ {
+		flecs.AddID(w, entities[i], flecs.MakePair(w.ChildOf(), entities[i+1]))
+	}
+	flecs.Set(w, entities[5], benchPos{X: 1, Y: 2})
+	b.ResetTimer()
+	for range b.N {
+		_, _ = flecs.GetUp[benchPos](w, entities[0], w.ChildOf())
+	}
+}
+
 func BenchmarkLookupPath_3deep(b *testing.B) {
 	// w.Lookup("scene.car.wheel") over a populated tree.
 	b.ReportAllocs()
