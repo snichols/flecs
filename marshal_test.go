@@ -818,3 +818,513 @@ func TestMarshalSiblingOrder(t *testing.T) {
 		}
 	}
 }
+
+// ── Phase 9.2.3: IsA prefab serialization tests ───────────────────────────────
+
+func TestMarshalIsASinglePrefabRoundTrip(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	prefab := w.NewEntity()
+	flecs.Set(w, prefab, marshalPos{X: 1, Y: 1})
+	child := w.NewEntity()
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	// Find the child (it has IsA, no local Position).
+	skip := nonDataEntities(w2)
+	var prefabID2, childID2 flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; ok {
+			return true
+		}
+		p, hasPrefab := flecs.PrefabOf(w2, e)
+		if hasPrefab {
+			childID2 = e
+			prefabID2 = p
+		}
+		return true
+	})
+	if childID2 == 0 {
+		t.Fatal("child entity not found after unmarshal")
+	}
+	_ = prefabID2
+
+	// Child inherits Position from prefab via IsA.
+	pos, ok := flecs.Get[marshalPos](w2, childID2)
+	if !ok {
+		t.Fatal("expected child to inherit marshalPos from prefab")
+	}
+	if pos.X != 1 || pos.Y != 1 {
+		t.Fatalf("inherited position: got %+v, want {1 1}", pos)
+	}
+}
+
+func TestMarshalIsAMultiPrefabRoundTrip(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	flecs.RegisterComponent[marshalVel](w)
+	p1 := w.NewEntity()
+	flecs.Set(w, p1, marshalPos{X: 1, Y: 1})
+	p2 := w.NewEntity()
+	flecs.Set(w, p2, marshalVel{DX: 3, DY: 4})
+	child := w.NewEntity()
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p1))
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p2))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	// Verify JSON contains prefabs array with 2 entries for the child.
+	var jw struct {
+		Entities []struct {
+			Serial  int   `json:"serial"`
+			Prefabs []int `json:"prefabs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var childEntry *struct {
+		Serial  int   `json:"serial"`
+		Prefabs []int `json:"prefabs"`
+	}
+	for i := range jw.Entities {
+		if len(jw.Entities[i].Prefabs) > 0 {
+			childEntry = &jw.Entities[i]
+		}
+	}
+	if childEntry == nil {
+		t.Fatal("no entity with prefabs field found in JSON")
+	}
+	if len(childEntry.Prefabs) != 2 {
+		t.Fatalf("expected 2 prefabs, got %d: %v", len(childEntry.Prefabs), childEntry.Prefabs)
+	}
+
+	// Round-trip: both prefab relationships are restored.
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	flecs.RegisterComponent[marshalVel](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	skip := nonDataEntities(w2)
+	var childID2 flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; ok {
+			return true
+		}
+		_, hasPrefab := flecs.PrefabOf(w2, e)
+		if hasPrefab {
+			childID2 = e
+		}
+		return true
+	})
+	if childID2 == 0 {
+		t.Fatal("child entity not found after unmarshal")
+	}
+	if _, ok := flecs.Get[marshalPos](w2, childID2); !ok {
+		t.Fatal("child should inherit marshalPos from p1")
+	}
+	if _, ok := flecs.Get[marshalVel](w2, childID2); !ok {
+		t.Fatal("child should inherit marshalVel from p2")
+	}
+}
+
+func TestMarshalIsAFirstPrefabWins(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	p1 := w.NewEntity()
+	flecs.Set(w, p1, marshalPos{X: 10, Y: 10})
+	p2 := w.NewEntity()
+	flecs.Set(w, p2, marshalPos{X: 20, Y: 20})
+	child := w.NewEntity()
+	// p1 is added first → first-prefab-wins: child inherits from p1
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p1))
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p2))
+
+	data := mustMarshal(t, w)
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	skip := nonDataEntities(w2)
+	var childID2 flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; ok {
+			return true
+		}
+		if _, has := flecs.PrefabOf(w2, e); has {
+			childID2 = e
+		}
+		return true
+	})
+	if childID2 == 0 {
+		t.Fatal("child not found after unmarshal")
+	}
+	pos, ok := flecs.Get[marshalPos](w2, childID2)
+	if !ok {
+		t.Fatal("expected inherited marshalPos")
+	}
+	// First-prefab-wins: should get p1's value {10, 10}.
+	if pos.X != 10 || pos.Y != 10 {
+		t.Fatalf("first-prefab-wins: got %+v, want {10 10}", pos)
+	}
+}
+
+func TestMarshalIsATopoOrder(t *testing.T) {
+	// Allocate child BEFORE prefab; after topo-sort, prefab serial < child serial.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	flecs.Set(w, prefab, marshalPos{X: 5, Y: 5})
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Serial  int    `json:"serial"`
+			Name    string `json:"name"`
+			Prefabs []int  `json:"prefabs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	serialByName := make(map[string]int)
+	for _, e := range jw.Entities {
+		serialByName[e.Name] = e.Serial
+	}
+	if serialByName["prefab"] >= serialByName["child"] {
+		t.Fatalf("prefab serial %d should be < child serial %d (prefab must precede its dependent)",
+			serialByName["prefab"], serialByName["child"])
+	}
+}
+
+func TestMarshalIsACombinedChildOfIsATopoOrder(t *testing.T) {
+	// Entity has both ChildOf(parent) and IsA(prefab); both must serialize before it.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	// Allocate child first, then parent, then prefab — all reversed from topo order.
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	parent := w.NewEntity()
+	w.SetName(parent, "parent")
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	flecs.Set(w, prefab, marshalPos{X: 7, Y: 7})
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Serial  int    `json:"serial"`
+			Name    string `json:"name"`
+			Parent  int    `json:"parent"`
+			Prefabs []int  `json:"prefabs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	serialByName := make(map[string]int)
+	for _, e := range jw.Entities {
+		serialByName[e.Name] = e.Serial
+	}
+	if serialByName["parent"] >= serialByName["child"] {
+		t.Fatalf("parent serial %d must be < child serial %d", serialByName["parent"], serialByName["child"])
+	}
+	if serialByName["prefab"] >= serialByName["child"] {
+		t.Fatalf("prefab serial %d must be < child serial %d", serialByName["prefab"], serialByName["child"])
+	}
+}
+
+func TestMarshalIsAMixedCycleDetection(t *testing.T) {
+	// Create a mixed ChildOf→IsA cycle: a has ChildOf(b), b has IsA(a).
+	// predecessors(a) = {b}, predecessors(b) = {a} → cycle.
+	w := flecs.New()
+	a := w.NewEntity()
+	b := w.NewEntity()
+	flecs.AddID(w, a, flecs.MakePair(w.ChildOf(), b))
+	flecs.AddID(w, b, flecs.MakePair(w.IsA(), a))
+
+	_, err := w.MarshalJSON()
+	if err == nil {
+		t.Fatal("expected cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("error should mention 'cycle': %v", err)
+	}
+}
+
+func TestMarshalIsAMultipleIsANoChildOf(t *testing.T) {
+	// Entity has IsA relationships but no ChildOf; "parent" must be absent, "prefabs" present.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	p1 := w.NewEntity()
+	flecs.Set(w, p1, marshalPos{X: 1, Y: 2})
+	p2 := w.NewEntity()
+	flecs.Set(w, p2, marshalPos{X: 3, Y: 4})
+	child := w.NewEntity()
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p1))
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), p2))
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	var jw struct {
+		Entities []struct {
+			Parent  int   `json:"parent"`
+			Prefabs []int `json:"prefabs"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var found bool
+	for _, e := range jw.Entities {
+		if len(e.Prefabs) > 0 {
+			found = true
+			if e.Parent != 0 {
+				t.Errorf("entity with only IsA must have parent=0, got %d", e.Parent)
+			}
+			if len(e.Prefabs) != 2 {
+				t.Errorf("expected 2 prefabs, got %d", len(e.Prefabs))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no entity with prefabs field found in JSON")
+	}
+}
+
+func TestMarshalNoIsARoundTripStable(t *testing.T) {
+	// Entities with no IsA relationships must not emit a "prefabs" field.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	e := w.NewEntity()
+	flecs.Set(w, e, marshalPos{X: 1, Y: 2})
+
+	data := mustMarshal(t, w)
+	if strings.Contains(string(data), `"prefabs"`) {
+		t.Errorf(`"prefabs" field must be absent for entities without IsA: %s`, data)
+	}
+}
+
+func TestMarshalIsAUnknownPrefabSerialError(t *testing.T) {
+	data := []byte(`{"version":1,"entities":[{"serial":1,"prefabs":[999]}]}`)
+	w := flecs.New()
+	err := w.UnmarshalJSON(data)
+	if err == nil {
+		t.Fatal("expected error for unknown prefab serial")
+	}
+	if !strings.Contains(err.Error(), "unknown prefab serial 999") {
+		t.Fatalf("error should mention 'unknown prefab serial 999': %v", err)
+	}
+}
+
+func TestMarshalIsAChildOfCascadeAfterUnmarshal(t *testing.T) {
+	// parent has IsA(prefab); child has ChildOf(parent).
+	// After unmarshal, deleting parent must cascade-delete child.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	flecs.Set(w, prefab, marshalPos{X: 1, Y: 1})
+	parent := w.NewEntity()
+	w.SetName(parent, "parent")
+	flecs.AddID(w, parent, flecs.MakePair(w.IsA(), prefab))
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+
+	data := mustMarshal(t, w)
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	parentID2, ok := w2.Lookup("parent")
+	if !ok {
+		t.Fatal("parent not found after unmarshal")
+	}
+	childID2, ok := w2.LookupChild(parentID2, "child")
+	if !ok {
+		t.Fatal("child not found as child of parent after unmarshal")
+	}
+	if !w2.IsAlive(childID2) {
+		t.Fatal("child should be alive before delete")
+	}
+	w2.Delete(parentID2)
+	if w2.IsAlive(childID2) {
+		t.Fatal("child should be dead after cascade delete of parent")
+	}
+}
+
+func TestMarshalIsAOverrideAfterIsA(t *testing.T) {
+	// Child has IsA(prefab) and a local override of Position.
+	// Marshal must include both prefabs and the local component.
+	// After unmarshal, Get[Position](child) returns the local value (override wins).
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	prefab := w.NewEntity()
+	flecs.Set(w, prefab, marshalPos{X: 1, Y: 1})
+	child := w.NewEntity()
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.Set(w, child, marshalPos{X: 99, Y: 99}) // local override
+
+	data := mustMarshal(t, w)
+	if !json.Valid(data) {
+		t.Fatal("invalid JSON")
+	}
+
+	// JSON must carry both prefabs and the local component.
+	var jw struct {
+		Entities []struct {
+			Prefabs    []int                      `json:"prefabs"`
+			Components map[string]json.RawMessage `json:"components"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &jw); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var childEntry *struct {
+		Prefabs    []int                      `json:"prefabs"`
+		Components map[string]json.RawMessage `json:"components"`
+	}
+	for i := range jw.Entities {
+		if len(jw.Entities[i].Prefabs) > 0 {
+			childEntry = &jw.Entities[i]
+		}
+	}
+	if childEntry == nil {
+		t.Fatal("no entity with prefabs found in JSON")
+	}
+	if len(childEntry.Prefabs) != 1 {
+		t.Fatalf("expected 1 prefab serial, got %d", len(childEntry.Prefabs))
+	}
+	if _, hasComp := childEntry.Components["flecs_test.marshalPos"]; !hasComp {
+		// Try without package prefix in case the name differs.
+		found := false
+		for k := range childEntry.Components {
+			if strings.Contains(k, "marshalPos") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("child entity should have local marshalPos in components map; got: %v", childEntry.Components)
+		}
+	}
+
+	// Unmarshal and verify override wins.
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	skip := nonDataEntities(w2)
+	var childID2 flecs.ID
+	w2.EachEntity(func(e flecs.ID) bool {
+		if _, ok := skip[e]; ok {
+			return true
+		}
+		if _, has := flecs.PrefabOf(w2, e); has {
+			childID2 = e
+		}
+		return true
+	})
+	if childID2 == 0 {
+		t.Fatal("child not found after unmarshal")
+	}
+	pos, ok := flecs.Get[marshalPos](w2, childID2)
+	if !ok {
+		t.Fatal("expected marshalPos on child")
+	}
+	if pos.X != 99 || pos.Y != 99 {
+		t.Fatalf("override should win: got %+v, want {99 99}", pos)
+	}
+}
+
+func TestMarshalIsATwoStepRoundTrip(t *testing.T) {
+	// marshal → unmarshal → marshal should produce structurally identical JSON.
+	w := flecs.New()
+	flecs.RegisterComponent[marshalPos](w)
+	prefab := w.NewEntity()
+	w.SetName(prefab, "prefab")
+	flecs.Set(w, prefab, marshalPos{X: 3, Y: 4})
+	child := w.NewEntity()
+	w.SetName(child, "child")
+	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+
+	data1 := mustMarshal(t, w)
+
+	w2 := flecs.New()
+	flecs.RegisterComponent[marshalPos](w2)
+	if err := w2.UnmarshalJSON(data1); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	data2 := mustMarshal(t, w2)
+
+	if !json.Valid(data1) || !json.Valid(data2) {
+		t.Fatal("invalid JSON in two-step round-trip")
+	}
+
+	type entShape struct {
+		Name    string `json:"name"`
+		Prefabs []int  `json:"prefabs"`
+	}
+	var jw1, jw2 struct {
+		Entities []entShape `json:"entities"`
+	}
+	if err := json.Unmarshal(data1, &jw1); err != nil {
+		t.Fatalf("parse data1: %v", err)
+	}
+	if err := json.Unmarshal(data2, &jw2); err != nil {
+		t.Fatalf("parse data2: %v", err)
+	}
+	if len(jw1.Entities) != len(jw2.Entities) {
+		t.Fatalf("entity count mismatch: %d vs %d", len(jw1.Entities), len(jw2.Entities))
+	}
+	// Both should have one entity with prefabs and one without.
+	prefabCount1, prefabCount2 := 0, 0
+	for _, e := range jw1.Entities {
+		if len(e.Prefabs) > 0 {
+			prefabCount1++
+		}
+	}
+	for _, e := range jw2.Entities {
+		if len(e.Prefabs) > 0 {
+			prefabCount2++
+		}
+	}
+	if prefabCount1 != 1 || prefabCount2 != 1 {
+		t.Fatalf("expected exactly 1 entity with prefabs in each marshal: got %d, %d", prefabCount1, prefabCount2)
+	}
+}

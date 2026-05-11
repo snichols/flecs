@@ -17,13 +17,47 @@ type jsonEntity struct {
 	Serial     int                        `json:"serial"`
 	Name       string                     `json:"name,omitempty"`
 	Parent     int                        `json:"parent,omitempty"`
+	Prefabs    []int                      `json:"prefabs,omitempty"`
 	Components map[string]json.RawMessage `json:"components,omitempty"`
+}
+
+// marshaler holds state for a single MarshalJSON run: the combined ChildOf+IsA
+// predecessor graph plus DFS bookkeeping.
+type marshaler struct {
+	predecessorsOf map[ID][]ID
+	visited        map[ID]struct{}
+	visiting       map[ID]struct{}
+	order          []ID
+	idToSerial     map[ID]int
+}
+
+func (m *marshaler) visit(e ID) error {
+	if _, done := m.visited[e]; done {
+		return nil
+	}
+	if _, active := m.visiting[e]; active {
+		if serial, ok := m.idToSerial[e]; ok {
+			return fmt.Errorf("flecs: marshal failed: cycle detected in ChildOf+IsA graph involving entity serial %d", serial)
+		}
+		return fmt.Errorf("flecs: marshal failed: cycle detected in ChildOf+IsA graph involving entity at allocation index %d", e.Index())
+	}
+	m.visiting[e] = struct{}{}
+	for _, pred := range m.predecessorsOf[e] {
+		if err := m.visit(pred); err != nil {
+			return err
+		}
+	}
+	delete(m.visiting, e)
+	m.visited[e] = struct{}{}
+	m.order = append(m.order, e)
+	return nil
 }
 
 // MarshalJSON serializes the world to JSON.
 //
 // Format (v1): version=1, entities array with serial numbers (starting at 1),
 // optional name field, optional parent field (serial of the ChildOf parent),
+// optional prefabs field (serials of IsA targets in EachPrefab order),
 // and components map keyed by ComponentInfo.Name.
 //
 // Built-in entities (ChildOf, IsA, Name component entity, PreUpdate, OnUpdate,
@@ -31,18 +65,18 @@ type jsonEntity struct {
 // to Phase 9.2.4). The Name component value is surfaced as the "name" field,
 // not as a components map entry.
 //
-// Entities are emitted in topological order (parents before children) so that
-// UnmarshalJSON can restore relationships with a single sequential pass.
-// Siblings are ordered by entity allocation order. The "parent" field holds the
-// serial number of the ChildOf parent; it is omitted when zero.
+// Entities are emitted in topological order over the combined ChildOf+IsA
+// predecessor graph so that UnmarshalJSON can restore all relationships with a
+// single sequential pass. The DFS orders predecessors as: ChildOf parent first,
+// then IsA prefabs in EachPrefab order. Siblings retain entity allocation order.
 //
-// Only the first ChildOf parent (in signature order) is serialized when an
-// entity has multiple ChildOf relationships (a legal but unusual configuration).
+// The "parent" field holds the serial of the ChildOf parent (omitted when
+// absent). Only the first ChildOf parent is serialized for entities that have
+// multiple (a rare configuration). The "prefabs" field holds the serials of all
+// IsA targets in EachPrefab order (omitted when empty).
 //
-// Returns an error if a ChildOf cycle is detected during serialization.
+// Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
-	// Build the skip-set from built-in IDs — no hardcoded magic numbers.
-	// Also skip all registered component entities (they are alive but not user data).
 	skip := map[ID]struct{}{
 		w.ChildOf():       {},
 		w.IsA():           {},
@@ -56,7 +90,6 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		skip[cid] = struct{}{}
 	}
 
-	// Collect user entities in allocation order.
 	var userEnts []ID
 	w.EachEntity(func(e ID) bool {
 		if _, isBuiltin := skip[e]; !isBuiltin {
@@ -65,80 +98,77 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		return true
 	})
 
-	// Build parentOf map: child → user-entity parent only.
-	// Built-in parents are treated as "no parent" for serialization purposes.
-	parentOf := make(map[ID]ID, len(userEnts))
+	// Build predecessorsOf: ChildOf parent first, then IsA prefabs in EachPrefab
+	// order. Built-in entities are filtered at insertion time.
+	m := &marshaler{
+		predecessorsOf: make(map[ID][]ID, len(userEnts)),
+		visited:        make(map[ID]struct{}, len(userEnts)),
+		visiting:       make(map[ID]struct{}),
+		order:          make([]ID, 0, len(userEnts)),
+		idToSerial:     make(map[ID]int, len(userEnts)),
+	}
 	for _, e := range userEnts {
+		var preds []ID
 		if p, ok := w.ParentOf(e); ok {
 			if _, isBuiltin := skip[p]; !isBuiltin {
-				parentOf[e] = p
+				preds = append(preds, p)
 			}
 		}
-	}
-
-	// Topological sort (parent-before-child) via iterative DFS.
-	// Iterating userEnts in allocation order keeps sibling order stable.
-	visited := make(map[ID]struct{}, len(userEnts))
-	visiting := make(map[ID]struct{})
-	order := make([]ID, 0, len(userEnts))
-
-	var visit func(e ID) error
-	visit = func(e ID) error {
-		if _, done := visited[e]; done {
-			return nil
-		}
-		if _, active := visiting[e]; active {
-			return fmt.Errorf("flecs: marshal failed: ChildOf cycle detected involving entity %d", uint64(e))
-		}
-		visiting[e] = struct{}{}
-		if p, ok := parentOf[e]; ok {
-			if err := visit(p); err != nil {
-				return err
+		w.EachPrefab(e, func(prefab ID) bool {
+			if _, isBuiltin := skip[prefab]; !isBuiltin {
+				preds = append(preds, prefab)
 			}
+			return true
+		})
+		if len(preds) > 0 {
+			m.predecessorsOf[e] = preds
 		}
-		delete(visiting, e)
-		visited[e] = struct{}{}
-		order = append(order, e)
-		return nil
 	}
 
 	for _, e := range userEnts {
-		if err := visit(e); err != nil {
+		if err := m.visit(e); err != nil {
 			return nil, err
 		}
 	}
 
-	// Assign serials in topo order; build reverse map.
-	idToSerial := make(map[ID]int, len(order))
-	for i, e := range order {
-		idToSerial[e] = i + 1
+	// Assign serials in topo order; build reverse map for Prefabs lookup below.
+	for i, e := range m.order {
+		m.idToSerial[e] = i + 1
 	}
 
 	nameID := w.Name()
 	var entities []jsonEntity
 
-	for _, e := range order {
-		je := jsonEntity{Serial: idToSerial[e]}
+	for _, e := range m.order {
+		je := jsonEntity{Serial: m.idToSerial[e]}
 
 		if name, ok := w.GetName(e); ok {
 			je.Name = name
 		}
 
-		// Emit parent serial if the parent is a user entity.
 		if p, ok := w.ParentOf(e); ok {
 			if _, isBuiltin := skip[p]; !isBuiltin {
-				if serial, ok := idToSerial[p]; ok {
+				if serial, ok := m.idToSerial[p]; ok {
 					je.Parent = serial
 				}
 			}
 		}
 
+		// Populate Prefabs after serials are assigned so idToSerial lookups work.
+		w.EachPrefab(e, func(prefab ID) bool {
+			if _, isBuiltin := skip[prefab]; isBuiltin {
+				return true
+			}
+			if serial, ok := m.idToSerial[prefab]; ok {
+				je.Prefabs = append(je.Prefabs, serial)
+			}
+			return true
+		})
+
 		for _, cid := range w.EntityComponents(e) {
-			// Skip pair components (Phase 9.2.4).
 			if cid.IsPair() {
 				continue
 			}
-			// Skip the Name component — it's already in the "name" field.
 			if cid == nameID {
 				continue
 			}
@@ -174,18 +204,22 @@ func (w *World) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON restores entities, names, ChildOf parent-child relationships,
-// and components from JSON produced by MarshalJSON. The world need not be
-// empty; new entities are added to existing ones.
+// IsA prefab relationships, and components from JSON produced by MarshalJSON.
+// The world need not be empty; new entities are added to existing ones.
 //
 // All component types present in the JSON must be pre-registered via
-// RegisterComponent[T] before calling UnmarshalJSON. IsA prefab relationships
-// are not restored (Phase 9.2.3). Custom pair components are not restored
-// (Phase 9.2.4).
+// RegisterComponent[T] before calling UnmarshalJSON. Custom pair components
+// are not restored (Phase 9.2.4).
+//
+// Restoration order per entity: name → ChildOf parent → IsA prefabs (in
+// "prefabs" array order) → components. The prefabs array preserves the
+// first-prefab-wins inheritance semantics of the original world.
 //
 // Error cases:
 //   - JSON parse error → wrapped error.
 //   - Unsupported version → descriptive error.
 //   - Parent serial not found in document → descriptive error.
+//   - Unknown prefab serial → "unknown prefab serial N".
 //   - Unregistered component → descriptive error.
 //   - Type mismatch → wrapped json error.
 func (w *World) UnmarshalJSON(data []byte) error {
@@ -197,7 +231,6 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("flecs: unmarshal failed: unsupported version %d (only v1 supported)", jw.Version)
 	}
 
-	// Build a name→ComponentInfo lookup from all registered components.
 	compByName := make(map[string]ComponentInfo)
 	for _, cid := range w.Components() {
 		info, ok := w.ComponentInfo(cid)
@@ -213,11 +246,7 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		serialToID[je.Serial] = w.NewEntity()
 	}
 
-	// Phase 2: set names, restore ChildOf relationships, then set components.
-	// JSON guarantees topological order (parents before children), so parent
-	// entities are already allocated and their ChildOf is set when children
-	// are processed. ChildOf is applied before components so hooks fire in
-	// a clean structural order.
+	// Phase 2: name → ChildOf → IsA prefabs → components (JSON is in topo order).
 	for _, je := range jw.Entities {
 		e := serialToID[je.Serial]
 		if je.Name != "" {
@@ -230,16 +259,21 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			}
 			AddID(w, e, MakePair(w.ChildOf(), parentID))
 		}
+		for _, prefabSerial := range je.Prefabs {
+			prefabID, ok := serialToID[prefabSerial]
+			if !ok {
+				return fmt.Errorf("flecs: unmarshal failed: unknown prefab serial %d", prefabSerial)
+			}
+			AddID(w, e, MakePair(w.IsA(), prefabID))
+		}
 		for compName, raw := range je.Components {
 			info, ok := compByName[compName]
 			if !ok {
 				return fmt.Errorf("flecs: unmarshal failed: component %q is not registered in the world", compName)
 			}
-			// Raw tag with no Go type — skip (cannot decode from JSON without a type).
 			if info.Type == nil {
 				continue
 			}
-			// Zero-size tag (e.g. struct{}) — SetByID with zero value; no decode needed.
 			if info.Size == 0 {
 				w.SetByID(e, info.ID, reflect.Zero(info.Type).Interface())
 				continue
