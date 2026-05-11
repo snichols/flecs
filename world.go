@@ -26,15 +26,17 @@ import (
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	index     *entityindex.Index
-	registry  *component.Registry
-	tables    map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty     *table.Table                    // canonical empty-signature table for new entities
-	compIndex *componentindex.Index           // reverse map: component ID → tables containing it
-	observers map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	childOfID ID                              // built-in ChildOf relationship entity (index 1)
-	isAID     ID                              // built-in IsA relationship entity (index 2)
-	nameID    ID                              // built-in Name component entity (index 3; user entities start at index 4)
+	index      *entityindex.Index
+	registry   *component.Registry
+	tables     map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty      *table.Table                    // canonical empty-signature table for new entities
+	compIndex  *componentindex.Index           // reverse map: component ID → tables containing it
+	observers  map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	childOfID  ID                              // built-in ChildOf relationship entity (index 1)
+	isAID      ID                              // built-in IsA relationship entity (index 2)
+	nameID     ID                              // built-in Name component entity (index 3; user entities start at index 4)
+	deferDepth int                             // nesting counter; 0 means "apply immediately"
+	deferred   []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
 }
 
 // New initializes and returns an empty World.
@@ -116,8 +118,24 @@ func (w *World) deleteOne(e ID) bool {
 // Returns true if e was alive. Returns false immediately with no cascade if e
 // is not alive, preserving Phase 1.5 semantics.
 //
+// Within a deferred block, the operation is queued if e is currently alive;
+// the cascade runs during flush in the order the Delete was queued.
+//
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
+	if w.deferDepth > 0 {
+		if !w.index.IsAlive(e) {
+			return false
+		}
+		w.deferred = append(w.deferred, func(w *World) {
+			deleteImmediate(w, e)
+		})
+		return true
+	}
+	return deleteImmediate(w, e)
+}
+
+func deleteImmediate(w *World, e ID) bool {
 	if !w.index.IsAlive(e) {
 		return false
 	}
@@ -181,7 +199,22 @@ func RegisterComponent[T any](w *World) ID {
 // If e already has T, the existing value is overwritten in place (fires OnSet).
 // Otherwise an archetype migration moves e to the table for its new component set
 // (fires OnAdd then OnSet).
+//
+// Within a deferred block (DeferBegin/DeferEnd or Defer), the operation is
+// queued and applied on DeferEnd. Reads (Get/Has/Owns/IsAlive) still see the
+// CURRENT state, not the deferred future state.
 func Set[T any](w *World, e ID, v T) {
+	if w.deferDepth > 0 {
+		captured := v
+		w.deferred = append(w.deferred, func(w *World) {
+			setImmediate[T](w, e, captured)
+		})
+		return
+	}
+	setImmediate[T](w, e, v)
+}
+
+func setImmediate[T any](w *World, e ID, v T) {
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -259,7 +292,28 @@ func Owns[T any](w *World, e ID) bool {
 // Remove removes component T from entity e.
 // Returns true if T was present and has been removed, false if e was dead or
 // lacked T. If removal empties the component set, e moves to the empty table.
+//
+// Within a deferred block, the operation is queued; returns true if T is
+// currently present on e (at queue time).
 func Remove[T any](w *World, e ID) bool {
+	if w.deferDepth > 0 {
+		info, ok := component.LookupByType[T](w.registry)
+		if !ok || info.Component == 0 {
+			return false
+		}
+		rec := w.index.Get(e)
+		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
+			return false
+		}
+		w.deferred = append(w.deferred, func(w *World) {
+			removeImmediate[T](w, e)
+		})
+		return true
+	}
+	return removeImmediate[T](w, e)
+}
+
+func removeImmediate[T any](w *World, e ID) bool {
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
 		return false

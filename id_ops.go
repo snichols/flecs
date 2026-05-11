@@ -19,7 +19,27 @@ import (
 // as a tag), AddID auto-registers a zero-size tag TypeInfo so the entity can be
 // tracked in a table column. The column carries no data; HasID and RemoveID work
 // identically whether or not data was set.
-func AddID(w *World, e ID, id ID) bool {
+//
+// Within a deferred block, the operation is queued; returns true if e does not
+// currently have id (at queue time).
+func AddID(w *World, e ID, e2 ID) bool {
+	if w.deferDepth > 0 {
+		rec := w.index.Get(e)
+		if rec == nil {
+			panic("flecs: AddID called on dead entity")
+		}
+		if rec.Table != nil && rec.Table.HasComponent(e2) {
+			return false
+		}
+		w.deferred = append(w.deferred, func(w *World) {
+			addIDImmediate(w, e, e2)
+		})
+		return true
+	}
+	return addIDImmediate(w, e, e2)
+}
+
+func addIDImmediate(w *World, e ID, id ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
 		panic("flecs: AddID called on dead entity")
@@ -35,7 +55,24 @@ func AddID(w *World, e ID, id ID) bool {
 // RemoveID removes the component or tag identified by id from entity e.
 // Returns true if id was present and has been removed; returns false if e is not
 // alive or lacked id.
+//
+// Within a deferred block, the operation is queued; returns true if e currently
+// has id (at queue time).
 func RemoveID(w *World, e ID, id ID) bool {
+	if w.deferDepth > 0 {
+		rec := w.index.Get(e)
+		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
+			return false
+		}
+		w.deferred = append(w.deferred, func(w *World) {
+			removeIDImmediate(w, e, id)
+		})
+		return true
+	}
+	return removeIDImmediate(w, e, id)
+}
+
+func removeIDImmediate(w *World, e ID, id ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -85,7 +122,20 @@ func OwnsID(w *World, e ID, id ID) bool {
 // the TypeInfo returned by component.RegisterPairData directly.
 //
 // For pair-as-tag (no data), prefer AddID(w, e, MakePair(rel, tgt)).
+//
+// Within a deferred block, the operation is queued and applied on DeferEnd.
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
+	if w.deferDepth > 0 {
+		captured := v
+		w.deferred = append(w.deferred, func(w *World) {
+			setPairImmediate[T](w, e, rel, tgt, captured)
+		})
+		return
+	}
+	setPairImmediate[T](w, e, rel, tgt, v)
+}
+
+func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	pairID := MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[T](w.registry, pairID)
 	rec := w.index.Get(e)
