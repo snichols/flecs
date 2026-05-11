@@ -86,6 +86,7 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 // Cycle detection and depth limiting ([maxTraversalDepth]) are enforced
 // internally; malformed graphs terminate cleanly.
 func GetUp[T any](w *World, e ID, rel ID) (T, bool) {
+	w.checkExclusiveAccessRead()
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
@@ -119,6 +120,7 @@ func GetUp[T any](w *World, e ID, rel ID) (T, bool) {
 //
 // Cheaper than [GetUp] when the component value is not needed.
 func HasUp(w *World, e ID, id ID, rel ID) bool {
+	w.checkExclusiveAccessRead()
 	_, found := walkUp(w, e, rel, func(cur ID) bool {
 		return OwnsID(w, cur, id)
 	})
@@ -137,6 +139,7 @@ func HasUp(w *World, e ID, id ID, rel ID) bool {
 // Local ownership only: a parent that inherits id via IsA does not satisfy the
 // predicate.
 func TargetUp(w *World, e ID, id ID, rel ID) (ID, bool) {
+	w.checkExclusiveAccessRead()
 	return walkUp(w, e, rel, func(cur ID) bool {
 		return OwnsID(w, cur, id)
 	})

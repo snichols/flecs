@@ -13,6 +13,7 @@ func (w *World) IsA() ID { return w.isAID }
 //
 // Returns (0, false) if e is not alive or has no IsA relationship.
 func PrefabOf(w *World, e ID) (ID, bool) {
+	w.checkExclusiveAccessRead()
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return 0, false
@@ -28,6 +29,7 @@ func PrefabOf(w *World, e ID) (ID, bool) {
 // does not walk multi-level chains. To traverse the full chain, call EachPrefab
 // recursively on each yielded prefab.
 func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
+	w.checkExclusiveAccessRead()
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return

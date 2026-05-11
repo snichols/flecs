@@ -17,6 +17,7 @@ import (
 // T need not be registered as a component entity before calling OnAdd; if
 // unregistered, its type metadata is auto-registered idempotently.
 func OnAdd[T any](w *World, fn func(e ID, v *T)) {
+	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnAdd = nil
@@ -36,6 +37,7 @@ func OnAdd[T any](w *World, fn func(e ID, v *T)) {
 // For zero-size types (tags), the callback receives a nil pointer; the value
 // is meaningless. OnSet does not fire for AddID (which carries no value).
 func OnSet[T any](w *World, fn func(e ID, v *T)) {
+	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnSet = nil
@@ -63,6 +65,7 @@ func OnSet[T any](w *World, fn func(e ID, v *T)) {
 // the entity currently being observed have undefined behavior; defer them to
 // Phase 5.3.
 func OnRemove[T any](w *World, fn func(e ID, v *T)) {
+	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnRemove = nil

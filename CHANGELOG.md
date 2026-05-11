@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — Exclusive Access Checking (debug build)
+
+Faithful port of the C flecs `FLECS_EXCLUSIVE_ACCESS` machinery. A debug-only
+safety net that catches "another goroutine touched the world while you owned it"
+violations. Enabled via `-tags flecs_exclusive_access`; costs nothing in release
+builds (compile-time constant false eliminates all checks).
+
+### Added
+
+- **`(*World).ExclusiveAccessBegin(threadName string)`** — claims the world for
+  the calling goroutine. In debug builds, any mutation from another goroutine
+  panics with an `exclusive_access violation` error. No-op in release builds.
+- **`(*World).ExclusiveAccessEnd(lockWorld bool)`** — releases the claim. When
+  `lockWorld=true` the world enters a write-locked state where all goroutines
+  receive a violation panic on mutation; reads still pass. No-op in release.
+- **`exclusive_access atomic.Uint64` field on `*World`** — always present
+  (zero-valued, no effect in release builds). Three states: 0 = unclaimed,
+  goroutine ID = owned by that goroutine, ^uint64(0) = write-locked.
+- **Build tag `flecs_exclusive_access`** — gates all debug-mode behavior.
+  Paired files `exclusive_access_on.go` / `exclusive_access_off.go` export a
+  compile-time `const flecsExclusiveAccess bool` that eliminates checks in
+  release builds.
+- **`checkExclusiveAccessWrite` / `checkExclusiveAccessRead`** — internal check
+  functions inserted at the top of every public mutator and reader respectively.
+  One `atomic.Load` per call; dead-coded away in release builds.
+- **CI job `test-exclusive-access`** — runs `go test -tags flecs_exclusive_access
+  -race -count=10 ./...` so the debug build never bitrotS.
+
 ## v0.11.0 — 2026-05-11 — Readonly Concurrency Window
 
 Faithful Go port of the C flecs readonly concurrency model (`ecs_readonly_begin` /

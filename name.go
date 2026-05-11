@@ -18,6 +18,7 @@ func (w *World) Name() ID { return w.nameID }
 // SetName sets the Name component on entity e to name.
 // Equivalent to Set[Name](w, e, Name{Value: name}). Panics if e is not alive.
 func (w *World) SetName(e ID, name string) {
+	w.checkExclusiveAccessWrite()
 	Set[Name](w, e, Name{Value: name})
 }
 
@@ -27,6 +28,7 @@ func (w *World) SetName(e ID, name string) {
 // Value is the empty string. An empty Value is treated as "unnamed" for path
 // purposes. Inherited names via IsA are visible (same as Get[Name] semantics).
 func (w *World) GetName(e ID) (string, bool) {
+	w.checkExclusiveAccessRead()
 	n, ok := Get[Name](w, e)
 	if !ok || n.Value == "" {
 		return "", false
@@ -37,6 +39,7 @@ func (w *World) GetName(e ID) (string, bool) {
 // RemoveName removes the Name component from entity e.
 // Returns true if e had a Name, false if e was dead or had no Name.
 func (w *World) RemoveName(e ID) bool {
+	w.checkExclusiveAccessWrite()
 	return Remove[Name](w, e)
 }
 
@@ -47,6 +50,7 @@ func (w *World) RemoveName(e ID) bool {
 // When sibling names collide, the first match in iteration order is returned.
 // Behavior is undefined when sibling names collide; do not rely on ordering.
 func (w *World) LookupChild(parent ID, name string) (ID, bool) {
+	w.checkExclusiveAccessRead()
 	if parent != 0 {
 		var found ID
 		w.EachChild(parent, func(child ID) bool {
@@ -91,6 +95,7 @@ func (w *World) LookupChild(parent ID, name string) (ID, bool) {
 //   - Any empty segment (leading dot, trailing dot, consecutive dots) → (0, false).
 //   - Names containing "." are not supported.
 func (w *World) Lookup(path string) (ID, bool) {
+	w.checkExclusiveAccessRead()
 	if path == "" {
 		return 0, false
 	}
@@ -122,6 +127,7 @@ func (w *World) Lookup(path string) (ID, bool) {
 //     ancestor. For example, if "wheel" → "car" (unnamed) → "scene", PathOf
 //     returns "wheel", not "car.wheel" or "scene.car.wheel".
 func (w *World) PathOf(e ID) string {
+	w.checkExclusiveAccessRead()
 	name, ok := w.GetName(e)
 	if !ok {
 		return ""

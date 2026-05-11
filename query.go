@@ -102,6 +102,9 @@ type Query struct {
 //
 // The provided ids are copied and sorted; the caller's slice is not retained.
 func NewQuery(w *World, ids ...ID) *Query {
+	if w != nil {
+		w.checkExclusiveAccessRead()
+	}
 	if w == nil {
 		panic("flecs: NewQuery: world must not be nil")
 	}
@@ -145,6 +148,9 @@ func NewQuery(w *World, ids ...ID) *Query {
 // second (by ID), TermOr-groups third (preserving group adjacency), TermOptional
 // last (by ID). The caller's slice is not retained.
 func NewQueryFromTerms(w *World, terms ...Term) *Query {
+	if w != nil {
+		w.checkExclusiveAccessRead()
+	}
 	if w == nil {
 		panic("flecs: NewQueryFromTerms: world must not be nil")
 	}
@@ -179,6 +185,7 @@ func (q *Query) TermsFull() []Term {
 //
 // The seed table list is materialised once via TablesFor (one allocation).
 func (q *Query) Iter() *QueryIter {
+	q.w.checkExclusiveAccessRead()
 	// Select seed: TermAnd term with the fewest tables in the component index.
 	seedIdx := -1
 	minCount := 0

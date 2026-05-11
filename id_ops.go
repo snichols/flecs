@@ -23,6 +23,7 @@ import (
 // Within a deferred block, the operation is queued; returns true if e does not
 // currently have id (at queue time).
 func AddID(w *World, e ID, e2 ID) bool {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		rec := w.index.Get(e)
@@ -64,6 +65,7 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 // Within a deferred block, the operation is queued; returns true if e currently
 // has id (at queue time).
 func RemoveID(w *World, e ID, id ID) bool {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		rec := w.index.Get(e)
@@ -97,6 +99,7 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 // locally or via an IsA chain. Returns false if e is not alive or id is not
 // reachable. Does NOT auto-register.
 func HasID(w *World, e ID, id ID) bool {
+	w.checkExclusiveAccessRead()
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -112,6 +115,7 @@ func HasID(w *World, e ID, id ID) bool {
 // by id. Local-only: does not walk the IsA chain. Does not auto-register.
 // Returns false if e is not alive.
 func OwnsID(w *World, e ID, id ID) bool {
+	w.checkExclusiveAccessRead()
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -134,6 +138,7 @@ func OwnsID(w *World, e ID, id ID) bool {
 //
 // Within a deferred block, the operation is queued and applied on DeferEnd.
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		captured := v
@@ -175,6 +180,7 @@ func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 //
 // GetPair does NOT auto-register; a missing registration returns (zero, false).
 func GetPair[T any](w *World, e ID, rel ID, tgt ID) (T, bool) {
+	w.checkExclusiveAccessRead()
 	var zero T
 	pairID := MakePair(rel, tgt)
 	info, ok := w.registry.LookupByID(pairID)

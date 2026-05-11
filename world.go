@@ -47,6 +47,8 @@ type World struct {
 	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	exclusiveAccess  atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread  string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
@@ -216,6 +218,7 @@ func (w *World) WorkerCount() int { return w.workerCount }
 // NewEntity allocates a new entity, places it in the empty-signature table,
 // and returns its ID.
 func (w *World) NewEntity() ID {
+	w.checkExclusiveAccessWrite()
 	e := w.index.Alloc()
 	rec := w.index.Get(e)
 	rec.Table = w.empty
@@ -269,6 +272,7 @@ func (w *World) deleteOne(e ID) bool {
 //
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		if !w.index.IsAlive(e) {
@@ -360,6 +364,7 @@ func RegisterComponent[T any](w *World) ID {
 // queued and applied on DeferEnd. Reads (Get/Has/Owns/IsAlive) still see the
 // CURRENT state, not the deferred future state.
 func Set[T any](w *World, e ID, v T) {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		captured := v
@@ -384,6 +389,7 @@ func setImmediate[T any](w *World, e ID, v T) {
 // Returns (zero, false) if T is not registered, e is not alive, or no IsA
 // path yields T. Does NOT auto-register T.
 func Get[T any](w *World, e ID) (T, bool) {
+	w.checkExclusiveAccessRead()
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
@@ -409,6 +415,7 @@ func Get[T any](w *World, e ID) (T, bool) {
 // Has reports whether entity e has component T — locally or via an IsA chain.
 // Auto-registers T so the answer is meaningful; an unregistered type yields false.
 func Has[T any](w *World, e ID) bool {
+	w.checkExclusiveAccessRead()
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -426,6 +433,7 @@ func Has[T any](w *World, e ID) bool {
 // e's own archetype table rather than inherited via an IsA chain.
 // Auto-registers T (matches Has[T] policy). Returns false if e is not alive.
 func Owns[T any](w *World, e ID) bool {
+	w.checkExclusiveAccessRead()
 	cid := RegisterComponent[T](w)
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -441,6 +449,7 @@ func Owns[T any](w *World, e ID) bool {
 // Within a deferred block, the operation is queued; returns true if T is
 // currently present on e (at queue time).
 func Remove[T any](w *World, e ID) bool {
+	w.checkExclusiveAccessWrite()
 	w.deferMu.Lock()
 	if w.deferDepth > 0 || w.readonly.Load() {
 		info, ok := component.LookupByType[T](w.registry)
