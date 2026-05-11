@@ -6,3 +6,7 @@ Implemented Reader/Writer scoped capability API (v0.15.0 breaking change): world
 
 Deleted readonly.go entirely; removed w.readonly atomic.Bool field from world.go; removed all || w.readonly.Load() checks from world.go, id_ops.go, and value_ops.go; removed ReadonlyBeginForTest/ReadonlyEndForTest exports from export_test.go; removed five old readonly-mechanism tests from concurrent_test.go. All tests pass -race -count=3.
 
+## iterate iteration 3 (2026-05-11)
+
+Added QueryIter.Reader() and Writer() methods: added world *World field to QueryIter struct, populated in Query.Iter() and CachedQuery.Iter(); Reader() returns &it.world.readCapability, Writer() returns &it.world.writeCapability (zero allocs, reuses cached pointers). All tests pass -race -count=3.
+
