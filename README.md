@@ -114,6 +114,32 @@ within a table.
 | OnUpdate | `w.OnUpdate()` | Game logic (default phase) |
 | PostUpdate | `w.PostUpdate()` | Rendering, network send |
 
+### Concurrency model
+
+Outside `Progress`, the world is single-threaded by convention. For concurrent
+read access — for example, parallelising an expensive query across workers —
+wrap the read window in `w.Readonly(func() { ... })`:
+
+```go
+w.Readonly(func() {
+    var wg sync.WaitGroup
+    for range numWorkers {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            flecs.Each1[Position](w, func(e flecs.ID, p *Position) { ... })
+        }()
+    }
+    wg.Wait()
+}) // deferred writes (if any) are applied here
+```
+
+While the window is open, any goroutine that calls a mutator (`Set`, `Remove`,
+`Delete`, `AddID`, `RemoveID`, `SetPair`, `SetByID`) has its operation buffered
+in the deferred-command queue and applied when `ReadonlyEnd` is called.
+Readers take **no locks** — the readonly flag guarantees nothing mutates world
+state during the window, so all ECS tables are safe to read concurrently.
+
 ---
 
 ## Feature index
@@ -130,6 +156,7 @@ within a table.
 | Hooks (single) | `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]` |
 | Observers (multi) | `Observe[T]`, `ObserveID`, `Observe2[T]`, `Unsubscribe` |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
+| Readonly concurrency window | `w.Readonly(fn)`, `ReadonlyBegin`, `ReadonlyEnd` |
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |

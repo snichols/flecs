@@ -24,7 +24,7 @@ import (
 // currently have id (at queue time).
 func AddID(w *World, e ID, e2 ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		rec := w.index.Get(e)
 		if rec == nil {
 			w.deferMu.Unlock()
@@ -65,7 +65,7 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 // has id (at queue time).
 func RemoveID(w *World, e ID, id ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
 			w.deferMu.Unlock()
@@ -135,7 +135,7 @@ func OwnsID(w *World, e ID, id ID) bool {
 // Within a deferred block, the operation is queued and applied on DeferEnd.
 func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setPairImmediate[T](w, e, rel, tgt, captured)
