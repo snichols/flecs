@@ -8,6 +8,7 @@ import "strings"
 // enforced: two siblings may share a name; LookupChild returns the first match
 // in iteration order.
 type Name struct {
+	// Value is the entity's name string. Must not contain ".".
 	Value string
 }
 
