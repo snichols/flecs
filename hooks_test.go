@@ -15,8 +15,11 @@ func TestOnSetRegistrationReplaces(t *testing.T) {
 	calls := 0
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls += 10 })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if calls != 10 {
 		t.Fatalf("want 10 (second hook only), got %d", calls)
 	}
@@ -27,8 +30,11 @@ func TestOnSetClearWithNil(t *testing.T) {
 	calls := 0
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	flecs.OnSet[Position](w, nil)
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if calls != 0 {
 		t.Fatalf("hook should have been cleared, got %d calls", calls)
 	}
@@ -39,8 +45,11 @@ func TestOnAddClearWithNil(t *testing.T) {
 	calls := 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	flecs.OnAdd[Position](w, nil)
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if calls != 0 {
 		t.Fatalf("OnAdd hook should have been cleared, got %d calls", calls)
 	}
@@ -51,9 +60,12 @@ func TestOnRemoveClearWithNil(t *testing.T) {
 	calls := 0
 	flecs.OnRemove[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	flecs.OnRemove[Position](w, nil)
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Remove[Position](w.W(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Remove[Position](fw, e)
+	})
 	if calls != 0 {
 		t.Fatalf("OnRemove hook should have been cleared, got %d calls", calls)
 	}
@@ -66,8 +78,11 @@ func TestOnAddFiresOnceOnInitialSet(t *testing.T) {
 	addCount, setCount := 0, 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, e flecs.ID, p Position) { addCount++ })
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, e flecs.ID, p Position) { setCount++ })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if addCount != 1 {
 		t.Fatalf("OnAdd want 1, got %d", addCount)
 	}
@@ -81,9 +96,12 @@ func TestOnSetFiresEverySet(t *testing.T) {
 	addCount, setCount := 0, 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Set[Position](w.W(), e, Position{3, 4})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Set[Position](fw, e, Position{3, 4})
+	})
 	if addCount != 1 {
 		t.Fatalf("OnAdd want 1 (initial only), got %d", addCount)
 	}
@@ -96,8 +114,11 @@ func TestOnSetReceivesCorrectValue(t *testing.T) {
 	w := flecs.New()
 	var got Position
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, p Position) { got = p })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{7, 9})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{7, 9})
+	})
 	if got != (Position{7, 9}) {
 		t.Fatalf("OnSet value want {7,9}, got %v", got)
 	}
@@ -107,8 +128,11 @@ func TestOnSetReceivesEntityID(t *testing.T) {
 	w := flecs.New()
 	var gotID flecs.ID
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, e flecs.ID, _ Position) { gotID = e })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if gotID != e {
 		t.Fatalf("OnSet entity want %v, got %v", e, gotID)
 	}
@@ -121,13 +145,18 @@ func TestOnAddFiresOnAddID(t *testing.T) {
 	addCount := 0
 	flecs.OnAdd[Tag](w, func(_ *flecs.Writer, _ flecs.ID, _ Tag) { addCount++ })
 	tagID := flecs.RegisterComponent[Tag](w)
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, tagID)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagID)
+	})
 	if addCount != 1 {
 		t.Fatalf("OnAdd want 1 after AddID, got %d", addCount)
 	}
 	// Second AddID on same entity is no-op: no hook.
-	flecs.AddID(w.W(), e, tagID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, tagID)
+	})
 	if addCount != 1 {
 		t.Fatalf("OnAdd want 1 (idempotent AddID), got %d", addCount)
 	}
@@ -140,9 +169,11 @@ func TestOnAddNotFiredForCarriedComponents(t *testing.T) {
 	posAddCount, velAddCount := 0, 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { posAddCount++ })
 	flecs.OnAdd[Velocity](w, func(_ *flecs.Writer, _ flecs.ID, _ Velocity) { velAddCount++ })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2}) // migrates: adds Position → OnAdd[Pos] fires
-	flecs.Set[Velocity](w.W(), e, Velocity{3, 4}) // migrates: adds Velocity → OnAdd[Vel] fires only
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2}) // migrates: adds Position → OnAdd[Pos] fires
+		flecs.Set[Velocity](fw, e, Velocity{3, 4}) // migrates: adds Velocity → OnAdd[Vel] fires only
+	})
 	if posAddCount != 1 {
 		t.Fatalf("OnAdd[Position] want 1, got %d", posAddCount)
 	}
@@ -157,9 +188,15 @@ func TestOnRemoveFiresBeforeRemoval(t *testing.T) {
 	w := flecs.New()
 	var captured Position
 	flecs.OnRemove[Position](w, func(_ *flecs.Writer, _ flecs.ID, p Position) { captured = p })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Remove[Position](w.W(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
+	// Set is now applied; Remove fires OnRemove with the current value.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Remove[Position](fw, e)
+	})
 	if captured != (Position{1, 2}) {
 		t.Fatalf("OnRemove captured want {1,2}, got %v", captured)
 	}
@@ -171,9 +208,15 @@ func TestOnRemoveEntityStillAliveInCallback(t *testing.T) {
 	flecs.OnRemove[Position](w, func(_ *flecs.Writer, e flecs.ID, _ Position) {
 		alive = w.IsAlive(e)
 	})
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Remove[Position](w.W(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
+	// Set is now applied; Remove fires OnRemove.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Remove[Position](fw, e)
+	})
 	if !alive {
 		t.Fatal("entity should still be alive inside OnRemove callback")
 	}
@@ -186,9 +229,12 @@ func TestOnRemoveFiresPerComponentOnDelete(t *testing.T) {
 	posRemoved, velRemoved := false, false
 	flecs.OnRemove[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { posRemoved = true })
 	flecs.OnRemove[Velocity](w, func(_ *flecs.Writer, _ flecs.ID, _ Velocity) { velRemoved = true })
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Set[Velocity](w.W(), e, Velocity{3, 4})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Set[Velocity](fw, e, Velocity{3, 4})
+	})
 	w.Delete(e)
 	if !posRemoved {
 		t.Fatal("OnRemove[Position] did not fire on Delete")
@@ -207,11 +253,14 @@ func TestOnRemoveFiresCascadeChildFirst(t *testing.T) {
 		order = append(order, "pos")
 		_ = e
 	})
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.Set[Position](w.W(), parent, Position{1, 2})
-	flecs.Set[Position](w.W(), child, Position{3, 4})
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	var parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child := fw.NewEntity()
+		flecs.Set[Position](fw, parent, Position{1, 2})
+		flecs.Set[Position](fw, child, Position{3, 4})
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 	w.Delete(parent)
 	// Both OnRemove[Position] calls must have fired.
 	if len(order) != 2 {
@@ -226,14 +275,23 @@ func TestNoHookForInheritedComponents(t *testing.T) {
 	addCount, setCount := 0, 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
-	prefab := w.NewEntity()
-	flecs.Set[Position](w.W(), prefab, Position{1, 2})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set[Position](fw, prefab, Position{1, 2})
+	})
 	// Reset counts after setting prefab.
 	addCount, setCount = 0, 0
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 	// Get resolves via IsA chain — no hook should fire.
-	v, ok := flecs.Get[Position](w.R(), child)
+	var v Position
+	var ok bool
+	w.Read(func(r *flecs.Reader) {
+		v, ok = flecs.Get[Position](r, child)
+	})
 	if !ok || v != (Position{1, 2}) {
 		t.Fatalf("Get via IsA: want {1,2} ok=true, got %v ok=%v", v, ok)
 	}
@@ -248,14 +306,19 @@ func TestOverrideFiresOnAdd(t *testing.T) {
 	w := flecs.New()
 	addCount := 0
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
-	prefab := w.NewEntity()
-	flecs.Set[Position](w.W(), prefab, Position{1, 2})
+	var prefab flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set[Position](fw, prefab, Position{1, 2})
+	})
 	// Reset after setting prefab.
 	addCount = 0
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
-	// Copy-on-write override: Position is not locally owned, so migrate fires OnAdd.
-	flecs.Set[Position](w.W(), child, Position{3, 4})
+	w.Write(func(fw *flecs.Writer) {
+		child := fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+		// Copy-on-write override: Position is not locally owned, so migrate fires OnAdd.
+		flecs.Set[Position](fw, child, Position{3, 4})
+	})
 	if addCount != 1 {
 		t.Fatalf("override OnAdd want 1, got %d", addCount)
 	}
@@ -265,10 +328,13 @@ func TestOverrideFiresOnAdd(t *testing.T) {
 
 func TestNoHookNoPanic(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Set[Position](w.W(), e, Position{3, 4})
-	flecs.Remove[Position](w.W(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Set[Position](fw, e, Position{3, 4})
+		flecs.Remove[Position](fw, e)
+	})
 	w.Delete(e)
 	// Must not panic.
 }
@@ -280,14 +346,19 @@ func TestHookPanicPropagates(t *testing.T) {
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
 		panic("hook panic")
 	})
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatal("expected panic to propagate through Set")
 		}
 	}()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 }
 
 // ── Re-entrancy: read-only is safe ───────────────────────────────────────────
@@ -295,12 +366,17 @@ func TestHookPanicPropagates(t *testing.T) {
 func TestOnSetReadOnlyReentrancy(t *testing.T) {
 	w := flecs.New()
 	var gotVel Velocity
-	e := w.NewEntity()
-	flecs.Set[Velocity](w.W(), e, Velocity{5, 6})
-	flecs.OnSet[Position](w, func(_ *flecs.Writer, eid flecs.ID, _ Position) {
-		gotVel, _ = flecs.Get[Velocity](w.R(), eid)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Velocity](fw, e, Velocity{5, 6})
 	})
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	flecs.OnSet[Position](w, func(fw *flecs.Writer, eid flecs.ID, _ Position) {
+		gotVel, _ = flecs.Get[Velocity](fw.AsReader(), eid)
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if gotVel != (Velocity{5, 6}) {
 		t.Fatalf("re-entrant Get[Velocity] want {5,6}, got %v", gotVel)
 	}
@@ -313,8 +389,10 @@ func TestOnAddTagFires(t *testing.T) {
 	addCount := 0
 	flecs.OnAdd[Tag](w, func(_ *flecs.Writer, _ flecs.ID, _ Tag) { addCount++ })
 	tagID := flecs.RegisterComponent[Tag](w)
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, tagID)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.AddID(fw, e, tagID)
+	})
 	if addCount != 1 {
 		t.Fatalf("OnAdd[Tag] want 1, got %d", addCount)
 	}
@@ -324,8 +402,12 @@ func TestOnAddTagFires(t *testing.T) {
 
 func TestSetPairFiresPairTypeInfoHooks(t *testing.T) {
 	w := flecs.New()
-	rel := w.NewEntity()
-	tgt := w.NewEntity()
+	var rel, tgt, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
+		e = fw.NewEntity()
+	})
 	pairID := flecs.MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[Position](w.Registry(), pairID)
 
@@ -333,8 +415,9 @@ func TestSetPairFiresPairTypeInfoHooks(t *testing.T) {
 	pairInfo.Hooks.OnAdd = func(_ any, _ flecs.ID, ptr unsafe.Pointer) { addCount++ }
 	pairInfo.Hooks.OnSet = func(_ any, _ flecs.ID, ptr unsafe.Pointer) { setCount++ }
 
-	e := w.NewEntity()
-	flecs.SetPair[Position](w.W(), e, rel, tgt, Position{1, 2})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.SetPair[Position](fw, e, rel, tgt, Position{1, 2})
+	})
 	if addCount != 1 {
 		t.Fatalf("pair OnAdd want 1, got %d", addCount)
 	}
@@ -343,7 +426,9 @@ func TestSetPairFiresPairTypeInfoHooks(t *testing.T) {
 	}
 
 	// Second call: OnAdd must NOT fire again, OnSet must fire.
-	flecs.SetPair[Position](w.W(), e, rel, tgt, Position{3, 4})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.SetPair[Position](fw, e, rel, tgt, Position{3, 4})
+	})
 	if addCount != 1 {
 		t.Fatalf("pair OnAdd want 1 (no re-add), got %d", addCount)
 	}
@@ -360,8 +445,11 @@ func TestHookReceivesWriterDirect(t *testing.T) {
 	flecs.OnSet[Position](w, func(fw *flecs.Writer, _ flecs.ID, _ Position) {
 		gotWriter = fw
 	})
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+	})
 	if gotWriter == nil {
 		t.Fatal("OnSet hook received nil *Writer")
 	}

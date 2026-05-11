@@ -95,8 +95,6 @@ flecs.OnSet[Score](w, func(_ *flecs.Writer, e flecs.ID, v Score) { fmt.Println(v
   block until the scope is released. Panics with `ErrExclusiveAccessViolation` if the
   world is held by a different goroutine via `ExclusiveAccessBegin`.
 - **`ErrExclusiveAccessViolation`** — sentinel error value for the above panic.
-- **`world.W()` / `world.R()`** — convenience accessors that return an unsynchronized
-  `*Writer` / `*Reader` for single-goroutine setup code and tests.
 - **Free functions on `*Reader`**: `Get[T]`, `GetRef[T]`, `Has[T]`, `Owns[T]`,
   `GetPair[T]`, `GetPairRef[T]`, `HasID`, `OwnsID`, `GetUp[T]`, `HasUp`, `TargetUp`,
   `PrefabOf`, `Each1–Each4`.
@@ -109,11 +107,11 @@ flecs.OnSet[Score](w, func(_ *flecs.Writer, e flecs.ID, v Score) { fmt.Println(v
   non-nil and functional.
 - **`TestObserverReceivesWriter`** — confirms that the `*Writer` passed to `Observe`
   observers is non-nil and functional.
-- **Concurrent-reader tests** — `TestReadonlyAllowsConcurrentReaders`,
-  `TestReadonlyEnqueuesWrites`, `TestReadonlyDeleteEnqueued`,
-  `TestReadonlyNestedWithDefer`, `TestDeferWrappedIterationStillPasses`,
-  `TestReadonlyIsDeferred`, `TestReadonlyEndPanicsWithoutBegin`,
-  `TestReadonlyNestedDepthPreservation`, `TestWriterAsReader`.
+- **Concurrent-reader tests** — `TestReadAllowsConcurrentReaders`,
+  `TestWriteSerializesWithReaders`, `TestWriteFromOtherGoroutinePanicsWhenClaimed`,
+  `TestNestedWriteSharesScope`, `TestWriteNestedFromSameGoroutine`,
+  `TestWritePanicsWhenClaimedByOtherGoroutine`,
+  `TestGetRefValidInsideScopeOnly`.
 
 ### Changed
 
@@ -134,6 +132,9 @@ flecs.OnSet[Score](w, func(_ *flecs.Writer, e flecs.ID, v Score) { fmt.Println(v
 - `world.DeferBegin()` / `world.DeferEnd()` — internal lifecycle now managed by `Write`.
 - `world.Readonly(fn func())` — use `world.Read(func(fr *Reader))`.
 - `world.ReadonlyBegin()` / `world.ReadonlyEnd()` — internalized; use `world.Read`.
+- **`world.W()` / `world.R()`** — unsynchronized escape-hatches that bypassed lock
+  acquisition; removed to close the 12.0 finishing pass. Use `world.Write` / `world.Read`.
+- **`world.NewEntity()`** — moved to `*Writer` only; use `world.Write(func(fw *Writer) { e = fw.NewEntity() })`.
 
 ### Performance
 

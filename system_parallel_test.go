@@ -23,10 +23,12 @@ func TestMultiThreadedSystemProcessesEachEntityOnce(t *testing.T) {
 			w.SetWorkerCount(wc)
 			cntID := flecs.RegisterComponent[mtCounter](w)
 			const n = 100_000
-			for range n {
-				e := w.NewEntity()
-				flecs.Set(w.W(), e, mtCounter{V: 0})
-			}
+			w.Write(func(fw *flecs.Writer) {
+				for range n {
+					e := fw.NewEntity()
+					flecs.Set(fw, e, mtCounter{V: 0})
+				}
+			})
 			cq := flecs.NewCachedQuery(w, cntID)
 			sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
 				for it.Next() {
@@ -62,10 +64,12 @@ func TestMultiThreadedSystemCannotBatchWithSiblings(t *testing.T) {
 	w.SetWorkerCount(2)
 	posID := flecs.RegisterComponent[parallelPos](w)
 
-	for range 100 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, parallelPos{})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for range 100 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, parallelPos{})
+		}
+	})
 
 	var mu sync.Mutex
 	var mtRunnerCount int
@@ -109,10 +113,12 @@ func TestMultiThreadedSystemUnevenSplit(t *testing.T) {
 	posID := flecs.RegisterComponent[parallelPos](w)
 
 	const n = 1000
-	for range n {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, parallelPos{})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for range n {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, parallelPos{})
+		}
+	})
 
 	var mu sync.Mutex
 	var counts []int
@@ -152,10 +158,12 @@ func TestMultiThreadedSystemEmptyWorkers(t *testing.T) {
 	w.SetWorkerCount(4)
 	posID := flecs.RegisterComponent[parallelPos](w)
 
-	for range 2 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, parallelPos{})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for range 2 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, parallelPos{})
+		}
+	})
 
 	var mu sync.Mutex
 	var counts []int
@@ -193,11 +201,13 @@ func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 
 	const n = 200
 	entities := make([]flecs.ID, n)
-	for i := range n {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, parallelPos{X: float32(i)})
-		entities[i] = e
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, parallelPos{X: float32(i)})
+			entities[i] = e
+		}
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {

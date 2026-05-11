@@ -21,12 +21,16 @@ func ExampleObserve() {
 		fmt.Printf("B: %d\n", s.Points)
 	})
 
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, obsScore{Points: 5}) // both observers fire
-
-	// Unsubscribe the second observer; only the first fires from now on.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, obsScore{Points: 5}) // both observers fire when flushed
+	})
+	// Unsubscribe the second observer before the next Set fires.
 	obs2.Unsubscribe()
-	flecs.Set(w.W(), e, obsScore{Points: 9})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, obsScore{Points: 9}) // only observer A fires
+	})
 
 	// Output:
 	// A: 5

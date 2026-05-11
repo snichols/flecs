@@ -19,8 +19,8 @@ func TestReadAllowsConcurrentReaders(t *testing.T) {
 	w := flecs.New()
 	const n = 200
 	for range n {
-		e := w.NewEntity()
 		w.Write(func(fw *flecs.Writer) {
+			e := fw.NewEntity()
 			flecs.Set(fw, e, scopePos{X: 1, Y: 2})
 		})
 	}
@@ -144,7 +144,7 @@ func TestWriteFromOtherGoroutinePanicsWhenClaimed(t *testing.T) {
 			}
 		}()
 		// checkExclusiveAccessWrite panics when owner != currentGoid.
-		_ = w2.NewEntity()
+		w2.Write(func(fw *flecs.Writer) { _ = fw.NewEntity() })
 	}()
 	if !<-violationPanicked {
 		t.Error("expected panic from NewEntity on world claimed by different goroutine")
@@ -692,7 +692,10 @@ func TestSetByIDDeferredTagPath(t *testing.T) {
 	w := flecs.New()
 	type tagType struct{}
 	tagID := flecs.RegisterComponent[tagType](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
 	flecs.DeferBeginForTest(w)
 	// Set a zero-size (tag) component via SetByID in deferred mode.
@@ -731,12 +734,15 @@ func TestTermKindString(t *testing.T) {
 func TestDeferredAddIDAlreadyHasComponent(t *testing.T) {
 	w := flecs.New()
 	tagID := flecs.RegisterComponent[scopeVel](w)
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, tagID) // add it
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagID) // add it
+	})
 
 	flecs.DeferBeginForTest(w)
 	// Try to add again while deferred — should return false (already present).
-	result := flecs.AddID(w.W(), e, tagID)
+	result := flecs.AddID(flecs.WriterForTest(w), e, tagID)
 	if result {
 		t.Fatal("AddID should return false when component is already present in deferred mode")
 	}
@@ -816,11 +822,15 @@ func TestFieldMaybe_ZeroSizePair(t *testing.T) {
 	// Use TermOptional for a component that exists on some entities but not others.
 	velID := flecs.RegisterComponent[scopeVel](w)
 
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e1, scopePos{X: 1})
-	flecs.Set(w.W(), e2, scopePos{X: 2})
-	flecs.Set(w.W(), e2, scopeVel{DX: 3})
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e1, scopePos{X: 1})
+		flecs.Set(fw, e2, scopePos{X: 2})
+		flecs.Set(fw, e2, scopeVel{DX: 3})
+	})
+	_, _ = e1, e2
 
 	q := flecs.NewQueryFromTerms(w,
 		flecs.Term{ID: posID, Kind: flecs.TermAnd},
@@ -840,4 +850,104 @@ func TestFieldMaybe_ZeroSizePair(t *testing.T) {
 	if !foundOptional {
 		t.Fatal("expected at least one table with optional scopeVel present")
 	}
+}
+
+// TestImmediateAddRemoveIDPaths exercises addIDImmediate and removeIDImmediate
+// via WriterForTest (deferDepth==0, no Write scope).
+func TestImmediateAddRemoveIDPaths(t *testing.T) {
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[scopeVel](w)
+	fw := flecs.WriterForTest(w)
+	e := fw.NewEntity()
+
+	// addIDImmediate: not present → true
+	if !flecs.AddID(fw, e, tagID) {
+		t.Fatal("AddID on entity without tag should return true")
+	}
+	// addIDImmediate: already present → false
+	if flecs.AddID(fw, e, tagID) {
+		t.Fatal("AddID on entity already having tag should return false")
+	}
+	// removeIDImmediate: present → true
+	if !flecs.RemoveID(fw, e, tagID) {
+		t.Fatal("RemoveID on entity with tag should return true")
+	}
+	// removeIDImmediate: not present → false
+	if flecs.RemoveID(fw, e, tagID) {
+		t.Fatal("RemoveID on entity without tag should return false")
+	}
+	// removeIDImmediate: dead entity → false
+	e2 := fw.NewEntity()
+	w.Delete(e2)
+	if flecs.RemoveID(fw, e2, tagID) {
+		t.Fatal("RemoveID on dead entity should return false")
+	}
+}
+
+// TestImmediateSetPairPath exercises setPairImmediate via WriterForTest
+// (deferDepth==0, no Write scope).
+func TestImmediateSetPairPath(t *testing.T) {
+	w := flecs.New()
+	fw := flecs.WriterForTest(w)
+	type immPairVal struct{ N int }
+
+	e := fw.NewEntity()
+	rel := fw.NewEntity()
+	tgt := fw.NewEntity()
+
+	// setPairImmediate: new pair → archetype migration
+	flecs.SetPair[immPairVal](fw, e, rel, tgt, immPairVal{N: 1})
+
+	// setPairImmediate: existing pair → in-place update
+	flecs.SetPair[immPairVal](fw, e, rel, tgt, immPairVal{N: 2})
+
+	v, ok := flecs.GetPair[immPairVal](fw.AsReader(), e, rel, tgt)
+	if !ok || v.N != 2 {
+		t.Fatalf("want immPairVal{2}, got %v ok=%v", v, ok)
+	}
+}
+
+// TestSystemMultiThreadedGetter exercises the MultiThreaded() getter.
+func TestSystemMultiThreadedGetter(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[scopePos](w)
+	q := flecs.NewCachedQuery(w, posID)
+	s := flecs.NewSystem(w, q, func(_ float32, _ *flecs.QueryIter) {})
+
+	if s.MultiThreaded() {
+		t.Fatal("MultiThreaded should default to false")
+	}
+	s.SetMultiThreaded(true)
+	if !s.MultiThreaded() {
+		t.Fatal("MultiThreaded should be true after SetMultiThreaded(true)")
+	}
+}
+
+// TestEffectiveWriteSetFixed exercises the writeSetFixed branch of effectiveWriteSet
+// indirectly by running a parallel dispatch that uses SetWriteSet.
+func TestEffectiveWriteSetFixed(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+	posID := flecs.RegisterComponent[scopePos](w)
+	velID := flecs.RegisterComponent[scopeVel](w)
+
+	q1 := flecs.NewCachedQuery(w, posID)
+	q2 := flecs.NewCachedQuery(w, velID)
+
+	s1 := flecs.NewSystem(w, q1, func(_ float32, _ *flecs.QueryIter) {})
+	s2 := flecs.NewSystem(w, q2, func(_ float32, _ *flecs.QueryIter) {})
+
+	// SetWriteSet on s1 so effectiveWriteSet returns the fixed map.
+	s1.SetWriteSet([]flecs.ID{posID})
+	// s2 uses the default (derived from query terms) path.
+	_ = s2
+
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, scopePos{X: 1})
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, scopeVel{DX: 2})
+	})
+
+	w.Progress(0)
 }

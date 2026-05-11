@@ -43,8 +43,10 @@ func TestPipelinePhaseOrdering(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	var order []string
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -75,8 +77,10 @@ func TestPipelineRegistrationOrderIgnoredAcrossPhases(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	var order []string
 	// Register OnUpdate first.
@@ -104,8 +108,10 @@ func TestPipelineRegistrationOrderWithinPhase(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	var order []string
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -131,8 +137,10 @@ func TestPipelineDefaultPhaseIsOnUpdate(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	var order []string
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -166,20 +174,23 @@ func TestPipelineCrossPhaseFlush(t *testing.T) {
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 1})
+	})
 
 	// PreUpdate: queue a Set that changes X to 99.
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
-			flecs.Set[PPos](w.W(), e, PPos{X: 99})
+			flecs.Set[PPos](it.Writer(), e, PPos{X: 99})
 		}
 	})
 
 	var seenInOnUpdate float32
 	// OnUpdate: read X — expects 99 because PreUpdate's Defer has already flushed.
-	flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(_ float32, _ *flecs.QueryIter) {
-		v, _ := flecs.Get[PPos](w.R(), e)
+	flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(_ float32, it *flecs.QueryIter) {
+		v, _ := flecs.Get[PPos](it.Reader(), e)
 		seenInOnUpdate = v.X
 	})
 
@@ -198,15 +209,15 @@ func TestPipelineCrossPhaseEntityCreation(t *testing.T) {
 
 	var sharedEntity flecs.ID
 
-	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, _ *flecs.QueryIter) {
+	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
 		// NewEntity is immediate; Set is queued and flushed at end of PreUpdate.
-		sharedEntity = w.NewEntity()
-		flecs.Set[PPos](w.W(), sharedEntity, PPos{X: 5})
+		sharedEntity = it.Writer().NewEntity()
+		flecs.Set[PPos](it.Writer(), sharedEntity, PPos{X: 5})
 	})
 
 	var hasPos bool
-	flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(_ float32, _ *flecs.QueryIter) {
-		hasPos = flecs.Has[PPos](w.R(), sharedEntity)
+	flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(_ float32, it *flecs.QueryIter) {
+		hasPos = flecs.Has[PPos](it.Reader(), sharedEntity)
 	})
 
 	w.Progress(0)
@@ -223,13 +234,16 @@ func TestPipelineWithinPhaseNoVisibility(t *testing.T) {
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 1})
+	})
 
 	// A: queue a mutation to X=99.
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
-			flecs.Set[PPos](w.W(), e, PPos{X: 99})
+			flecs.Set[PPos](it.Writer(), e, PPos{X: 99})
 		}
 	})
 
@@ -237,7 +251,7 @@ func TestPipelineWithinPhaseNoVisibility(t *testing.T) {
 	// B: read X — must see OLD value (1) because A's Set is still queued.
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
-			v, _ := flecs.Get[PPos](w.R(), e)
+			v, _ := flecs.Get[PPos](it.Reader(), e)
 			seenByB = v.X
 		}
 	})
@@ -271,8 +285,10 @@ func TestPipelineExplicitOnUpdateEquivalentToDefault(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	var order []string
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -303,8 +319,10 @@ func TestPipelineEmptyPhases(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	ran := false
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
@@ -350,8 +368,10 @@ func TestPipelineCloseDuringDispatchCrossPhase(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{})
+	})
 
 	bRan := false
 	var sysB *flecs.System
@@ -383,15 +403,18 @@ func TestPipelineOuterDeferInteraction(t *testing.T) {
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 1})
+	})
 
 	count := 0
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
 			count++
 			// Queue a mutation; flushes when outermost Write scope exits.
-			flecs.Set[PPos](w.W(), e, PPos{X: 99})
+			flecs.Set[PPos](it.Writer(), e, PPos{X: 99})
 		}
 	})
 
@@ -403,8 +426,10 @@ func TestPipelineOuterDeferInteraction(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected system to run once inside outer Write, got count=%d", count)
 	}
-	v, _ := flecs.Get[PPos](w.R(), e)
-	if v.X != 99 {
-		t.Fatalf("expected mutation flushed by outer Write exit (X=99), got %v", v.X)
-	}
+	w.Read(func(r *flecs.Reader) {
+		v, _ := flecs.Get[PPos](r, e)
+		if v.X != 99 {
+			t.Fatalf("expected mutation flushed by outer Write exit (X=99), got %v", v.X)
+		}
+	})
 }

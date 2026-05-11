@@ -46,97 +46,111 @@ func TestIsADistinctFromChildOf(t *testing.T) {
 
 func TestIsAInheritanceGetHasOwns(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 1, Y: 2})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1, Y: 2})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Read(func(r *flecs.Reader) {
+		// Get returns prefab's value via inheritance.
+		p, ok := flecs.Get[Position](r, child)
+		if !ok {
+			t.Fatal("Get[Position] on child returned false; expected inherited value")
+		}
+		if p != (Position{X: 1, Y: 2}) {
+			t.Fatalf("Get[Position] via IsA: want {1,2}, got %+v", p)
+		}
 
-	// Get returns prefab's value via inheritance.
-	p, ok := flecs.Get[Position](w.R(), child)
-	if !ok {
-		t.Fatal("Get[Position] on child returned false; expected inherited value")
-	}
-	if p != (Position{X: 1, Y: 2}) {
-		t.Fatalf("Get[Position] via IsA: want {1,2}, got %+v", p)
-	}
+		// Has is true (inherited).
+		if !flecs.Has[Position](r, child) {
+			t.Fatal("Has[Position] must be true via IsA inheritance")
+		}
 
-	// Has is true (inherited).
-	if !flecs.Has[Position](w.R(), child) {
-		t.Fatal("Has[Position] must be true via IsA inheritance")
-	}
-
-	// Owns is false (not locally owned).
-	if flecs.Owns[Position](w.R(), child) {
-		t.Fatal("Owns[Position] must be false before local override")
-	}
+		// Owns is false (not locally owned).
+		if flecs.Owns[Position](r, child) {
+			t.Fatal("Owns[Position] must be false before local override")
+		}
+	})
+	_ = prefab
 }
 
 // ── Override (copy-on-write) ──────────────────────────────────────────────────
 
 func TestIsAOverrideCopyOnWrite(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 1, Y: 2})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1, Y: 2})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+		// Local override via Set.
+		flecs.Set(fw, child, Position{X: 99, Y: 99})
+	})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Read(func(r *flecs.Reader) {
+		// Get returns local value.
+		p, ok := flecs.Get[Position](r, child)
+		if !ok {
+			t.Fatal("Get[Position] returned false after local override")
+		}
+		if p != (Position{X: 99, Y: 99}) {
+			t.Fatalf("Get[Position] after override: want {99,99}, got %+v", p)
+		}
 
-	// Local override via Set.
-	flecs.Set(w.W(), child, Position{X: 99, Y: 99})
+		// Owns is now true.
+		if !flecs.Owns[Position](r, child) {
+			t.Fatal("Owns[Position] must be true after Set override")
+		}
 
-	// Get returns local value.
-	p, ok := flecs.Get[Position](w.R(), child)
-	if !ok {
-		t.Fatal("Get[Position] returned false after local override")
-	}
-	if p != (Position{X: 99, Y: 99}) {
-		t.Fatalf("Get[Position] after override: want {99,99}, got %+v", p)
-	}
-
-	// Owns is now true.
-	if !flecs.Owns[Position](w.R(), child) {
-		t.Fatal("Owns[Position] must be true after Set override")
-	}
-
-	// Prefab is unchanged.
-	pp, _ := flecs.Get[Position](w.R(), prefab)
-	if pp != (Position{X: 1, Y: 2}) {
-		t.Fatalf("prefab Position must be unchanged; got %+v", pp)
-	}
+		// Prefab is unchanged.
+		pp, _ := flecs.Get[Position](r, prefab)
+		if pp != (Position{X: 1, Y: 2}) {
+			t.Fatalf("prefab Position must be unchanged; got %+v", pp)
+		}
+	})
 }
 
 // ── Remove restores inheritance ───────────────────────────────────────────────
 
 func TestIsARemoveRestoresInheritance(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 5, Y: 5})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 5, Y: 5})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, child, Position{X: 99, Y: 99}) // override
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Remove[Position](fw, child) // remove local override
+	})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
-	flecs.Set(w.W(), child, Position{X: 99, Y: 99}) // override
+	w.Read(func(r *flecs.Reader) {
+		// Has is true again (inherited from prefab).
+		if !flecs.Has[Position](r, child) {
+			t.Fatal("Has[Position] must be true again after remove restores inheritance")
+		}
 
-	flecs.Remove[Position](w.W(), child) // remove local
+		// Owns is false (local column removed).
+		if flecs.Owns[Position](r, child) {
+			t.Fatal("Owns[Position] must be false after Remove")
+		}
 
-	// Has is true again (inherited from prefab).
-	if !flecs.Has[Position](w.R(), child) {
-		t.Fatal("Has[Position] must be true again after remove restores inheritance")
-	}
-
-	// Owns is false (local column removed).
-	if flecs.Owns[Position](w.R(), child) {
-		t.Fatal("Owns[Position] must be false after Remove")
-	}
-
-	// Get returns prefab's value.
-	p, ok := flecs.Get[Position](w.R(), child)
-	if !ok {
-		t.Fatal("Get[Position] returned false after remove; expected prefab value")
-	}
-	if p != (Position{X: 5, Y: 5}) {
-		t.Fatalf("Get[Position] after remove: want prefab value {5,5}, got %+v", p)
-	}
+		// Get returns prefab's value.
+		p, ok := flecs.Get[Position](r, child)
+		if !ok {
+			t.Fatal("Get[Position] returned false after remove; expected prefab value")
+		}
+		if p != (Position{X: 5, Y: 5}) {
+			t.Fatalf("Get[Position] after remove: want prefab value {5,5}, got %+v", p)
+		}
+	})
+	_ = prefab
 }
 
 // ── Multi-level chain ─────────────────────────────────────────────────────────
@@ -144,30 +158,33 @@ func TestIsARemoveRestoresInheritance(t *testing.T) {
 func TestIsAMultiLevelChain(t *testing.T) {
 	w := flecs.New()
 	// A (IsA, B), B (IsA, C); C has Position.
-	C := w.NewEntity()
-	flecs.Set(w.W(), C, Position{X: 7, Y: 7})
+	var A flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		C := fw.NewEntity()
+		flecs.Set(fw, C, Position{X: 7, Y: 7})
+		B := fw.NewEntity()
+		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), C))
+		A = fw.NewEntity()
+		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
+	})
 
-	B := w.NewEntity()
-	flecs.AddID(w.W(), B, flecs.MakePair(w.IsA(), C))
+	w.Read(func(r *flecs.Reader) {
+		p, ok := flecs.Get[Position](r, A)
+		if !ok {
+			t.Fatal("Get[Position] on A returned false; expected value from C via multi-level chain")
+		}
+		if p != (Position{X: 7, Y: 7}) {
+			t.Fatalf("Get[Position] via multi-level IsA: want {7,7}, got %+v", p)
+		}
 
-	A := w.NewEntity()
-	flecs.AddID(w.W(), A, flecs.MakePair(w.IsA(), B))
+		if !flecs.Has[Position](r, A) {
+			t.Fatal("Has[Position] must be true for A via multi-level chain")
+		}
 
-	p, ok := flecs.Get[Position](w.R(), A)
-	if !ok {
-		t.Fatal("Get[Position] on A returned false; expected value from C via multi-level chain")
-	}
-	if p != (Position{X: 7, Y: 7}) {
-		t.Fatalf("Get[Position] via multi-level IsA: want {7,7}, got %+v", p)
-	}
-
-	if !flecs.Has[Position](w.R(), A) {
-		t.Fatal("Has[Position] must be true for A via multi-level chain")
-	}
-
-	if flecs.Owns[Position](w.R(), A) {
-		t.Fatal("Owns[Position] must be false for A (value is in C)")
-	}
+		if flecs.Owns[Position](r, A) {
+			t.Fatal("Owns[Position] must be false for A (value is in C)")
+		}
+	})
 }
 
 // ── Multiple direct prefabs ───────────────────────────────────────────────────
@@ -178,131 +195,156 @@ func TestIsAMultiLevelChain(t *testing.T) {
 // pair IDs are sorted ascending by value).
 func TestIsAMultiplePrefabsFirstWins(t *testing.T) {
 	w := flecs.New()
-	p1 := w.NewEntity() // lower index → smaller pair ID → first in signature
-	p2 := w.NewEntity()
-	flecs.Set(w.W(), p1, Position{X: 1, Y: 0})
-	flecs.Set(w.W(), p2, Position{X: 2, Y: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 := fw.NewEntity() // lower index → smaller pair ID → first in signature
+		p2 := fw.NewEntity()
+		flecs.Set(fw, p1, Position{X: 1, Y: 0})
+		flecs.Set(fw, p2, Position{X: 2, Y: 0})
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), p1))
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), p2))
+	})
 
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), p1))
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), p2))
-
-	p, ok := flecs.Get[Position](w.R(), e)
-	if !ok {
-		t.Fatal("Get[Position] returned false with two direct prefabs")
-	}
-	// First prefab in signature order (p1, lower index) wins.
-	if p.X != 1 {
-		t.Fatalf("Get[Position] with two prefabs: want X=1 (from p1), got X=%v", p.X)
-	}
+	w.Read(func(r *flecs.Reader) {
+		p, ok := flecs.Get[Position](r, e)
+		if !ok {
+			t.Fatal("Get[Position] returned false with two direct prefabs")
+		}
+		// First prefab in signature order (p1, lower index) wins.
+		if p.X != 1 {
+			t.Fatalf("Get[Position] with two prefabs: want X=1 (from p1), got X=%v", p.X)
+		}
+	})
 }
 
 // ── Cycle on Get ──────────────────────────────────────────────────────────────
 
 func TestIsACycleGetSelfDoesNotLoop(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	// e is its own prefab — deliberate self-cycle.
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), e))
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		// e is its own prefab — deliberate self-cycle.
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), e))
 
-	_, ok := flecs.Get[Position](w.R(), e)
-	if ok {
-		t.Fatal("Get[Position] on self-cycle entity must return false (Position not set)")
-	}
-	// Must have returned (not hung).
+		_, ok := flecs.Get[Position](fw.AsReader(), e)
+		if ok {
+			t.Fatal("Get[Position] on self-cycle entity must return false (Position not set)")
+		}
+		// Must have returned (not hung).
+	})
 }
 
 // ── Cycle on Has ──────────────────────────────────────────────────────────────
 
 func TestIsACycleHasSelfDoesNotLoop(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), e))
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), e))
 
-	if flecs.Has[Position](w.R(), e) {
-		t.Fatal("Has[Position] on self-cycle entity must return false (Position not set)")
-	}
+		if flecs.Has[Position](fw.AsReader(), e) {
+			t.Fatal("Has[Position] on self-cycle entity must return false (Position not set)")
+		}
+	})
 }
 
 // ── Two-entity cycle ──────────────────────────────────────────────────────────
 
 func TestIsATwoEntityCycleTerminates(t *testing.T) {
 	w := flecs.New()
-	A := w.NewEntity()
-	B := w.NewEntity()
-	flecs.AddID(w.W(), A, flecs.MakePair(w.IsA(), B))
-	flecs.AddID(w.W(), B, flecs.MakePair(w.IsA(), A))
+	w.Write(func(fw *flecs.Writer) {
+		A := fw.NewEntity()
+		B := fw.NewEntity()
+		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
+		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), A))
 
-	// Neither has Position; both Get and Has must terminate and return false.
-	_, ok := flecs.Get[Position](w.R(), A)
-	if ok {
-		t.Fatal("Get[Position] on A in two-entity cycle must return false")
-	}
-	_, ok = flecs.Get[Position](w.R(), B)
-	if ok {
-		t.Fatal("Get[Position] on B in two-entity cycle must return false")
-	}
-	if flecs.Has[Position](w.R(), A) {
-		t.Fatal("Has[Position] on A in two-entity cycle must return false")
-	}
-	if flecs.Has[Position](w.R(), B) {
-		t.Fatal("Has[Position] on B in two-entity cycle must return false")
-	}
+		r := fw.AsReader()
+
+		// Neither has Position; both Get and Has must terminate and return false.
+		_, ok := flecs.Get[Position](r, A)
+		if ok {
+			t.Fatal("Get[Position] on A in two-entity cycle must return false")
+		}
+		_, ok = flecs.Get[Position](r, B)
+		if ok {
+			t.Fatal("Get[Position] on B in two-entity cycle must return false")
+		}
+		if flecs.Has[Position](r, A) {
+			t.Fatal("Has[Position] on A in two-entity cycle must return false")
+		}
+		if flecs.Has[Position](r, B) {
+			t.Fatal("Has[Position] on B in two-entity cycle must return false")
+		}
+	})
 }
 
 // ── PrefabOf ─────────────────────────────────────────────────────────────────
 
 func TestPrefabOfBasics(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
-	got, ok := flecs.PrefabOf(w.R(), child)
-	if !ok {
-		t.Fatal("PrefabOf returned false for entity with IsA pair")
-	}
-	if got != prefab {
-		t.Fatalf("PrefabOf: want %v, got %v", prefab, got)
-	}
+	w.Read(func(r *flecs.Reader) {
+		got, ok := flecs.PrefabOf(r, child)
+		if !ok {
+			t.Fatal("PrefabOf returned false for entity with IsA pair")
+		}
+		if got != prefab {
+			t.Fatalf("PrefabOf: want %v, got %v", prefab, got)
+		}
+	})
 }
 
 func TestPrefabOfNoIsA(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
 
-	got, ok := flecs.PrefabOf(w.R(), e)
-	if ok {
-		t.Fatal("PrefabOf should return false for entity with no IsA pair")
-	}
-	if got != 0 {
-		t.Fatalf("PrefabOf should return 0 for entity with no IsA, got %v", got)
-	}
+		got, ok := flecs.PrefabOf(fw.AsReader(), e)
+		if ok {
+			t.Fatal("PrefabOf should return false for entity with no IsA pair")
+		}
+		if got != 0 {
+			t.Fatalf("PrefabOf should return 0 for entity with no IsA, got %v", got)
+		}
+	})
 }
 
 func TestPrefabOfDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 
-	got, ok := flecs.PrefabOf(w.R(), e)
-	if ok {
-		t.Fatal("PrefabOf should return false for dead entity")
-	}
-	if got != 0 {
-		t.Fatalf("PrefabOf should return 0 for dead entity, got %v", got)
-	}
+	w.Read(func(r *flecs.Reader) {
+		got, ok := flecs.PrefabOf(r, e)
+		if ok {
+			t.Fatal("PrefabOf should return false for dead entity")
+		}
+		if got != 0 {
+			t.Fatalf("PrefabOf should return 0 for dead entity, got %v", got)
+		}
+	})
 }
 
 // ── EachPrefab ────────────────────────────────────────────────────────────────
 
 func TestEachPrefabTwoPrefabs(t *testing.T) {
 	w := flecs.New()
-	p1 := w.NewEntity()
-	p2 := w.NewEntity()
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), p1))
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), p2))
+	var p1, p2, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 = fw.NewEntity()
+		p2 = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), p1))
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), p2))
+	})
 
 	seen := make(map[flecs.ID]bool)
 	w.EachPrefab(e, func(prefab flecs.ID) bool {
@@ -324,9 +366,12 @@ func TestEachPrefabTwoPrefabs(t *testing.T) {
 func TestEachPrefabEarlyExit(t *testing.T) {
 	w := flecs.New()
 	for i := 0; i < 5; i++ {
-		p := w.NewEntity()
-		e := w.NewEntity()
-		flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), p))
+		var p, e flecs.ID
+		w.Write(func(fw *flecs.Writer) {
+			p = fw.NewEntity()
+			e = fw.NewEntity()
+			flecs.AddID(fw, e, flecs.MakePair(w.IsA(), p))
+		})
 
 		count := 0
 		w.EachPrefab(e, func(_ flecs.ID) bool {
@@ -342,7 +387,8 @@ func TestEachPrefabEarlyExit(t *testing.T) {
 
 func TestEachPrefabEmpty(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 
 	called := false
 	w.EachPrefab(e, func(_ flecs.ID) bool {
@@ -358,11 +404,14 @@ func TestEachPrefabEmpty(t *testing.T) {
 // A (IsA, B), B (IsA, C): EachPrefab(A) yields only B, not C.
 func TestEachPrefabDirectOnly(t *testing.T) {
 	w := flecs.New()
-	C := w.NewEntity()
-	B := w.NewEntity()
-	flecs.AddID(w.W(), B, flecs.MakePair(w.IsA(), C))
-	A := w.NewEntity()
-	flecs.AddID(w.W(), A, flecs.MakePair(w.IsA(), B))
+	var C, B, A flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		C = fw.NewEntity()
+		B = fw.NewEntity()
+		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), C))
+		A = fw.NewEntity()
+		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
+	})
 
 	var visited []flecs.ID
 	w.EachPrefab(A, func(prefab flecs.ID) bool {
@@ -382,28 +431,35 @@ func TestEachPrefabDirectOnly(t *testing.T) {
 
 func TestIsADeletedPrefabSkipped(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 3, Y: 3})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 3, Y: 3})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	// Sanity: inheritance works before delete.
-	_, ok := flecs.Get[Position](w.R(), child)
-	if !ok {
-		t.Fatal("sanity: Get[Position] before prefab delete must return true")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, child)
+		if !ok {
+			t.Fatal("sanity: Get[Position] before prefab delete must return true")
+		}
+	})
 
 	w.Delete(prefab)
 
 	// After prefab delete: Get/Has must skip the dangling IsA pair.
-	_, ok = flecs.Get[Position](w.R(), child)
-	if ok {
-		t.Fatal("Get[Position] must return false after prefab is deleted")
-	}
-	if flecs.Has[Position](w.R(), child) {
-		t.Fatal("Has[Position] must return false after prefab is deleted")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, child)
+		if ok {
+			t.Fatal("Get[Position] must return false after prefab is deleted")
+		}
+		if flecs.Has[Position](r, child) {
+			t.Fatal("Has[Position] must return false after prefab is deleted")
+		}
+	})
 }
 
 // ── OwnsID / HasID ────────────────────────────────────────────────────────────
@@ -412,56 +468,84 @@ func TestOwnsID(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 1, Y: 1})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1, Y: 1})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
-
-	// HasID is inheritance-aware.
-	if !flecs.HasID(w.R(), child, posID) {
-		t.Fatal("HasID must return true via IsA inheritance")
-	}
-	// OwnsID is local-only.
-	if flecs.OwnsID(w.R(), child, posID) {
-		t.Fatal("OwnsID must return false before local override")
-	}
+	w.Read(func(r *flecs.Reader) {
+		// HasID is inheritance-aware.
+		if !flecs.HasID(r, child, posID) {
+			t.Fatal("HasID must return true via IsA inheritance")
+		}
+		// OwnsID is local-only.
+		if flecs.OwnsID(r, child, posID) {
+			t.Fatal("OwnsID must return false before local override")
+		}
+	})
 
 	// After local override, OwnsID becomes true.
-	flecs.Set(w.W(), child, Position{X: 9, Y: 9})
-	if !flecs.OwnsID(w.R(), child, posID) {
-		t.Fatal("OwnsID must return true after Set override")
-	}
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, child, Position{X: 9, Y: 9})
+	})
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.OwnsID(r, child, posID) {
+			t.Fatal("OwnsID must return true after Set override")
+		}
+	})
+	_ = prefab
 }
 
 func TestOwnsIDDeadEntity(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{})
+	})
 	w.Delete(e)
 
-	if flecs.OwnsID(w.R(), e, posID) {
-		t.Fatal("OwnsID must return false for dead entity")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.OwnsID(r, e, posID) {
+			t.Fatal("OwnsID must return false for dead entity")
+		}
+	})
 }
 
 func TestHasIDInheritanceAware(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 10, Y: 10})
+	var prefab, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 10, Y: 10})
+		e = fw.NewEntity()
+	})
 
-	e := w.NewEntity()
-	if flecs.HasID(w.R(), e, posID) {
-		t.Fatal("HasID must be false before IsA is added")
-	}
+	// Before IsA: HasID must be false.
+	w.Read(func(r *flecs.Reader) {
+		if flecs.HasID(r, e, posID) {
+			t.Fatal("HasID must be false before IsA is added")
+		}
+	})
 
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), prefab))
-	if !flecs.HasID(w.R(), e, posID) {
-		t.Fatal("HasID must be true via IsA inheritance")
-	}
+	// Add IsA.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	// After IsA: HasID must be true.
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, posID) {
+			t.Fatal("HasID must be true via IsA inheritance")
+		}
+	})
+	_ = prefab
 }
 
 // ── Set copy-on-write (verification) ─────────────────────────────────────────
@@ -470,37 +554,47 @@ func TestHasIDInheritanceAware(t *testing.T) {
 // adds Position to the child's own table even when Position is only inherited.
 func TestIsASetAddsPrefabComponentLocally(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 1, Y: 1})
-
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1, Y: 1})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	// Before override: child lacks Position locally.
-	if flecs.Owns[Position](w.R(), child) {
-		t.Fatal("child must not own Position before Set")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Owns[Position](r, child) {
+			t.Fatal("child must not own Position before Set")
+		}
+	})
 
 	// Set triggers a local archetype migration.
-	flecs.Set(w.W(), child, Position{X: 42, Y: 42})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, child, Position{X: 42, Y: 42})
+	})
 
-	// Child now owns Position.
-	if !flecs.Owns[Position](w.R(), child) {
-		t.Fatal("child must own Position after Set (copy-on-write)")
-	}
+	w.Read(func(r *flecs.Reader) {
+		// Child now owns Position.
+		if !flecs.Owns[Position](r, child) {
+			t.Fatal("child must own Position after Set (copy-on-write)")
+		}
 
-	// And reads locally, not from prefab.
-	p, ok := flecs.Get[Position](w.R(), child)
-	if !ok || p != (Position{X: 42, Y: 42}) {
-		t.Fatalf("Get[Position] after Set: want {42,42}, got (%+v, %v)", p, ok)
-	}
+		// And reads locally, not from prefab.
+		p, ok := flecs.Get[Position](r, child)
+		if !ok || p != (Position{X: 42, Y: 42}) {
+			t.Fatalf("Get[Position] after Set: want {42,42}, got (%+v, %v)", p, ok)
+		}
+	})
+	_ = prefab
 }
 
 // ── EachPrefab dead entity ────────────────────────────────────────────────────
 
 func TestEachPrefabDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 
 	called := false
@@ -517,13 +611,18 @@ func TestEachPrefabDeadEntity(t *testing.T) {
 
 func TestOwnsDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{})
+	})
 	w.Delete(e)
 
-	if flecs.Owns[Position](w.R(), e) {
-		t.Fatal("Owns[Position] must return false for dead entity")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Owns[Position](r, e) {
+			t.Fatal("Owns[Position] must return false for dead entity")
+		}
+	})
 }
 
 // ── Tag component inheritance ─────────────────────────────────────────────────
@@ -532,22 +631,27 @@ func TestOwnsDeadEntity(t *testing.T) {
 // via the IsA chain and that Get[Tag] returns (zero, true) from the prefab.
 func TestIsATagInheritance(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Tag{})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Tag{})
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
-
-	_, ok := flecs.Get[Tag](w.R(), child)
-	if !ok {
-		t.Fatal("Get[Tag] via IsA must return true for inherited tag")
-	}
-	if !flecs.Has[Tag](w.R(), child) {
-		t.Fatal("Has[Tag] via IsA must be true")
-	}
-	if flecs.Owns[Tag](w.R(), child) {
-		t.Fatal("Owns[Tag] must be false before local override")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Tag](r, child)
+		if !ok {
+			t.Fatal("Get[Tag] via IsA must return true for inherited tag")
+		}
+		if !flecs.Has[Tag](r, child) {
+			t.Fatal("Has[Tag] via IsA must be true")
+		}
+		if flecs.Owns[Tag](r, child) {
+			t.Fatal("Owns[Tag] must be false before local override")
+		}
+	})
+	_ = prefab
 }
 
 // ── Count baseline ────────────────────────────────────────────────────────────

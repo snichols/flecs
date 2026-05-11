@@ -100,3 +100,9 @@ func DeferForTest(w *World, fn func()) {
 	defer DeferEndForTest(w)
 	fn()
 }
+
+// WriterForTest returns the world's cached *Writer for use inside manually
+// opened deferred scopes (DeferBeginForTest). For tests only.
+func WriterForTest(w *World) *Writer {
+	return &w.writeCapability
+}

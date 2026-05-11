@@ -12,8 +12,11 @@ import (
 func TestGetByIDBasic(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 3, Y: 7})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 3, Y: 7})
+	})
 
 	v, ok := w.GetByID(e, posID)
 	if !ok {
@@ -33,9 +36,12 @@ func TestGetByIDBasic(t *testing.T) {
 func TestGetByIDTagComponent(t *testing.T) {
 	w := flecs.New()
 	// Use AddID with a raw entity ID so EnsureID creates a struct{}{}-typed tag.
-	tagEnt := w.NewEntity()
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, tagEnt)
+	var tagEnt, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tagEnt = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagEnt)
+	})
 
 	v, ok := w.GetByID(e, tagEnt)
 	if !ok {
@@ -50,8 +56,11 @@ func TestGetByIDTagComponent(t *testing.T) {
 func TestGetByIDDeadEntity(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1, Y: 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1, Y: 2})
+	})
 	w.Delete(e)
 
 	v, ok := w.GetByID(e, posID)
@@ -64,8 +73,11 @@ func TestGetByIDDeadEntity(t *testing.T) {
 // that has no TypeInfo (never registered as a component).
 func TestGetByIDUnregisteredID(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	unregistered := w.NewEntity() // just an entity, no TypeInfo associated
+	var e, unregistered flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		unregistered = fw.NewEntity() // just an entity, no TypeInfo associated
+	})
 
 	v, ok := w.GetByID(e, unregistered)
 	if ok || v != nil {
@@ -78,7 +90,10 @@ func TestGetByIDUnregisteredID(t *testing.T) {
 func TestGetByIDMissingComponent(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity() // alive, but no Position
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity() // alive, but no Position
+	})
 
 	v, ok := w.GetByID(e, posID)
 	if ok || v != nil {
@@ -92,11 +107,14 @@ func TestGetByIDIsAInheritance(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 10, Y: 20})
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 10, Y: 20})
 
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	v, ok := w.GetByID(child, posID)
 	if !ok {
@@ -116,7 +134,10 @@ func TestGetByIDIsAInheritance(t *testing.T) {
 func TestSetByIDBasic(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
 	w.SetByID(e, posID, Position{X: 1, Y: 2})
 
@@ -135,7 +156,10 @@ func TestSetByIDBasic(t *testing.T) {
 func TestSetByIDTypeMismatchPanics(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -149,7 +173,10 @@ func TestSetByIDTypeMismatchPanics(t *testing.T) {
 func TestSetByIDDeadEntityPanics(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	w.Delete(e)
 
 	defer func() {
@@ -165,15 +192,22 @@ func TestSetByIDDeadEntityPanics(t *testing.T) {
 func TestSetByIDAutoMigratesArchetype(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
-	if flecs.HasID(w.R(), e, posID) {
-		t.Fatal("entity should not have Position before SetByID")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.HasID(r, e, posID) {
+			t.Fatal("entity should not have Position before SetByID")
+		}
+	})
 	w.SetByID(e, posID, Position{X: 5, Y: 6})
-	if !flecs.HasID(w.R(), e, posID) {
-		t.Fatal("entity should have Position after SetByID migration")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, posID) {
+			t.Fatal("entity should have Position after SetByID migration")
+		}
+	})
 	v, _ := w.GetByID(e, posID)
 	pos, _ := v.(Position)
 	if pos != (Position{X: 5, Y: 6}) {
@@ -191,7 +225,10 @@ func TestSetByIDFiresOnAddAndOnSet(t *testing.T) {
 	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
 	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
 
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	w.SetByID(e, posID, Position{X: 1, Y: 1})
 	if addCount != 1 {
 		t.Errorf("OnAdd fired %d times after first SetByID, want 1", addCount)
@@ -219,7 +256,10 @@ func TestSetByIDFiresObserver(t *testing.T) {
 	flecs.Observe[Position](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addFired = true })
 	flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setFired = true })
 
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	w.SetByID(e, posID, Position{X: 3, Y: 3})
 
 	if !addFired {
@@ -236,11 +276,14 @@ func TestSetByIDFiresObserver(t *testing.T) {
 // via SetPair[T].
 func TestGetByIDViaPairData(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	rel := w.NewEntity()
-	tgt := w.NewEntity()
+	var e, rel, tgt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
 
-	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 3.14})
+		flecs.SetPair[Edge](fw, e, rel, tgt, Edge{Weight: 3.14})
+	})
 	pairID := flecs.MakePair(rel, tgt)
 
 	v, ok := w.GetByID(e, pairID)
@@ -260,12 +303,15 @@ func TestGetByIDViaPairData(t *testing.T) {
 // previously registered via SetPair[T].
 func TestSetByIDOnPairID(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	rel := w.NewEntity()
-	tgt := w.NewEntity()
+	var e, rel, tgt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
 
-	// First call registers the pair TypeInfo.
-	flecs.SetPair[Edge](w.W(), e, rel, tgt, Edge{Weight: 1.0})
+		// First call registers the pair TypeInfo.
+		flecs.SetPair[Edge](fw, e, rel, tgt, Edge{Weight: 1.0})
+	})
 	pairID := flecs.MakePair(rel, tgt)
 
 	// Overwrite via SetByID.
@@ -285,12 +331,17 @@ func TestSetByIDOnPairID(t *testing.T) {
 // AddID) returns struct{}{}, true.
 func TestGetByIDTagPair(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	rel := w.NewEntity()
-	tgt := w.NewEntity()
+	var e, rel, tgt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
+	})
 	pairID := flecs.MakePair(rel, tgt)
 
-	flecs.AddID(w.W(), e, pairID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, pairID)
+	})
 
 	v, ok := w.GetByID(e, pairID)
 	if !ok {
@@ -308,8 +359,11 @@ func TestGetByIDTagPair(t *testing.T) {
 func TestSetByIDRespectsDefer(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1, Y: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1, Y: 1})
+	})
 
 	flecs.DeferBeginForTest(w)
 	w.SetByID(e, posID, Position{X: 99, Y: 99})
@@ -341,8 +395,11 @@ func TestSetByIDRespectsDefer(t *testing.T) {
 func TestGetByIDReturnsCorrectReflectType(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 7, Y: 8})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 7, Y: 8})
+	})
 
 	v, _ := w.GetByID(e, posID)
 	got := reflect.TypeOf(v)
@@ -357,17 +414,22 @@ func TestGetByIDReturnsCorrectReflectType(t *testing.T) {
 func TestSetByIDThenGetTyped(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
 	w.SetByID(e, posID, Position{X: 42, Y: 43})
 
-	pos, ok := flecs.Get[Position](w.R(), e)
-	if !ok {
-		t.Fatal("Get[Position] after SetByID returned false")
-	}
-	if pos != (Position{X: 42, Y: 43}) {
-		t.Errorf("Get[Position] after SetByID: got %v, want {42 43}", pos)
-	}
+	w.Read(func(r *flecs.Reader) {
+		pos, ok := flecs.Get[Position](r, e)
+		if !ok {
+			t.Fatal("Get[Position] after SetByID returned false")
+		}
+		if pos != (Position{X: 42, Y: 43}) {
+			t.Errorf("Get[Position] after SetByID: got %v, want {42 43}", pos)
+		}
+	})
 }
 
 // TestSetTypedThenGetByID verifies that a value written via Set[T] is
@@ -375,9 +437,11 @@ func TestSetByIDThenGetTyped(t *testing.T) {
 func TestSetTypedThenGetByID(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-
-	flecs.Set(w.W(), e, Position{X: 11, Y: 22})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 11, Y: 22})
+	})
 
 	v, ok := w.GetByID(e, posID)
 	if !ok {
@@ -395,16 +459,21 @@ func TestSetByIDTagComponent(t *testing.T) {
 	w := flecs.New()
 	// Tag registered via RegisterComponent[Tag]; size == 0.
 	tagID := flecs.RegisterComponent[Tag](w)
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 
 	var addFired, setFired bool
 	flecs.OnAdd[Tag](w, func(_ *flecs.Writer, _ flecs.ID, _ Tag) { addFired = true })
 	flecs.OnSet[Tag](w, func(_ *flecs.Writer, _ flecs.ID, _ Tag) { setFired = true })
 
 	w.SetByID(e, tagID, Tag{})
-	if !flecs.HasID(w.R(), e, tagID) {
-		t.Fatal("entity should have tag after SetByID")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, tagID) {
+			t.Fatal("entity should have tag after SetByID")
+		}
+	})
 	if !addFired {
 		t.Error("OnAdd not fired for tag component SetByID")
 	}
@@ -424,8 +493,11 @@ func TestSetByIDTagComponent(t *testing.T) {
 // component ID has no TypeInfo registered.
 func TestSetByIDUnregisteredIDPanics(t *testing.T) {
 	w := flecs.New()
-	unregistered := w.NewEntity()
-	e := w.NewEntity()
+	var unregistered, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		unregistered = fw.NewEntity()
+		e = fw.NewEntity()
+	})
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -441,17 +513,20 @@ func TestGetByIDMultiLevelIsA(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	// C is the root prefab; it owns Position.
-	c := w.NewEntity()
-	flecs.Set(w.W(), c, Position{X: 50, Y: 60})
+	var a, b, c flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		// C is the root prefab; it owns Position.
+		c = fw.NewEntity()
+		flecs.Set(fw, c, Position{X: 50, Y: 60})
 
-	// B inherits from C.
-	b := w.NewEntity()
-	flecs.AddID(w.W(), b, flecs.MakePair(w.IsA(), c))
+		// B inherits from C.
+		b = fw.NewEntity()
+		flecs.AddID(fw, b, flecs.MakePair(w.IsA(), c))
 
-	// A inherits from B.
-	a := w.NewEntity()
-	flecs.AddID(w.W(), a, flecs.MakePair(w.IsA(), b))
+		// A inherits from B.
+		a = fw.NewEntity()
+		flecs.AddID(fw, a, flecs.MakePair(w.IsA(), b))
+	})
 
 	v, ok := w.GetByID(a, posID)
 	if !ok {
@@ -471,13 +546,16 @@ func TestGetByIDIsAWithMixedComponents(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	flecs.RegisterComponent[Velocity](w)
 
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, Position{X: 33, Y: 44})
+	var prefab, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 33, Y: 44})
 
-	// e has Velocity (locally) and IsA(prefab). It does NOT have Position locally.
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Velocity{DX: 1, DY: 2})
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), prefab))
+		// e has Velocity (locally) and IsA(prefab). It does NOT have Position locally.
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Velocity{DX: 1, DY: 2})
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	// GetByID should skip the Velocity component and find Position via IsA.
 	v, ok := w.GetByID(e, posID)
@@ -496,18 +574,21 @@ func TestGetByIDDeadPrefabSkipped(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	// deadPrefab had Position but will be deleted.
-	deadPrefab := w.NewEntity()
-	flecs.Set(w.W(), deadPrefab, Position{X: 99, Y: 99})
+	var deadPrefab, livePrefab, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		// deadPrefab had Position but will be deleted.
+		deadPrefab = fw.NewEntity()
+		flecs.Set(fw, deadPrefab, Position{X: 99, Y: 99})
 
-	// livePrefab also has Position.
-	livePrefab := w.NewEntity()
-	flecs.Set(w.W(), livePrefab, Position{X: 7, Y: 8})
+		// livePrefab also has Position.
+		livePrefab = fw.NewEntity()
+		flecs.Set(fw, livePrefab, Position{X: 7, Y: 8})
 
-	// e has IsA(deadPrefab) and IsA(livePrefab).
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), deadPrefab))
-	flecs.AddID(w.W(), e, flecs.MakePair(w.IsA(), livePrefab))
+		// e has IsA(deadPrefab) and IsA(livePrefab).
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), deadPrefab))
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), livePrefab))
+	})
 
 	// Now delete deadPrefab.
 	w.Delete(deadPrefab)

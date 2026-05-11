@@ -28,14 +28,18 @@ func restSetup(t *testing.T) (*flecs.World, *httptest.Server) {
 	flecs.RegisterComponent[restPosition](w)
 	flecs.RegisterComponent[restVelocity](w)
 
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
+	var parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		w.SetName(parent, "parent")
 
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.Set(w.W(), child, restPosition{X: 1, Y: 2})
-	flecs.Set(w.W(), child, restVelocity{DX: 3, DY: 4})
+		child = fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.Set(fw, child, restPosition{X: 1, Y: 2})
+		flecs.Set(fw, child, restVelocity{DX: 3, DY: 4})
+	})
+	_, _ = parent, child
 
 	srv := httptest.NewServer(flecs.NewRESTHandler(w))
 	t.Cleanup(srv.Close)
@@ -280,9 +284,11 @@ func TestRESTPutSnapshot(t *testing.T) {
 	wsrc := flecs.New()
 	flecs.RegisterComponent[restPosition](wsrc)
 	flecs.RegisterComponent[restVelocity](wsrc)
-	e := wsrc.NewEntity()
-	wsrc.SetName(e, "from-snapshot")
-	flecs.Set(wsrc.W(), e, restPosition{X: 9, Y: 8})
+	wsrc.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		wsrc.SetName(e, "from-snapshot")
+		flecs.Set(fw, e, restPosition{X: 9, Y: 8})
+	})
 	snapshot, err := wsrc.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
@@ -363,12 +369,15 @@ func TestRESTEntityWithCustomPair(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[restPosition](w)
 
-	rel := w.NewEntity()
-	tgt := w.NewEntity()
-	e := w.NewEntity()
-	w.SetName(e, "paired")
-	flecs.AddID(w.W(), e, flecs.MakePair(rel, tgt))
-	flecs.Set(w.W(), e, restPosition{X: 5, Y: 6})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel := fw.NewEntity()
+		tgt := fw.NewEntity()
+		e = fw.NewEntity()
+		w.SetName(e, "paired")
+		flecs.AddID(fw, e, flecs.MakePair(rel, tgt))
+		flecs.Set(fw, e, restPosition{X: 5, Y: 6})
+	})
 
 	srv := httptest.NewServer(flecs.NewRESTHandler(w))
 	t.Cleanup(srv.Close)
