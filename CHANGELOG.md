@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 10.1: Parallel System Dispatch
+## v0.10.0 — 2026-05-11 — Parallel System Dispatch
 
 Opt-in parallel system dispatch within a phase. Systems flagged as
 parallel-safe run in goroutines from a persistent worker pool; systems with
