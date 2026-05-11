@@ -10,6 +10,26 @@ All tests must pass with `-race`. Coverage on the root `flecs` package must stay
 at or above 90% (currently ~97%). The CI workflow (`.github/workflows/ci.yml`)
 enforces the same checks on every PR.
 
+## Benchmarks
+
+```sh
+# Run all benchmarks once
+go test -bench=. -benchmem ./...
+
+# Capture a baseline for statistical comparison
+go test -bench=. -benchmem -count=10 ./... > baseline.txt
+
+# Compare two baselines (install benchstat once)
+go install golang.org/x/perf/cmd/benchstat@latest
+benchstat before.txt after.txt
+```
+
+The CI `bench` job runs `go test -bench=. -benchmem -benchtime=100ms ./...` as
+a smoke test — it verifies benchmarks compile and complete without panics. CI
+numbers are NOT authoritative for performance work because the runner hardware
+varies. Capture baselines on a dedicated, quiet machine instead. See `BENCH.md`
+for the full benchmark index and recorded baseline numbers.
+
 ## Architecture
 
 ```
