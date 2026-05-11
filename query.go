@@ -9,23 +9,60 @@ import (
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
-// Query holds a fixed AND-term list of component IDs that an entity must ALL
-// have. Phase 3.1 scope: AND terms only, allocation-light iteration, typed
-// field access. NOT/Optional/OR/pairs/wildcards are later phases.
+// TermKind enumerates how a query term participates in matching.
+//
+//   - TermAnd: the table's signature must include the term's ID.
+//   - TermNot: the table's signature must NOT include the term's ID.
+//   - TermOptional: matching is unaffected; the table may or may not include the ID.
+//
+// Only TermAnd terms are eligible to seed iteration. Not and Optional terms
+// cannot seed because they have no finite candidate set of their own.
+type TermKind int
+
+const (
+	// TermAnd requires the term's ID to be present in the matched table.
+	TermAnd TermKind = 0
+	// TermNot requires the term's ID to be absent from the matched table.
+	TermNot TermKind = 1
+	// TermOptional does not affect table matching. Use FieldMaybe to read
+	// the column when present; Field panics if the column is absent.
+	TermOptional TermKind = 2
+)
+
+// Term is a structured query term combining a component/pair/tag ID with a TermKind.
+type Term struct {
+	ID   ID
+	Kind TermKind
+}
+
+// With returns a TermAnd term: matched tables must contain id.
+func With(id ID) Term { return Term{id, TermAnd} }
+
+// Without returns a TermNot term: matched tables must NOT contain id.
+func Without(id ID) Term { return Term{id, TermNot} }
+
+// Maybe returns a TermOptional term: matching is unaffected; id may or may not
+// be present in matched tables. Use FieldMaybe to access the column when present.
+func Maybe(id ID) Term { return Term{id, TermOptional} }
+
+// Query holds a structured list of query terms used to match archetype tables.
+// Terms are stored sorted: TermAnd first (by ID), then TermNot (by ID), then
+// TermOptional (by ID).
 //
 // Mutation warning: calling Set, Remove, or Delete on the World from inside
 // Each or QueryIter.Next produces undefined behaviour; the iterator holds a
 // snapshot of the seed table list taken at Iter() time and does not handle
 // structural changes.
 type Query struct {
-	w     *World
-	terms []ID // sorted copy; do not mutate
+	w      *World
+	terms  []Term // sorted: And first (by ID), Not second, Optional third
+	andIDs []ID   // pre-extracted And-term IDs; returned by Terms() for backward compat
 }
 
-// NewQuery constructs a query over w for the given component IDs.
+// NewQuery constructs a query over w for the given component IDs (all TermAnd).
 //
 // Panics if w is nil or no IDs are provided. Zero-term queries (match all
-// entities) are a Phase 4 concern and are not supported here.
+// entities) are not supported.
 //
 // Duplicate IDs in the term list are allowed but wasteful; the match still
 // works correctly because HasComponent is idempotent.
@@ -36,40 +73,83 @@ func NewQuery(w *World, ids ...ID) *Query {
 		panic("flecs: NewQuery: world must not be nil")
 	}
 	if len(ids) == 0 {
-		panic("flecs: NewQuery: at least one term ID is required (zero-term queries match all entities and are a Phase 4 feature)")
+		panic("flecs: NewQuery: at least one term ID is required (zero-term queries match all entities and are not supported)")
 	}
 	cp := make([]ID, len(ids))
 	copy(cp, ids)
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
-	return &Query{w: w, terms: cp}
+	terms := make([]Term, len(cp))
+	for i, id := range cp {
+		terms[i] = Term{ID: id, Kind: TermAnd}
+	}
+	return &Query{w: w, terms: terms, andIDs: cp}
 }
 
-// Terms returns the query's sorted term list. Callers must not mutate the
-// returned slice.
-func (q *Query) Terms() []ID { return q.terms }
+// NewQueryFromTerms constructs a query over w for the given structured terms.
+//
+// Panics if:
+//   - w is nil.
+//   - no terms are provided.
+//   - no TermAnd term is present (queries with only Not/Optional terms would
+//     match an unbounded entity set and are not supported).
+//   - any two terms share the same ID (e.g. With(P) + Without(P) is contradictory).
+//
+// Terms are copied and sorted internally: TermAnd first (by ID), TermNot
+// second (by ID), TermOptional last (by ID). The caller's slice is not retained.
+func NewQueryFromTerms(w *World, terms ...Term) *Query {
+	if w == nil {
+		panic("flecs: NewQueryFromTerms: world must not be nil")
+	}
+	cp, andIDs := validateAndSortTerms("flecs: NewQueryFromTerms", terms)
+	return &Query{w: w, terms: cp, andIDs: andIDs}
+}
+
+// Terms returns the sorted TermAnd-only ID list for backward compatibility.
+//
+// For callers that predate structured terms, this returns only the TermAnd
+// component IDs, matching the historic NewQuery semantics. To get the full
+// term list including TermNot and TermOptional, use TermsFull.
+//
+// Callers must not mutate the returned slice.
+func (q *Query) Terms() []ID { return q.andIDs }
+
+// TermsFull returns a copy of the full structured term list in sorted order
+// (TermAnd first, TermNot second, TermOptional last).
+func (q *Query) TermsFull() []Term {
+	cp := make([]Term, len(q.terms))
+	copy(cp, q.terms)
+	return cp
+}
 
 // Iter starts a fresh iteration over all archetype tables matching the query.
 //
-// Matching strategy: pick the term whose component-index entry has the fewest
-// tables as the seed (O(terms) scan via compIndex.Count), then for each seed
-// table check that every other term's ID is present via Table.HasComponent.
-// This is O(smallest-set × terms) — optimal for sparse queries.
+// Seed strategy: pick the TermAnd term whose component-index entry has the
+// fewest tables (O(And-terms) scan), then for each seed table verify that
+// every other TermAnd is present and every TermNot is absent. TermOptional
+// terms do not affect matching. This is O(smallest-set × terms) — optimal for
+// sparse queries.
 //
 // The seed table list is materialised once via TablesFor (one allocation).
 func (q *Query) Iter() *QueryIter {
-	// Select seed: term with the fewest tables in the component index.
-	seedIdx := 0
-	minCount := q.w.compIndex.Count(q.terms[0])
-	for i := 1; i < len(q.terms); i++ {
-		if c := q.w.compIndex.Count(q.terms[i]); c < minCount {
+	// Select seed: TermAnd term with the fewest tables in the component index.
+	seedIdx := -1
+	minCount := 0
+	for i, term := range q.terms {
+		if term.Kind != TermAnd {
+			continue
+		}
+		c := q.w.compIndex.Count(term.ID)
+		if seedIdx == -1 || c < minCount {
 			minCount = c
 			seedIdx = i
 		}
 	}
-	seedID := q.terms[seedIdx]
-	candidates := q.w.TablesFor(seedID) // snapshot; one allocation
+	// seedIdx is always valid: NewQuery/NewQueryFromTerms guarantee >= 1 TermAnd.
+	seedID := q.terms[seedIdx].ID
+	candidates := q.w.TablesFor(seedID)
 	return &QueryIter{
 		q:          q,
+		terms:      q.terms,
 		candidates: candidates,
 		pos:        -1,
 	}
@@ -92,14 +172,16 @@ func (q *Query) Each(fn func(*QueryIter)) {
 // Mutation warning: calling Set, Remove, or Delete on the World while this
 // iterator is active produces undefined behaviour.
 type QueryIter struct {
-	q          *Query
+	q          *Query         // nil for CachedQuery-derived iters; use terms for term access
+	terms      []Term         // full term list (And + Not + Optional), set by Iter constructors
 	candidates []*table.Table // seed-table snapshot (uncached) or cache reference (cached)
 	pos        int            // index into candidates; -1 = before first Next
 	current    *table.Table   // non-nil only when positioned on a matching table
-	// cached, when true, skips the per-candidate HasComponent check in Next:
-	// the candidate list is pre-filtered by CachedQuery. When false (the
-	// default), every candidate is checked against q.terms.
-	cached bool
+	// cached, when true, skips the per-candidate term check in Next: the
+	// candidate list is pre-filtered by CachedQuery. When false (the default),
+	// every candidate is evaluated against the term list.
+	cached          bool
+	optionalPresent map[ID]bool // Optional-term presence for the current table; nil if no Optional terms
 }
 
 // Next advances to the next matching table. Returns true when positioned on a
@@ -114,20 +196,50 @@ func (it *QueryIter) Next() bool {
 		t := it.candidates[it.pos]
 		if it.cached {
 			// Cache is pre-filtered by CachedQuery.tryMatchTable; every
-			// candidate is already a match.
+			// candidate already satisfies And and Not terms.
 			it.current = t
+			it.updateOptionalPresence(t)
 			return true
 		}
-		match := true
-		for _, id := range it.q.terms {
-			if !t.HasComponent(id) {
-				match = false
-				break
+		if it.matchesTable(t) {
+			it.current = t
+			it.updateOptionalPresence(t)
+			return true
+		}
+	}
+}
+
+// matchesTable returns true if t satisfies all TermAnd and TermNot terms.
+// TermOptional terms are ignored during matching.
+func (it *QueryIter) matchesTable(t *table.Table) bool {
+	for _, term := range it.terms {
+		switch term.Kind {
+		case TermAnd:
+			if !t.HasComponent(term.ID) {
+				return false
+			}
+		case TermNot:
+			if t.HasComponent(term.ID) {
+				return false
 			}
 		}
-		if match {
-			it.current = t
-			return true
+	}
+	return true
+}
+
+// updateOptionalPresence records which TermOptional IDs are present in t.
+// Called once per table transition inside Next. O(optional-term-count).
+// Skipped entirely when there are no Optional terms (common case: zero allocs).
+func (it *QueryIter) updateOptionalPresence(t *table.Table) {
+	for k := range it.optionalPresent {
+		delete(it.optionalPresent, k)
+	}
+	for _, term := range it.terms {
+		if term.Kind == TermOptional {
+			if it.optionalPresent == nil {
+				it.optionalPresent = make(map[ID]bool)
+			}
+			it.optionalPresent[term.ID] = t.HasComponent(term.ID)
 		}
 	}
 }
@@ -150,7 +262,8 @@ func (it *QueryIter) Count() int { return it.Table().Count() }
 // copy within the current iteration step.
 func (it *QueryIter) Entities() []ID { return it.Table().Entities() }
 
-// Query returns the Query that produced this iterator.
+// Query returns the Query that produced this iterator. Returns nil for iters
+// derived from a CachedQuery.
 func (it *QueryIter) Query() *Query { return it.q }
 
 // Field returns a typed []T slice over the column for id in the current table.
@@ -169,6 +282,9 @@ func (it *QueryIter) Query() *Query { return it.q }
 //     returned false).
 //   - id is not in the current table's signature.
 //   - T does not match the Go type registered for id.
+//
+// For TermOptional terms, use FieldMaybe instead: Field panics if the column
+// is absent in the current table (even when the term is Optional).
 //
 // Implementation: uses unsafe.Slice over the column's base pointer — zero
 // allocs per call. GC safety: the column's reflect-backed slice (reachable
@@ -196,4 +312,90 @@ func Field[T any](it *QueryIter, id ID) []T {
 		return nil
 	}
 	return unsafe.Slice((*T)(base), n)[:it.Count()]
+}
+
+// FieldMaybe returns a typed []T slice and a presence flag for a TermOptional
+// query term id.
+//
+// Panics if id is not a TermOptional term in this iter's query. For TermAnd
+// terms, use Field instead.
+//
+// Returns (nil, false) if the current table does not contain id.
+// Returns (slice, true) if the current table contains id — identical semantics
+// to Field for the present case.
+//
+// FieldMaybe must be called after a successful Next call.
+func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
+	for _, term := range it.terms {
+		if term.ID != id {
+			continue
+		}
+		if term.Kind != TermOptional {
+			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not a TermOptional term; use Field for TermAnd terms",
+				reflect.TypeFor[T](), id))
+		}
+		if !it.optionalPresent[id] {
+			return nil, false
+		}
+		tbl := it.Table()
+		base, typ, n := tbl.ColumnBasePtr(id)
+		if typ == nil {
+			return make([]T, it.Count()), true
+		}
+		want := reflect.TypeFor[T]()
+		if typ != want {
+			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: column for id %d holds %s, not %s",
+				want, id, typ, want))
+		}
+		if n == 0 {
+			return nil, true
+		}
+		return unsafe.Slice((*T)(base), n)[:it.Count()], true
+	}
+	panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not in this query's term list",
+		reflect.TypeFor[T](), id))
+}
+
+// validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
+// copies and sorts them (And first by ID, Not second by ID, Optional last by ID),
+// and returns the sorted terms and pre-extracted And-term IDs.
+// Panics with messages prefixed by caller on invalid input.
+func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID) {
+	if len(terms) == 0 {
+		panic(caller + ": at least one term is required")
+	}
+	hasAnd := false
+	for _, t := range terms {
+		if t.Kind == TermAnd {
+			hasAnd = true
+			break
+		}
+	}
+	if !hasAnd {
+		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional terms would match an unbounded entity set")
+	}
+	seen := make(map[ID]struct{}, len(terms))
+	for _, t := range terms {
+		if _, dup := seen[t.ID]; dup {
+			panic(fmt.Sprintf("%s: duplicate term ID %d; each ID may appear at most once across all term kinds", caller, t.ID))
+		}
+		seen[t.ID] = struct{}{}
+	}
+	cp := make([]Term, len(terms))
+	copy(cp, terms)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Kind != cp[j].Kind {
+			return cp[i].Kind < cp[j].Kind
+		}
+		return cp[i].ID < cp[j].ID
+	})
+	// And terms are first; collect their IDs until the kind changes.
+	var andIDs []ID
+	for _, t := range cp {
+		if t.Kind != TermAnd {
+			break
+		}
+		andIDs = append(andIDs, t.ID)
+	}
+	return cp, andIDs
 }

@@ -99,8 +99,9 @@ within a table.
 ### Queries
 
 - `Each1`/`Each2`/`Each3`/`Each4` — ergonomic lambda iteration for 1–4 components.
-- `NewQuery` + `Iter` + `Field[T]` — pull-style iteration for dynamic term lists.
-- `NewCachedQuery` — persistent query that incrementally tracks new tables.
+- `NewQuery` + `Iter` + `Field[T]` — pull-style iteration for dynamic AND-only term lists.
+- `NewQueryFromTerms` — structured terms with `With`, `Without`, `Maybe` (NOT / Optional support).
+- `NewCachedQuery` / `NewCachedQueryFromTerms` — persistent queries that incrementally track new tables.
 
 ### Pipelines
 
@@ -129,6 +130,7 @@ within a table.
 | Hooks (single) | `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]` |
 | Observers (multi) | `Observe[T]`, `ObserveID`, `Observe2[T]`, `Unsubscribe` |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
+| NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 
@@ -147,7 +149,8 @@ within a table.
 | Deferred commands | ✅ | ✅ |
 | 4-phase pipeline | ✅ | ✅ |
 | Fixed timestep | ✅ | ✅ |
-| NOT / Optional / OR query terms | ❌ deferred | ✅ |
+| NOT / Optional query terms | ✅ (`With`, `Without`, `Maybe`) | ✅ |
+| OR query terms | ❌ deferred | ✅ |
 | Up/Down traversal in queries | ❌ deferred | ✅ |
 | Change detection | ❌ deferred | ✅ |
 | Multi-threading | ❌ deferred | ✅ |
