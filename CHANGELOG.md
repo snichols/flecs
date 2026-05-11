@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] v0.15.0 — Scoped Capability API (Reader / Writer) — BREAKING CHANGE
+## v0.15.0 — 2026-05-11 — Scoped Capability API (Reader / Writer) — BREAKING CHANGE
 
 > **Breaking change.** The legacy `Defer`/`DeferBegin`/`DeferEnd`/`Readonly`/`ReadonlyBegin`/`ReadonlyEnd`
 > methods have been removed from `*World`. Hook and observer callback signatures have changed.
