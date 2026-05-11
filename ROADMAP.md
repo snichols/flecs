@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (v0.6)
+## Shipped (v0.7)
 
 The following features are available in the current release:
 
@@ -20,6 +20,7 @@ The following features are available in the current release:
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
 - **NOT, Optional, and OR query terms** — `With`/`Without`/`Maybe`/`Or` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]` (also handles OR-group disambiguation).
 - **Stats and observability** — `World.Stats()` snapshot with world-level counters, per-phase wall-clock timing from the last Progress, and per-component table/entity counts; `SystemCountInPhase` for tooling.
+- **Change detection** — `(*CachedQuery).Changed()` returns true when any matching table was mutated since the last call. Per-table monotonic counter; over-reports never under-reports; zero-overhead when no cached queries exist.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
@@ -31,7 +32,6 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 
 ### Query extensions
 - Query-term traversal modifiers (`up(rel)` inline in `NewQueryFromTerms`; the explicit `GetUp`/`HasUp`/`TargetUp` helpers cover most use cases)
-- Change-detection (delta queries)
 - Query-time IsA inheritance (match entities whose prefab has a component)
 
 ### Addons

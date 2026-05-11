@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 — 2026-05-11
+
+Change detection on cached queries for delta-style systems. No breaking
+changes.
 
 ### Added
 
-- **Phase 9.5: Change detection via `CachedQuery.Changed()`** — `(*CachedQuery).Changed() bool`
+- **Change detection via `CachedQuery.Changed()`** — `(*CachedQuery).Changed() bool`
   returns true when any matching table was mutated since the last call. The first call
   after construction always returns true (initial state is "all changed"). Changes detected:
   new matching table added to the cache; column write (`Set[T]`/`SetByID`/`SetPair[T]`/`SetPairByID`);
