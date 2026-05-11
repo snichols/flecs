@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Phase 9.2.2: ChildOf hierarchy serialization** — `World.MarshalJSON` now
+  serializes single-parent `(ChildOf, parent)` relationships as a `"parent"`
+  serial field (omitted when absent; v1 format unchanged). Entities are emitted
+  in topological order (parents before children) via DFS, with sibling order
+  matching entity allocation order. `World.UnmarshalJSON` restores ChildOf
+  relationships in a single sequential pass. Cycle detection returns a
+  descriptive error rather than looping indefinitely.
+
+---
+
 ## v0.3.0 — 2026-05-10
 
 Introspection API, dynamic value access, and basic JSON serialization. No
