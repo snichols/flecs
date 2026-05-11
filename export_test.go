@@ -51,3 +51,61 @@ func CachedQuerySliceLen(w *World) int {
 func SystemSliceLen(w *World) int {
 	return len(w.systems)
 }
+
+// ReaderEachTableForCount calls EachTableFor on a Reader for componentID and
+// returns the number of tables visited. For tests only.
+func ReaderEachTableForCount(w *World, componentID ID, stopAfter int) int {
+	r := &Reader{world: w}
+	count := 0
+	r.EachTableFor(componentID, func(_ *table.Table) bool {
+		count++
+		if stopAfter > 0 && count >= stopAfter {
+			return false
+		}
+		return true
+	})
+	return count
+}
+
+// ReadonlyBeginForTest opens a readonly window using the internal readonlyBegin
+// method. For tests only — exercises the concurrent-read path without exposing
+// the public ReadonlyBegin/ReadonlyEnd API.
+func ReadonlyBeginForTest(w *World) { w.readonlyBegin() }
+
+// ReadonlyEndForTest closes a readonly window opened by ReadonlyBeginForTest.
+// For tests only.
+func ReadonlyEndForTest(w *World) { w.readonlyEnd() }
+
+// DeferBeginForTest increments deferDepth. For defer-behavior tests only.
+func DeferBeginForTest(w *World) {
+	w.deferMu.Lock()
+	w.deferDepth++
+	w.deferMu.Unlock()
+}
+
+// DeferEndForTest decrements deferDepth and flushes if depth reaches zero.
+// Panics if called without a matching DeferBeginForTest.
+func DeferEndForTest(w *World) {
+	w.deferMu.Lock()
+	if w.deferDepth <= 0 {
+		w.deferMu.Unlock()
+		panic("flecs: DeferEndForTest called without matching DeferBeginForTest")
+	}
+	w.deferDepth--
+	if w.deferDepth > 0 {
+		w.deferMu.Unlock()
+		return
+	}
+	q := w.deferred
+	w.deferred = acquireCmdQueue()
+	w.deferMu.Unlock()
+	q.flush(w)
+	releaseCmdQueue(q)
+}
+
+// DeferForTest wraps fn in DeferBeginForTest/DeferEndForTest.
+func DeferForTest(w *World, fn func()) {
+	DeferBeginForTest(w)
+	defer DeferEndForTest(w)
+	fn()
+}

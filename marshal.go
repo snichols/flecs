@@ -326,14 +326,14 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			if !ok {
 				return fmt.Errorf("flecs: unmarshal failed: entity serial %d references unknown parent serial %d", je.Serial, je.Parent)
 			}
-			AddID(w, e, MakePair(w.ChildOf(), parentID))
+			addIDOnWorld(w, e, MakePair(w.ChildOf(), parentID))
 		}
 		for _, prefabSerial := range je.Prefabs {
 			prefabID, ok := serialToID[prefabSerial]
 			if !ok {
 				return fmt.Errorf("flecs: unmarshal failed: unknown prefab serial %d", prefabSerial)
 			}
-			AddID(w, e, MakePair(w.IsA(), prefabID))
+			addIDOnWorld(w, e, MakePair(w.IsA(), prefabID))
 		}
 		for _, pair := range je.Pairs {
 			relID, ok := serialToID[pair.Rel]
@@ -345,7 +345,7 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				return fmt.Errorf("flecs: unmarshal failed: pair tgt serial %d not found", pair.Tgt)
 			}
 			if pair.DataType == "" {
-				AddID(w, e, MakePair(relID, tgtID))
+				addIDOnWorld(w, e, MakePair(relID, tgtID))
 			} else {
 				foundType, ok := typeStringToType[pair.DataType]
 				if !ok {

@@ -14,13 +14,13 @@ func ExampleOnSet() {
 	w := flecs.New()
 
 	// Register a hook that fires on every Set[hookScore].
-	flecs.OnSet[hookScore](w, func(e flecs.ID, s *hookScore) {
+	flecs.OnSet[hookScore](w, func(_ *flecs.Writer, _ flecs.ID, s hookScore) {
 		fmt.Printf("set: %d\n", s.Points)
 	})
 
 	e := w.NewEntity()
-	flecs.Set(w, e, hookScore{Points: 10}) // hook fires
-	flecs.Set(w, e, hookScore{Points: 20}) // hook fires again on overwrite
+	flecs.Set(w.W(), e, hookScore{Points: 10}) // hook fires
+	flecs.Set(w.W(), e, hookScore{Points: 20}) // hook fires again on overwrite
 
 	// Output:
 	// set: 10

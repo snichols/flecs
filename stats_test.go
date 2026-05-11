@@ -58,9 +58,9 @@ func TestStats_AfterEntitiesAndComponents(t *testing.T) {
 	_ = posID
 
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, statPos{1, 2})
+	flecs.Set(w.W(), e1, statPos{1, 2})
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, statPos{3, 4})
+	flecs.Set(w.W(), e2, statPos{3, 4})
 
 	s := w.Stats()
 	// EntityCount includes builtins + registered component + 2 user entities
@@ -176,16 +176,16 @@ func TestStats_PerComponentTableCount(t *testing.T) {
 
 	// Position-only entity
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, statPos{})
+	flecs.Set(w.W(), e1, statPos{})
 
 	// Position + Velocity entity
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, statPos{})
-	flecs.Set(w, e2, statVel{})
+	flecs.Set(w.W(), e2, statPos{})
+	flecs.Set(w.W(), e2, statVel{})
 
 	// Velocity-only entity
 	e3 := w.NewEntity()
-	flecs.Set(w, e3, statVel{})
+	flecs.Set(w.W(), e3, statVel{})
 
 	_ = e1
 	_ = e2
@@ -295,7 +295,7 @@ func TestStats_TableCount(t *testing.T) {
 
 	posID := flecs.RegisterComponent[statPos](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, statPos{})
+	flecs.Set(w.W(), e, statPos{})
 	_ = posID
 
 	s1 := w.Stats()

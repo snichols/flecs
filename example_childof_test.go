@@ -21,8 +21,8 @@ func ExampleWorld_childOf() {
 	w.SetName(wheel, "wheel")
 
 	// ChildOf pair attaches a child to its parent.
-	flecs.AddID(w, car, flecs.MakePair(w.ChildOf(), scene))
-	flecs.AddID(w, wheel, flecs.MakePair(w.ChildOf(), car))
+	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), scene))
+	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 
 	// Navigate upward.
 	if parent, ok := w.ParentOf(wheel); ok {

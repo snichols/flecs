@@ -12,19 +12,26 @@ import (
 // If fn is nil, any existing OnAdd hook for T is cleared.
 // Calling OnAdd[T] twice replaces the prior hook (one hook per type per event).
 //
-// For zero-size types (tags), v in the callback points to a zero-byte location;
-// dereferencing is technically valid in Go but the value is meaningless.
+// For zero-size types (tags), v in the callback is the zero value of T;
+// the value is meaningless but the hook still fires.
 // T need not be registered as a component entity before calling OnAdd; if
 // unregistered, its type metadata is auto-registered idempotently.
-func OnAdd[T any](w *World, fn func(e ID, v *T)) {
+//
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+// Read operations (Get, Has, IsAlive) are safe to call from within the hook.
+func OnAdd[T any](w *World, fn func(fw *Writer, e ID, v T)) {
 	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnAdd = nil
 		return
 	}
-	info.Hooks.OnAdd = func(_ any, e ID, ptr unsafe.Pointer) {
-		fn(e, (*T)(ptr))
+	info.Hooks.OnAdd = func(world any, e ID, ptr unsafe.Pointer) {
+		var v T
+		if ptr != nil {
+			v = *(*T)(ptr)
+		}
+		fn(world.(*Writer), e, v)
 	}
 }
 
@@ -34,45 +41,49 @@ func OnAdd[T any](w *World, fn func(e ID, v *T)) {
 // If fn is nil, any existing OnSet hook for T is cleared.
 // Calling OnSet[T] twice replaces the prior hook.
 //
-// For zero-size types (tags), the callback receives a nil pointer; the value
-// is meaningless. OnSet does not fire for AddID (which carries no value).
-func OnSet[T any](w *World, fn func(e ID, v *T)) {
+// For zero-size types (tags), the callback receives the zero value of T.
+// OnSet does not fire for AddID (which carries no value).
+//
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+func OnSet[T any](w *World, fn func(fw *Writer, e ID, v T)) {
 	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnSet = nil
 		return
 	}
-	info.Hooks.OnSet = func(_ any, e ID, ptr unsafe.Pointer) {
-		fn(e, (*T)(ptr))
+	info.Hooks.OnSet = func(world any, e ID, ptr unsafe.Pointer) {
+		var v T
+		if ptr != nil {
+			v = *(*T)(ptr)
+		}
+		fn(world.(*Writer), e, v)
 	}
 }
 
 // OnRemove registers fn as the OnRemove hook for component T in w.
 // fn is called before T is removed from an entity, including when the entity
-// is deleted. *v still holds the component value at the time of the call.
+// is deleted. v holds the component value at the time of the call.
 // If fn is nil, any existing OnRemove hook for T is cleared.
 // Calling OnRemove[T] twice replaces the prior hook.
 //
-// For zero-size types (tags), v points to a zero-byte location.
+// For zero-size types (tags), v is the zero value of T.
 //
-// Known limitation: if the hook panics, the panic propagates through the
-// calling operation and the World is left in a transitional state. Phase 5.3
-// deferred commands will offer a safer pattern.
-//
-// Re-entrancy: read-only World operations (Get, Has, Owns, IsAlive, Count) are
-// safe to call from within a hook. Mutating operations (Set, Remove, Delete) on
-// the entity currently being observed have undefined behavior; defer them to
-// Phase 5.3.
-func OnRemove[T any](w *World, fn func(e ID, v *T)) {
+// The *Writer passed to fn is a non-nil Writer scoped to the current world.
+// Read operations (Get, Has, IsAlive) are safe to call from within the hook.
+func OnRemove[T any](w *World, fn func(fw *Writer, e ID, v T)) {
 	w.checkExclusiveAccessWrite()
 	info := component.Register[T](w.registry)
 	if fn == nil {
 		info.Hooks.OnRemove = nil
 		return
 	}
-	info.Hooks.OnRemove = func(_ any, e ID, ptr unsafe.Pointer) {
-		fn(e, (*T)(ptr))
+	info.Hooks.OnRemove = func(world any, e ID, ptr unsafe.Pointer) {
+		var v T
+		if ptr != nil {
+			v = *(*T)(ptr)
+		}
+		fn(world.(*Writer), e, v)
 	}
 }
 
@@ -83,7 +94,7 @@ func OnRemove[T any](w *World, fn func(e ID, v *T)) {
 // ptr is a pointer to the newly-added slot; nil for zero-size components.
 func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnAdd != nil {
-		info.Hooks.OnAdd(w, e, ptr)
+		info.Hooks.OnAdd(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, EventOnAdd, e, ptr)
 }
@@ -94,7 +105,7 @@ func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 // ptr is a pointer to the component slot after the value was written.
 func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnSet != nil {
-		info.Hooks.OnSet(w, e, ptr)
+		info.Hooks.OnSet(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, EventOnSet, e, ptr)
 }
@@ -105,7 +116,7 @@ func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 // ptr is a pointer to the source slot; the value is still valid at call time.
 func (w *World) fireOnRemove(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnRemove != nil {
-		info.Hooks.OnRemove(w, e, ptr)
+		info.Hooks.OnRemove(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, EventOnRemove, e, ptr)
 }

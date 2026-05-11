@@ -25,7 +25,7 @@ func TestMultiThreadedSystemProcessesEachEntityOnce(t *testing.T) {
 			const n = 100_000
 			for range n {
 				e := w.NewEntity()
-				flecs.Set(w, e, mtCounter{V: 0})
+				flecs.Set(w.W(), e, mtCounter{V: 0})
 			}
 			cq := flecs.NewCachedQuery(w, cntID)
 			sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
@@ -64,7 +64,7 @@ func TestMultiThreadedSystemCannotBatchWithSiblings(t *testing.T) {
 
 	for range 100 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
+		flecs.Set(w.W(), e, parallelPos{})
 	}
 
 	var mu sync.Mutex
@@ -111,7 +111,7 @@ func TestMultiThreadedSystemUnevenSplit(t *testing.T) {
 	const n = 1000
 	for range n {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
+		flecs.Set(w.W(), e, parallelPos{})
 	}
 
 	var mu sync.Mutex
@@ -154,7 +154,7 @@ func TestMultiThreadedSystemEmptyWorkers(t *testing.T) {
 
 	for range 2 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
+		flecs.Set(w.W(), e, parallelPos{})
 	}
 
 	var mu sync.Mutex
@@ -195,7 +195,7 @@ func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 	entities := make([]flecs.ID, n)
 	for i := range n {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{X: float32(i)})
+		flecs.Set(w.W(), e, parallelPos{X: float32(i)})
 		entities[i] = e
 	}
 

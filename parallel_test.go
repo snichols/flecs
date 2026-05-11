@@ -18,7 +18,7 @@ func TestSetParallelDefault(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[parallelPos](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, parallelPos{})
+	flecs.Set(w.W(), e, parallelPos{})
 	cq := flecs.NewCachedQuery(w, posID)
 	sys := flecs.NewSystem(w, cq, func(_ float32, _ *flecs.QueryIter) {})
 	if sys.Parallel() {
@@ -55,8 +55,8 @@ func TestParallelSystemsRunConcurrently(t *testing.T) {
 
 	for range 100 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
-		flecs.Set(w, e, parallelVel{})
+		flecs.Set(w.W(), e, parallelPos{})
+		flecs.Set(w.W(), e, parallelVel{})
 	}
 
 	var mu sync.Mutex
@@ -109,7 +109,7 @@ func TestConflictingParallelSystemsSerialize(t *testing.T) {
 
 	for range 100 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
+		flecs.Set(w.W(), e, parallelPos{})
 	}
 
 	var mu sync.Mutex
@@ -161,8 +161,8 @@ func TestMixedBatchSerialThenParallel(t *testing.T) {
 
 	for range 50 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
-		flecs.Set(w, e, parallelVel{})
+		flecs.Set(w.W(), e, parallelPos{})
+		flecs.Set(w.W(), e, parallelVel{})
 	}
 
 	var order []string
@@ -244,8 +244,8 @@ func TestWriteSetOverrideEnablesParallel(t *testing.T) {
 
 	for range 50 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
-		flecs.Set(w, e, parallelVel{})
+		flecs.Set(w.W(), e, parallelPos{})
+		flecs.Set(w.W(), e, parallelVel{})
 	}
 
 	cq := flecs.NewCachedQuery(w, posID, velID)
@@ -301,7 +301,7 @@ func TestReadOnlyWriteSetEnablesParallel(t *testing.T) {
 
 	for range 50 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
+		flecs.Set(w.W(), e, parallelPos{})
 	}
 
 	var mu sync.Mutex
@@ -351,7 +351,7 @@ func TestDeferDuringParallel(t *testing.T) {
 	entities := make([]flecs.ID, n)
 	for i := range n {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{X: float32(i)})
+		flecs.Set(w.W(), e, parallelPos{X: float32(i)})
 		entities[i] = e
 	}
 
@@ -360,7 +360,7 @@ func TestDeferDuringParallel(t *testing.T) {
 		for it.Next() {
 			for _, e := range it.Entities() {
 				// Set is deferred (we're inside a Defer block from Progress).
-				flecs.Set(w, e, parallelVel{DX: 1})
+				flecs.Set(w.W(), e, parallelVel{DX: 1})
 			}
 		}
 	})
@@ -371,7 +371,7 @@ func TestDeferDuringParallel(t *testing.T) {
 
 	// After Progress, deferred Sets should have been flushed.
 	for _, e := range entities {
-		v, ok := flecs.Get[parallelVel](w, e)
+		v, ok := flecs.Get[parallelVel](w.R(), e)
 		if !ok {
 			t.Fatalf("entity %v: Vel not set after parallel deferred Set", e)
 		}
@@ -386,7 +386,7 @@ func TestSetWorkerCountMidFrame(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[parallelPos](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, parallelPos{})
+	flecs.Set(w.W(), e, parallelPos{})
 	cq := flecs.NewCachedQuery(w, posID)
 
 	ran := false
@@ -443,9 +443,9 @@ func TestParallelRace(t *testing.T) {
 
 	for range 200 {
 		e := w.NewEntity()
-		flecs.Set(w, e, parallelPos{})
-		flecs.Set(w, e, parallelVel{})
-		flecs.Set(w, e, parallelAcc{})
+		flecs.Set(w.W(), e, parallelPos{})
+		flecs.Set(w.W(), e, parallelVel{})
+		flecs.Set(w.W(), e, parallelAcc{})
 	}
 
 	cqA := flecs.NewCachedQuery(w, posID)

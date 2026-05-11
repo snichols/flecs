@@ -14,13 +14,13 @@ func TestObserveSingleFires(t *testing.T) {
 	var gotID flecs.ID
 	var gotVal Position
 
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(e flecs.ID, p *Position) {
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, e flecs.ID, p Position) {
 		gotID = e
-		gotVal = *p
+		gotVal = p
 	})
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{3, 7})
+	flecs.Set[Position](w.W(), e, Position{3, 7})
 
 	if gotID != e {
 		t.Fatalf("want entity %v, got %v", e, gotID)
@@ -36,15 +36,15 @@ func TestObserveMultipleFiringOrder(t *testing.T) {
 	w := flecs.New()
 	var order []string
 
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) {
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
 		order = append(order, "A")
 	})
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) {
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
 		order = append(order, "B")
 	})
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if len(order) != 2 || order[0] != "A" || order[1] != "B" {
 		t.Fatalf("want [A B], got %v", order)
@@ -57,12 +57,12 @@ func TestObserveDifferentEventNoFire(t *testing.T) {
 	w := flecs.New()
 	addCount, setCount := 0, 0
 
-	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ flecs.ID, _ *Position) { addCount++ })
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { setCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2}) // fires OnAdd + OnSet
-	flecs.Set[Position](w, e, Position{3, 4}) // fires OnSet only
+	flecs.Set[Position](w.W(), e, Position{1, 2}) // fires OnAdd + OnSet
+	flecs.Set[Position](w.W(), e, Position{3, 4}) // fires OnSet only
 
 	if addCount != 1 {
 		t.Fatalf("OnAdd observer want 1, got %d", addCount)
@@ -78,11 +78,11 @@ func TestObserveUnsubscribeStopsFiring(t *testing.T) {
 	w := flecs.New()
 	calls := 0
 
-	obs := flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { calls++ })
+	obs := flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	obs.Unsubscribe()
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if calls != 0 {
 		t.Fatalf("want 0 calls after Unsubscribe, got %d", calls)
@@ -95,12 +95,12 @@ func TestObserveUnsubscribeIdempotent(t *testing.T) {
 	w := flecs.New()
 	calls := 0
 
-	obs := flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { calls++ })
+	obs := flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { calls++ })
 	obs.Unsubscribe()
 	obs.Unsubscribe() // must not panic
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if calls != 0 {
 		t.Fatalf("want 0 after double Unsubscribe, got %d", calls)
@@ -118,25 +118,25 @@ func TestObserveUnsubscribeDuringDispatch(t *testing.T) {
 	var order []string
 	var obs2 *flecs.Observer
 
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) {
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
 		order = append(order, "A")
 		obs2.Unsubscribe()
 	})
-	obs2 = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) {
+	obs2 = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
 		order = append(order, "B")
 	})
 
 	e := w.NewEntity()
 	// A fires first; its callback marks B as removed before B is visited.
 	// B is therefore skipped in this dispatch.
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if len(order) != 1 || order[0] != "A" {
 		t.Fatalf("first Set: want [A], got %v", order)
 	}
 
 	order = order[:0]
-	flecs.Set[Position](w, e, Position{3, 4}) // B still not fires
+	flecs.Set[Position](w.W(), e, Position{3, 4}) // B still not fires
 
 	if len(order) != 1 || order[0] != "A" {
 		t.Fatalf("second Set: want [A], got %v", order)
@@ -149,11 +149,11 @@ func TestObserveHookAndObserverOrder(t *testing.T) {
 	w := flecs.New()
 	var order []string
 
-	flecs.OnSet[Position](w, func(_ flecs.ID, _ *Position) { order = append(order, "hook") })
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { order = append(order, "obs") })
+	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { order = append(order, "hook") })
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { order = append(order, "obs") })
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if len(order) != 2 || order[0] != "hook" || order[1] != "obs" {
 		t.Fatalf("want [hook obs], got %v", order)
@@ -167,12 +167,12 @@ func TestObserveIDTag(t *testing.T) {
 	fired := false
 
 	tagID := w.NewEntity()
-	_ = flecs.ObserveID(w, tagID, flecs.EventOnAdd, func(e flecs.ID, _ unsafe.Pointer) {
+	_ = flecs.ObserveID(w, tagID, flecs.EventOnAdd, func(_ *flecs.Writer, e flecs.ID, _ unsafe.Pointer) {
 		fired = true
 	})
 
 	e := w.NewEntity()
-	flecs.AddID(w, e, tagID)
+	flecs.AddID(w.W(), e, tagID)
 
 	if !fired {
 		t.Fatal("ObserveID observer did not fire for AddID")
@@ -189,12 +189,12 @@ func TestObserveIDPair(t *testing.T) {
 	pairID := flecs.MakePair(rel, tgt)
 
 	var gotPtr unsafe.Pointer
-	_ = flecs.ObserveID(w, pairID, flecs.EventOnSet, func(_ flecs.ID, ptr unsafe.Pointer) {
+	_ = flecs.ObserveID(w, pairID, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, ptr unsafe.Pointer) {
 		gotPtr = ptr
 	})
 
 	e := w.NewEntity()
-	flecs.SetPair[Position](w, e, rel, tgt, Position{5, 6})
+	flecs.SetPair[Position](w.W(), e, rel, tgt, Position{5, 6})
 
 	if gotPtr == nil {
 		t.Fatal("ObserveID pair observer did not fire")
@@ -211,16 +211,16 @@ func TestObserveNoFireForInherited(t *testing.T) {
 	w := flecs.New()
 	addCount, setCount := 0, 0
 
-	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ flecs.ID, _ *Position) { addCount++ })
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { setCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
 
 	prefab := w.NewEntity()
-	flecs.Set[Position](w, prefab, Position{1, 2})
+	flecs.Set[Position](w.W(), prefab, Position{1, 2})
 	addCount, setCount = 0, 0 // reset after prefab setup
 
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
-	v, ok := flecs.Get[Position](w, child)
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	v, ok := flecs.Get[Position](w.R(), child)
 	if !ok || v != (Position{1, 2}) {
 		t.Fatalf("Get via IsA: want {1,2}, got %v ok=%v", v, ok)
 	}
@@ -236,15 +236,15 @@ func TestObserveCascadeDeletePostOrder(t *testing.T) {
 	w := flecs.New()
 	var order []flecs.ID
 
-	_ = flecs.Observe[Position](w, flecs.EventOnRemove, func(e flecs.ID, _ *Position) {
+	_ = flecs.Observe[Position](w, flecs.EventOnRemove, func(_ *flecs.Writer, e flecs.ID, _ Position) {
 		order = append(order, e)
 	})
 
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set[Position](w, parent, Position{1, 2})
-	flecs.Set[Position](w, child, Position{3, 4})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set[Position](w.W(), parent, Position{1, 2})
+	flecs.Set[Position](w.W(), child, Position{3, 4})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
 	w.Delete(parent)
 
@@ -266,14 +266,14 @@ func TestObserveMultipleEventKinds(t *testing.T) {
 	w := flecs.New()
 	addCount, setCount, remCount := 0, 0, 0
 
-	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ flecs.ID, _ *Position) { addCount++ })
-	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ flecs.ID, _ *Position) { setCount++ })
-	_ = flecs.Observe[Position](w, flecs.EventOnRemove, func(_ flecs.ID, _ *Position) { remCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
+	_ = flecs.Observe[Position](w, flecs.EventOnRemove, func(_ *flecs.Writer, _ flecs.ID, _ Position) { remCount++ })
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2}) // OnAdd + OnSet
-	flecs.Set[Position](w, e, Position{3, 4}) // OnSet only
-	flecs.Remove[Position](w, e)              // OnRemove only
+	flecs.Set[Position](w.W(), e, Position{1, 2}) // OnAdd + OnSet
+	flecs.Set[Position](w.W(), e, Position{3, 4}) // OnSet only
+	flecs.Remove[Position](w.W(), e)              // OnRemove only
 
 	if addCount != 1 {
 		t.Fatalf("OnAdd want 1, got %d", addCount)
@@ -295,7 +295,7 @@ func TestObserveAutoRegisters(t *testing.T) {
 	before := w.Count()
 
 	fired := false
-	_ = flecs.Observe[NewObsType](w, flecs.EventOnSet, func(_ flecs.ID, _ *NewObsType) {
+	_ = flecs.Observe[NewObsType](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ NewObsType) {
 		fired = true
 	})
 
@@ -304,7 +304,7 @@ func TestObserveAutoRegisters(t *testing.T) {
 	}
 
 	e := w.NewEntity()
-	flecs.Set[NewObsType](w, e, NewObsType{42})
+	flecs.Set[NewObsType](w.W(), e, NewObsType{42})
 	if !fired {
 		t.Fatal("observer for auto-registered type did not fire")
 	}
@@ -318,7 +318,7 @@ func TestObserveIDNoAutoRegister(t *testing.T) {
 	before := w.Count()
 
 	fired := false
-	_ = flecs.ObserveID(w, rawID, flecs.EventOnAdd, func(_ flecs.ID, _ unsafe.Pointer) {
+	_ = flecs.ObserveID(w, rawID, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {
 		fired = true
 	})
 
@@ -328,7 +328,7 @@ func TestObserveIDNoAutoRegister(t *testing.T) {
 
 	// Observer is registered but fires only when AddID uses that exact id.
 	e := w.NewEntity()
-	flecs.AddID(w, e, rawID)
+	flecs.AddID(w.W(), e, rawID)
 	if !fired {
 		t.Fatal("ObserveID observer did not fire after AddID with the raw id")
 	}
@@ -340,14 +340,14 @@ func TestObserveHooksStillGreen(t *testing.T) {
 	w := flecs.New()
 	addCount, setCount, remCount := 0, 0, 0
 
-	flecs.OnAdd[Position](w, func(_ flecs.ID, _ *Position) { addCount++ })
-	flecs.OnSet[Position](w, func(_ flecs.ID, _ *Position) { setCount++ })
-	flecs.OnRemove[Position](w, func(_ flecs.ID, _ *Position) { remCount++ })
+	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCount++ })
+	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCount++ })
+	flecs.OnRemove[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { remCount++ })
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
-	flecs.Set[Position](w, e, Position{3, 4})
-	flecs.Remove[Position](w, e)
+	flecs.Set[Position](w.W(), e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{3, 4})
+	flecs.Remove[Position](w.W(), e)
 
 	if addCount != 1 || setCount != 2 || remCount != 1 {
 		t.Fatalf("hook counts: add=%d set=%d rem=%d (want 1/2/1)", addCount, setCount, remCount)
@@ -361,13 +361,13 @@ func TestObserve2MultipleEvents(t *testing.T) {
 	var fired []flecs.EventKind
 
 	_ = flecs.Observe2[Position](w, []flecs.EventKind{flecs.EventOnAdd, flecs.EventOnSet, flecs.EventOnRemove},
-		func(ev flecs.EventKind, _ flecs.ID, _ *Position) {
+		func(_ *flecs.Writer, ev flecs.EventKind, _ flecs.ID, _ Position) {
 			fired = append(fired, ev)
 		})
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2}) // OnAdd + OnSet
-	flecs.Remove[Position](w, e)              // OnRemove
+	flecs.Set[Position](w.W(), e, Position{1, 2}) // OnAdd + OnSet
+	flecs.Remove[Position](w.W(), e)              // OnRemove
 
 	if len(fired) != 3 {
 		t.Fatalf("want 3 events, got %d: %v", len(fired), fired)
@@ -384,11 +384,11 @@ func TestObserve2UnsubscribeAll(t *testing.T) {
 	calls := 0
 
 	obs := flecs.Observe2[Position](w, []flecs.EventKind{flecs.EventOnAdd, flecs.EventOnSet},
-		func(_ flecs.EventKind, _ flecs.ID, _ *Position) { calls++ })
+		func(_ *flecs.Writer, _ flecs.EventKind, _ flecs.ID, _ Position) { calls++ })
 	obs.Unsubscribe()
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2})
+	flecs.Set[Position](w.W(), e, Position{1, 2})
 
 	if calls != 0 {
 		t.Fatalf("want 0 after Unsubscribe, got %d", calls)
@@ -409,5 +409,20 @@ func TestEventKindString(t *testing.T) {
 	}
 	if s := flecs.EventKind(99).String(); s != "Unknown" {
 		t.Fatalf("unknown EventKind.String() want Unknown, got %q", s)
+	}
+}
+
+// ── Observer receives *Writer ─────────────────────────────────────────────────
+
+func TestObserverReceivesWriter(t *testing.T) {
+	w := flecs.New()
+	var gotWriter *flecs.Writer
+	_ = flecs.Observe[Position](w, flecs.EventOnSet, func(fw *flecs.Writer, _ flecs.ID, _ Position) {
+		gotWriter = fw
+	})
+	e := w.NewEntity()
+	flecs.Set[Position](w.W(), e, Position{1, 2})
+	if gotWriter == nil {
+		t.Fatal("observer received nil *Writer")
 	}
 }

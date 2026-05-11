@@ -29,7 +29,7 @@ func setupWorldWithEntities(b *testing.B, n int, components ...flecs.ID) (*flecs
 	for i := range n {
 		e := w.NewEntity()
 		for _, cid := range components {
-			flecs.AddID(w, e, cid)
+			flecs.AddID(w.W(), e, cid)
 		}
 		entities[i] = e
 	}
@@ -59,10 +59,10 @@ func setupWorldMultiArchetype(b *testing.B, n, archetypes int) (*flecs.World, []
 	entities := make([]flecs.ID, n)
 	for i := range n {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 		// add an extra tag to vary the archetype
-		flecs.AddID(w, e, tagIDs[i%archetypes])
+		flecs.AddID(w.W(), e, tagIDs[i%archetypes])
 		entities[i] = e
 	}
 	_ = posID
@@ -109,10 +109,10 @@ func BenchmarkSetExistingComponent(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{X: 1, Y: 2})
+	flecs.Set(w.W(), e, benchPos{X: 1, Y: 2})
 	b.ResetTimer()
 	for range b.N {
-		flecs.Set(w, e, benchPos{X: 3, Y: 4})
+		flecs.Set(w.W(), e, benchPos{X: 3, Y: 4})
 	}
 }
 
@@ -125,7 +125,7 @@ func BenchmarkSetNewComponentTriggerMigration(b *testing.B) {
 	}
 	b.ResetTimer()
 	for _, e := range entities {
-		flecs.Set(w, e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
 	}
 }
 
@@ -133,10 +133,10 @@ func BenchmarkGetExistingComponent(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{X: 1, Y: 2})
+	flecs.Set(w.W(), e, benchPos{X: 1, Y: 2})
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.Get[benchPos](w, e)
+		_, _ = flecs.Get[benchPos](w.R(), e)
 	}
 }
 
@@ -146,7 +146,7 @@ func BenchmarkGetMissingComponent(b *testing.B) {
 	e := w.NewEntity()
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.Get[benchPos](w, e)
+		_, _ = flecs.Get[benchPos](w.R(), e)
 	}
 }
 
@@ -154,10 +154,10 @@ func BenchmarkHasExistingComponent(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{X: 1})
+	flecs.Set(w.W(), e, benchPos{X: 1})
 	b.ResetTimer()
 	for range b.N {
-		_ = flecs.Has[benchPos](w, e)
+		_ = flecs.Has[benchPos](w.R(), e)
 	}
 }
 
@@ -168,23 +168,23 @@ func BenchmarkOwnsVsHas(b *testing.B) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[benchPos](w)
 	prefab := w.NewEntity()
-	flecs.Set(w, prefab, benchPos{X: 42})
+	flecs.Set(w.W(), prefab, benchPos{X: 42})
 
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 
 	b.Run("Has-via-IsA", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for range b.N {
-			_ = flecs.HasID(w, child, posID)
+			_ = flecs.HasID(w.R(), child, posID)
 		}
 	})
 	b.Run("Owns-local-only", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for range b.N {
-			_ = flecs.OwnsID(w, child, posID)
+			_ = flecs.OwnsID(w.R(), child, posID)
 		}
 	})
 }
@@ -203,7 +203,7 @@ func BenchmarkAddOneComponent_CacheHit(b *testing.B) {
 	}
 	b.ResetTimer()
 	for _, e := range entities {
-		flecs.Set(w, e, benchPos{})
+		flecs.Set(w.W(), e, benchPos{})
 	}
 }
 
@@ -227,13 +227,13 @@ func BenchmarkAddOneComponent_CacheMiss(b *testing.B) {
 		e := w.NewEntity()
 		// give each entity a varying set of tags so source archetypes differ
 		for j := range i % len(tagIDs) {
-			flecs.AddID(w, e, tagIDs[j])
+			flecs.AddID(w.W(), e, tagIDs[j])
 		}
 		entities[i] = e
 	}
 	b.ResetTimer()
 	for _, e := range entities {
-		flecs.Set(w, e, benchPos{})
+		flecs.Set(w.W(), e, benchPos{})
 	}
 }
 
@@ -243,12 +243,12 @@ func BenchmarkRemoveOneComponent(b *testing.B) {
 	entities := make([]flecs.ID, b.N)
 	for i := range b.N {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{})
+		flecs.Set(w.W(), e, benchPos{})
 		entities[i] = e
 	}
 	b.ResetTimer()
 	for _, e := range entities {
-		flecs.Remove[benchPos](w, e)
+		flecs.Remove[benchPos](w.W(), e)
 	}
 }
 
@@ -259,13 +259,13 @@ func BenchmarkSwapComponent(b *testing.B) {
 	entities := make([]flecs.ID, b.N)
 	for i := range b.N {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{})
-		flecs.Set(w, e, benchVel{})
+		flecs.Set(w.W(), e, benchPos{})
+		flecs.Set(w.W(), e, benchVel{})
 		entities[i] = e
 	}
 	b.ResetTimer()
 	for _, e := range entities {
-		flecs.Remove[benchVel](w, e)
+		flecs.Remove[benchVel](w.W(), e)
 	}
 }
 
@@ -276,12 +276,12 @@ func BenchmarkQueryEach2_1k(b *testing.B) {
 	w := flecs.New()
 	for range 1_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	b.ResetTimer()
 	for range b.N {
-		flecs.Each2[benchPos, benchVel](w, func(_ flecs.ID, p *benchPos, v *benchVel) {
+		flecs.Each2[benchPos, benchVel](w.R(), func(_ flecs.ID, p *benchPos, v *benchVel) {
 			p.X += v.DX
 			p.Y += v.DY
 		})
@@ -293,12 +293,12 @@ func BenchmarkQueryEach2_10k(b *testing.B) {
 	w := flecs.New()
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	b.ResetTimer()
 	for range b.N {
-		flecs.Each2[benchPos, benchVel](w, func(_ flecs.ID, p *benchPos, v *benchVel) {
+		flecs.Each2[benchPos, benchVel](w.R(), func(_ flecs.ID, p *benchPos, v *benchVel) {
 			p.X += v.DX
 			p.Y += v.DY
 		})
@@ -310,12 +310,12 @@ func BenchmarkQueryEach2_100k(b *testing.B) {
 	w := flecs.New()
 	for range 100_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	b.ResetTimer()
 	for range b.N {
-		flecs.Each2[benchPos, benchVel](w, func(_ flecs.ID, p *benchPos, v *benchVel) {
+		flecs.Each2[benchPos, benchVel](w.R(), func(_ flecs.ID, p *benchPos, v *benchVel) {
 			p.X += v.DX
 			p.Y += v.DY
 		})
@@ -329,8 +329,8 @@ func BenchmarkCachedQueryEach2_10k(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	b.ResetTimer()
@@ -355,8 +355,8 @@ func BenchmarkQueryIterField_10k(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	q := flecs.NewQuery(w, posID, velID)
 	b.ResetTimer()
@@ -380,7 +380,7 @@ func BenchmarkQueryAcrossArchetypes_10k(b *testing.B) {
 	w, _ := setupWorldMultiArchetype(b, 10_000, 5)
 	b.ResetTimer()
 	for range b.N {
-		flecs.Each2[benchPos, benchVel](w, func(_ flecs.ID, p *benchPos, v *benchVel) {
+		flecs.Each2[benchPos, benchVel](w.R(), func(_ flecs.ID, p *benchPos, v *benchVel) {
 			p.X += v.DX
 			p.Y += v.DY
 		})
@@ -395,7 +395,7 @@ func BenchmarkFieldT_AllocCost(b *testing.B) {
 	posID := flecs.RegisterComponent[benchPos](w)
 	for range 100 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
 	}
 	q := flecs.NewQuery(w, posID)
 	it := q.Iter()
@@ -415,12 +415,12 @@ func BenchmarkSetNoHook_10k(b *testing.B) {
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
 		for _, e := range entities {
-			flecs.Set(w, e, benchPos{X: 1})
+			flecs.Set(w.W(), e, benchPos{X: 1})
 		}
 	}
 }
@@ -429,18 +429,18 @@ func BenchmarkOnSetHookFires_10k(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	var sink float64
-	flecs.OnSet[benchPos](w, func(_ flecs.ID, p *benchPos) {
+	flecs.OnSet[benchPos](w, func(_ *flecs.Writer, _ flecs.ID, p benchPos) {
 		sink += p.X
 	})
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
 		for _, e := range entities {
-			flecs.Set(w, e, benchPos{X: 1})
+			flecs.Set(w.W(), e, benchPos{X: 1})
 		}
 	}
 	_ = sink
@@ -450,18 +450,18 @@ func BenchmarkObserverFires_10k(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	var sink float64
-	flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ flecs.ID, p *benchPos) {
+	flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, p benchPos) {
 		sink += p.X
 	})
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
 		for _, e := range entities {
-			flecs.Set(w, e, benchPos{X: 1})
+			flecs.Set(w.W(), e, benchPos{X: 1})
 		}
 	}
 	_ = sink
@@ -471,21 +471,21 @@ func BenchmarkObserverFires_HookAndObserver_10k(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	var sink float64
-	flecs.OnSet[benchPos](w, func(_ flecs.ID, p *benchPos) {
+	flecs.OnSet[benchPos](w, func(_ *flecs.Writer, _ flecs.ID, p benchPos) {
 		sink += p.X
 	})
-	flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ flecs.ID, p *benchPos) {
+	flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, p benchPos) {
 		sink += p.X
 	})
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
 		for _, e := range entities {
-			flecs.Set(w, e, benchPos{X: 1})
+			flecs.Set(w.W(), e, benchPos{X: 1})
 		}
 	}
 	_ = sink
@@ -496,19 +496,19 @@ func BenchmarkObserverFires_5observers_10k(b *testing.B) {
 	w := flecs.New()
 	var sink float64
 	for range 5 {
-		flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ flecs.ID, p *benchPos) {
+		flecs.Observe[benchPos](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, p benchPos) {
 			sink += p.X
 		})
 	}
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
 		for _, e := range entities {
-			flecs.Set(w, e, benchPos{X: 1})
+			flecs.Set(w.W(), e, benchPos{X: 1})
 		}
 	}
 	_ = sink
@@ -516,7 +516,7 @@ func BenchmarkObserverFires_5observers_10k(b *testing.B) {
 
 // ---- f) Deferred queue ----
 
-// BenchmarkDeferBatchedAdds: 100 AddID calls on one entity inside one Defer scope.
+// BenchmarkDeferBatchedAdds: 100 AddID calls on one entity inside one Write scope.
 // With the coalescing queue this should execute ~1 migration; the old closure-based
 // queue executed 100 migrations. Expect ≥ 10× speedup vs the pre-v0.14 baseline.
 func BenchmarkDeferBatchedAdds(b *testing.B) {
@@ -530,27 +530,27 @@ func BenchmarkDeferBatchedAdds(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		e := w.NewEntity()
-		w.Defer(func() {
+		w.Write(func(fw *flecs.Writer) {
 			for _, tag := range tags {
-				flecs.AddID(w, e, tag)
+				flecs.AddID(fw, e, tag)
 			}
 		})
 	}
 }
 
-// BenchmarkDeferSingleSet: one Set[T] inside an explicit DeferBegin/DeferEnd.
+// BenchmarkDeferSingleSet: one Set[T] inside a Write scope.
 // The arena-backed path should produce 0 allocs/op (no closure capture for the
 // value, no slice growth after warmup, cmdQueue recycled via sync.Pool).
 func BenchmarkDeferSingleSet(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{})
+	flecs.Set(w.W(), e, benchPos{})
 	b.ResetTimer()
 	for range b.N {
-		w.DeferBegin()
-		flecs.Set(w, e, benchPos{X: 1, Y: 2})
-		w.DeferEnd()
+		w.Write(func(fw *flecs.Writer) {
+			flecs.Set(fw, e, benchPos{X: 1, Y: 2})
+		})
 	}
 }
 
@@ -559,7 +559,7 @@ func BenchmarkDeferOverhead_NoOps(b *testing.B) {
 	w := flecs.New()
 	b.ResetTimer()
 	for range b.N {
-		w.Defer(func() {})
+		w.Write(func(_ *flecs.Writer) {})
 	}
 }
 
@@ -569,13 +569,13 @@ func BenchmarkDeferSet_10k(b *testing.B) {
 	entities := make([]flecs.ID, 10_000)
 	for i := range entities {
 		entities[i] = w.NewEntity()
-		flecs.Set(w, entities[i], benchPos{})
+		flecs.Set(w.W(), entities[i], benchPos{})
 	}
 	b.ResetTimer()
 	for range b.N {
-		w.Defer(func() {
+		w.Write(func(fw *flecs.Writer) {
 			for _, e := range entities {
-				flecs.Set(w, e, benchPos{X: 2})
+				flecs.Set(fw, e, benchPos{X: 2})
 			}
 		})
 	}
@@ -591,9 +591,9 @@ func BenchmarkDeferDelete_10k(b *testing.B) {
 			entities[i] = w.NewEntity()
 		}
 		b.StartTimer()
-		w.Defer(func() {
+		w.Write(func(fw *flecs.Writer) {
 			for _, e := range entities {
-				w.Delete(e)
+				fw.Delete(e)
 			}
 		})
 		b.StopTimer()
@@ -604,14 +604,14 @@ func BenchmarkDeferNested(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{})
+	flecs.Set(w.W(), e, benchPos{})
 	b.ResetTimer()
 	for range b.N {
-		w.DeferBegin()
-		w.DeferBegin()
-		flecs.Set(w, e, benchPos{X: 1})
-		w.DeferEnd()
-		w.DeferEnd()
+		w.Write(func(outer *flecs.Writer) {
+			w.Write(func(inner *flecs.Writer) {
+				flecs.Set(inner, e, benchPos{X: 1})
+			})
+		})
 	}
 }
 
@@ -633,8 +633,8 @@ func BenchmarkProgress_OneSystem_10kEntities(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
@@ -659,8 +659,8 @@ func BenchmarkProgress_TenSystems_1kEntities(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 1_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	for range 10 {
 		cq := flecs.NewCachedQuery(w, posID, velID)
@@ -688,8 +688,8 @@ func BenchmarkProgress_WithFixedTimestep(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 1_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	cq := flecs.NewCachedQuery(w, posID, velID)
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), cq, func(_ float32, it *flecs.QueryIter) {
@@ -716,8 +716,8 @@ func BenchmarkProgress_PipelineFull(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 1_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 	sysFn := func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
@@ -748,7 +748,7 @@ func BenchmarkChildOfCascadeDelete_100(b *testing.B) {
 		parent := w.NewEntity()
 		for range 100 {
 			child := w.NewEntity()
-			flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+			flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 		}
 		b.StartTimer()
 		w.Delete(parent)
@@ -764,7 +764,7 @@ func BenchmarkChildOfCascadeDelete_10k(b *testing.B) {
 		parent := w.NewEntity()
 		for range 10_000 {
 			child := w.NewEntity()
-			flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+			flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 		}
 		b.StartTimer()
 		w.Delete(parent)
@@ -777,12 +777,12 @@ func BenchmarkIsAGet_Hit(b *testing.B) {
 	b.ReportAllocs()
 	w := flecs.New()
 	prefab := w.NewEntity()
-	flecs.Set(w, prefab, benchPos{X: 99})
+	flecs.Set(w.W(), prefab, benchPos{X: 99})
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.Get[benchPos](w, child)
+		_, _ = flecs.Get[benchPos](w.R(), child)
 	}
 }
 
@@ -793,10 +793,10 @@ func BenchmarkIsAGet_MissedChain(b *testing.B) {
 	w := flecs.New()
 	prefab := w.NewEntity() // no benchPos
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.Get[benchPos](w, child)
+		_, _ = flecs.Get[benchPos](w.R(), child)
 	}
 }
 
@@ -809,11 +809,11 @@ func BenchmarkGetUp_SelfHit(b *testing.B) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, child, benchPos{X: 1, Y: 2})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), child, benchPos{X: 1, Y: 2})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.GetUp[benchPos](w, child, w.ChildOf())
+		_, _ = flecs.GetUp[benchPos](w.R(), child, w.ChildOf())
 	}
 }
 
@@ -823,11 +823,11 @@ func BenchmarkGetUp_Depth1(b *testing.B) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, benchPos{X: 1, Y: 2})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), parent, benchPos{X: 1, Y: 2})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.GetUp[benchPos](w, child, w.ChildOf())
+		_, _ = flecs.GetUp[benchPos](w.R(), child, w.ChildOf())
 	}
 }
 
@@ -840,12 +840,12 @@ func BenchmarkGetUp_Depth5(b *testing.B) {
 		entities[i] = w.NewEntity()
 	}
 	for i := 0; i < 5; i++ {
-		flecs.AddID(w, entities[i], flecs.MakePair(w.ChildOf(), entities[i+1]))
+		flecs.AddID(w.W(), entities[i], flecs.MakePair(w.ChildOf(), entities[i+1]))
 	}
-	flecs.Set(w, entities[5], benchPos{X: 1, Y: 2})
+	flecs.Set(w.W(), entities[5], benchPos{X: 1, Y: 2})
 	b.ResetTimer()
 	for range b.N {
-		_, _ = flecs.GetUp[benchPos](w, entities[0], w.ChildOf())
+		_, _ = flecs.GetUp[benchPos](w.R(), entities[0], w.ChildOf())
 	}
 }
 
@@ -856,10 +856,10 @@ func BenchmarkLookupPath_3deep(b *testing.B) {
 	scene := w.NewEntity()
 	w.SetName(scene, "scene")
 	car := w.NewEntity()
-	flecs.AddID(w, car, flecs.MakePair(w.ChildOf(), scene))
+	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), scene))
 	w.SetName(car, "car")
 	wheel := w.NewEntity()
-	flecs.AddID(w, wheel, flecs.MakePair(w.ChildOf(), car))
+	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 	b.ResetTimer()
 	for range b.N {
@@ -885,8 +885,8 @@ func BenchmarkCachedQueryChangedHit_10kTables(b *testing.B) {
 	// Create entities spread across many archetypes (pos + each pair of tags).
 	for i := range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{})
-		flecs.AddID(w, e, tagIDs[i%len(tagIDs)])
+		flecs.Set(w.W(), e, benchPos{})
+		flecs.AddID(w.W(), e, tagIDs[i%len(tagIDs)])
 	}
 	cq := flecs.NewCachedQuery(w, posID)
 	cq.Changed() // consume initial true; sync lastChangeCounts
@@ -902,12 +902,12 @@ func BenchmarkCachedQueryChangedAfterSet(b *testing.B) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[benchPos](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, benchPos{X: 1})
+	flecs.Set(w.W(), e, benchPos{X: 1})
 	cq := flecs.NewCachedQuery(w, posID)
 	cq.Changed() // consume initial true
 	b.ResetTimer()
 	for range b.N {
-		flecs.Set(w, e, benchPos{X: 2})
+		flecs.Set(w.W(), e, benchPos{X: 2})
 		_ = cq.Changed()
 	}
 }
@@ -925,8 +925,8 @@ func BenchmarkProgress_ParallelDispatch_2systems_10k(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 
 	cqPos := flecs.NewCachedQuery(w, posID)
@@ -970,8 +970,8 @@ func BenchmarkProgress_SerialBaseline_2systems_10k(b *testing.B) {
 	velID := flecs.RegisterComponent[benchVel](w)
 	for range 10_000 {
 		e := w.NewEntity()
-		flecs.Set(w, e, benchPos{X: 1})
-		flecs.Set(w, e, benchVel{DX: 1})
+		flecs.Set(w.W(), e, benchPos{X: 1})
+		flecs.Set(w.W(), e, benchVel{DX: 1})
 	}
 
 	cqPos := flecs.NewCachedQuery(w, posID)
@@ -1020,7 +1020,7 @@ func BenchmarkMultiThreadedSystem(b *testing.B) {
 			const n = 100_000
 			for range n {
 				e := w.NewEntity()
-				flecs.Set(w, e, benchVec3{X: 1, Y: 2, Z: 3})
+				flecs.Set(w.W(), e, benchVec3{X: 1, Y: 2, Z: 3})
 			}
 			cq := flecs.NewCachedQuery(w, vecID)
 			sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {

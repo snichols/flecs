@@ -8,6 +8,47 @@ import (
 	"github.com/snichols/flecs/internal/component"
 )
 
+// getRefOnWorld returns a raw pointer to component T on entity e.
+// Only valid inside the enclosing Read/Write scope.
+func getRefOnWorld[T any](w *World, e ID) *T {
+	info, ok := component.LookupByType[T](w.registry)
+	if !ok || info.Component == 0 {
+		return nil
+	}
+	rec := w.index.Get(e)
+	if rec == nil {
+		return nil
+	}
+	t := rec.Table
+	if t == nil || !t.HasComponent(info.Component) {
+		return nil
+	}
+	ptr := t.Get(int(rec.Row), info.Component)
+	if ptr == nil {
+		return nil
+	}
+	return (*T)(ptr)
+}
+
+// getPairRefOnWorld returns a raw pointer to the pair data for entity e.
+// Only valid inside the enclosing Read/Write scope.
+func getPairRefOnWorld[T any](w *World, e ID, rel ID, tgt ID) *T {
+	pairID := MakePair(rel, tgt)
+	rec := w.index.Get(e)
+	if rec == nil {
+		return nil
+	}
+	t := rec.Table
+	if t == nil || !t.HasComponent(pairID) {
+		return nil
+	}
+	ptr := t.Get(int(rec.Row), pairID)
+	if ptr == nil {
+		return nil
+	}
+	return (*T)(ptr)
+}
+
 // SetPairByID sets the pair (rel, tgt) on entity e with the dynamic value v.
 // This is the runtime-dynamic analog of SetPair[T]: prefer SetPair[T] when the
 // type is known at compile time. Use SetPairByID when only a reflect.Value or

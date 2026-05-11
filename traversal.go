@@ -69,24 +69,9 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 	return 0, false
 }
 
-// GetUp walks the relationship rel up from e (self-first), returning the value
+// getUpInternal walks the relationship rel up from e (self-first), returning the value
 // of component T from the first entity in the chain that locally owns T.
-// Returns (zero, false) if:
-//   - T is not registered in the world
-//   - e is not alive
-//   - no entity in the chain locally owns T
-//
-// Local ownership means T is present in the entity's own archetype table.
-// A parent that inherits T via an IsA chain is NOT considered an owner; use
-// [Get] on that parent if IsA-aware lookup is needed.
-//
-// Self-first: if e itself locally owns T, its value is returned without
-// traversing the relationship chain (matches flecs's Self|Up flag).
-//
-// Cycle detection and depth limiting ([maxTraversalDepth]) are enforced
-// internally; malformed graphs terminate cleanly.
-func GetUp[T any](w *World, e ID, rel ID) (T, bool) {
-	w.checkExclusiveAccessRead()
+func getUpInternal[T any](w *World, e ID, rel ID) (T, bool) {
 	var zero T
 	info, ok := component.LookupByType[T](w.registry)
 	if !ok || info.Component == 0 {
@@ -94,7 +79,11 @@ func GetUp[T any](w *World, e ID, rel ID) (T, bool) {
 	}
 	cid := info.Component
 	owner, found := walkUp(w, e, rel, func(cur ID) bool {
-		return OwnsID(w, cur, cid)
+		rec := w.index.Get(cur)
+		if rec == nil {
+			return false
+		}
+		return rec.Table != nil && rec.Table.HasComponent(cid)
 	})
 	if !found {
 		return zero, false
@@ -110,37 +99,27 @@ func GetUp[T any](w *World, e ID, rel ID) (T, bool) {
 	return *(*T)(ptr), true
 }
 
-// HasUp reports whether e or any ancestor reachable via rel locally owns the
-// component identified by id. Returns false if e is not alive.
-//
-// Self-first: e itself is checked before walking the relationship chain.
-//
-// Local ownership only: a parent that inherits id via IsA does not satisfy the
-// predicate — only direct table ownership counts.
-//
-// Cheaper than [GetUp] when the component value is not needed.
-func HasUp(w *World, e ID, id ID, rel ID) bool {
-	w.checkExclusiveAccessRead()
+// hasUpInternal reports whether e or any ancestor reachable via rel locally owns the
+// component identified by id.
+func hasUpInternal(w *World, e ID, id ID, rel ID) bool {
 	_, found := walkUp(w, e, rel, func(cur ID) bool {
-		return OwnsID(w, cur, id)
+		rec := w.index.Get(cur)
+		if rec == nil {
+			return false
+		}
+		return rec.Table != nil && rec.Table.HasComponent(id)
 	})
 	return found
 }
 
-// TargetUp returns the ID of the first entity in the chain (e or an ancestor
-// via rel) that locally owns the component identified by id. Returns (0, false)
-// if no entity in the chain locally owns id, or if e is not alive.
-//
-// Self-first: if e itself locally owns id, (e, true) is returned.
-//
-// Useful for asking "which ancestor owns this component?" for debugging or
-// attribution.
-//
-// Local ownership only: a parent that inherits id via IsA does not satisfy the
-// predicate.
-func TargetUp(w *World, e ID, id ID, rel ID) (ID, bool) {
-	w.checkExclusiveAccessRead()
+// targetUpInternal returns the ID of the first entity in the chain (e or an ancestor
+// via rel) that locally owns the component identified by id.
+func targetUpInternal(w *World, e ID, id ID, rel ID) (ID, bool) {
 	return walkUp(w, e, rel, func(cur ID) bool {
-		return OwnsID(w, cur, id)
+		rec := w.index.Get(cur)
+		if rec == nil {
+			return false
+		}
+		return rec.Table != nil && rec.Table.HasComponent(id)
 	})
 }

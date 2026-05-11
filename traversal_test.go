@@ -15,10 +15,10 @@ func TestGetUp_SingleLevel(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, tPos{X: 1, Y: 2})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), parent, tPos{X: 1, Y: 2})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	pos, ok := flecs.GetUp[tPos](w, child, w.ChildOf())
+	pos, ok := flecs.GetUp[tPos](w.R(), child, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true, got false")
 	}
@@ -33,11 +33,11 @@ func TestGetUp_MultiLevel(t *testing.T) {
 	grandparent := w.NewEntity()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, grandparent, tPos{X: 10, Y: 20})
-	flecs.AddID(w, parent, flecs.MakePair(w.ChildOf(), grandparent))
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), grandparent, tPos{X: 10, Y: 20})
+	flecs.AddID(w.W(), parent, flecs.MakePair(w.ChildOf(), grandparent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	pos, ok := flecs.GetUp[tPos](w, child, w.ChildOf())
+	pos, ok := flecs.GetUp[tPos](w.R(), child, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true, got false")
 	}
@@ -52,11 +52,11 @@ func TestGetUp_SelfFirst(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, tPos{X: 99, Y: 99})
-	flecs.Set(w, child, tPos{X: 1, Y: 2})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), parent, tPos{X: 99, Y: 99})
+	flecs.Set(w.W(), child, tPos{X: 1, Y: 2})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	pos, ok := flecs.GetUp[tPos](w, child, w.ChildOf())
+	pos, ok := flecs.GetUp[tPos](w.R(), child, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true, got false")
 	}
@@ -72,7 +72,7 @@ func TestGetUp_NoRelationship(t *testing.T) {
 	e := w.NewEntity()
 	flecs.RegisterComponent[tPos](w)
 
-	_, ok := flecs.GetUp[tPos](w, e, w.ChildOf())
+	_, ok := flecs.GetUp[tPos](w.R(), e, w.ChildOf())
 	if ok {
 		t.Fatal("expected ok=false for entity with no ChildOf pair")
 	}
@@ -85,9 +85,9 @@ func TestGetUp_NoneInChain(t *testing.T) {
 	parent := w.NewEntity()
 	child := w.NewEntity()
 	flecs.RegisterComponent[tPos](w)
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	_, ok := flecs.GetUp[tPos](w, child, w.ChildOf())
+	_, ok := flecs.GetUp[tPos](w.R(), child, w.ChildOf())
 	if ok {
 		t.Fatal("expected ok=false when no entity owns tPos")
 	}
@@ -100,7 +100,7 @@ func TestGetUp_UnregisteredComponent(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
 
-	_, ok := flecs.GetUp[neverRegistered](w, e, w.ChildOf())
+	_, ok := flecs.GetUp[neverRegistered](w.R(), e, w.ChildOf())
 	if ok {
 		t.Fatal("expected ok=false for unregistered component type")
 	}
@@ -114,16 +114,16 @@ func TestHasUp_Basic(t *testing.T) {
 
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, tPos{X: 5})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), parent, tPos{X: 5})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	if !flecs.HasUp(w, child, posID, w.ChildOf()) {
+	if !flecs.HasUp(w.R(), child, posID, w.ChildOf()) {
 		t.Fatal("expected HasUp=true, got false")
 	}
 
 	// Entity with no ChildOf and no component.
 	lone := w.NewEntity()
-	if flecs.HasUp(w, lone, posID, w.ChildOf()) {
+	if flecs.HasUp(w.R(), lone, posID, w.ChildOf()) {
 		t.Fatal("expected HasUp=false for entity with no ChildOf pair")
 	}
 }
@@ -136,7 +136,7 @@ func TestHasUp_DeadEntity(t *testing.T) {
 	e := w.NewEntity()
 	w.Delete(e)
 
-	if flecs.HasUp(w, e, posID, w.ChildOf()) {
+	if flecs.HasUp(w.R(), e, posID, w.ChildOf()) {
 		t.Fatal("expected HasUp=false for dead entity")
 	}
 }
@@ -150,11 +150,11 @@ func TestTargetUp_Basic(t *testing.T) {
 	grandparent := w.NewEntity()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, grandparent, tPos{X: 7})
-	flecs.AddID(w, parent, flecs.MakePair(w.ChildOf(), grandparent))
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), grandparent, tPos{X: 7})
+	flecs.AddID(w.W(), parent, flecs.MakePair(w.ChildOf(), grandparent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	owner, ok := flecs.TargetUp(w, child, posID, w.ChildOf())
+	owner, ok := flecs.TargetUp(w.R(), child, posID, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true, got false")
 	}
@@ -171,11 +171,11 @@ func TestTargetUp_Self(t *testing.T) {
 
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, child, tPos{X: 3})
-	flecs.Set(w, parent, tPos{X: 99})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), child, tPos{X: 3})
+	flecs.Set(w.W(), parent, tPos{X: 99})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	owner, ok := flecs.TargetUp(w, child, posID, w.ChildOf())
+	owner, ok := flecs.TargetUp(w.R(), child, posID, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true, got false")
 	}
@@ -192,15 +192,15 @@ func TestGetUp_CycleSelfLoop(t *testing.T) {
 
 	e := w.NewEntity()
 	// e → (ChildOf, e): self-loop; no Position.
-	flecs.AddID(w, e, flecs.MakePair(w.ChildOf(), e))
+	flecs.AddID(w.W(), e, flecs.MakePair(w.ChildOf(), e))
 
-	if flecs.HasUp(w, e, posID, w.ChildOf()) {
+	if flecs.HasUp(w.R(), e, posID, w.ChildOf()) {
 		t.Fatal("expected false for self-loop with no component")
 	}
 
 	// Now give e its own Position — self-first must return true before cycling.
-	flecs.Set(w, e, tPos{X: 1})
-	if !flecs.HasUp(w, e, posID, w.ChildOf()) {
+	flecs.Set(w.W(), e, tPos{X: 1})
+	if !flecs.HasUp(w.R(), e, posID, w.ChildOf()) {
 		t.Fatal("expected true when self has the component (self-first)")
 	}
 }
@@ -215,13 +215,13 @@ func TestGetUp_CycleTwoEntities(t *testing.T) {
 	a := w.NewEntity()
 	b := w.NewEntity()
 	// A → (rel, B), B → (rel, A): cycle; neither has Position.
-	flecs.AddID(w, a, flecs.MakePair(relE, b))
-	flecs.AddID(w, b, flecs.MakePair(relE, a))
+	flecs.AddID(w.W(), a, flecs.MakePair(relE, b))
+	flecs.AddID(w.W(), b, flecs.MakePair(relE, a))
 
-	if flecs.HasUp(w, a, posID, relE) {
+	if flecs.HasUp(w.R(), a, posID, relE) {
 		t.Fatal("expected false for two-entity cycle with no component")
 	}
-	if flecs.HasUp(w, b, posID, relE) {
+	if flecs.HasUp(w.R(), b, posID, relE) {
 		t.Fatal("expected false for two-entity cycle with no component")
 	}
 }
@@ -236,12 +236,12 @@ func TestGetUp_DeadParent(t *testing.T) {
 	relE := w.NewEntity()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, tPos{X: 42})
-	flecs.AddID(w, child, flecs.MakePair(relE, parent))
+	flecs.Set(w.W(), parent, tPos{X: 42})
+	flecs.AddID(w.W(), child, flecs.MakePair(relE, parent))
 
 	// Verify GetUp works before deletion.
 	posID := flecs.RegisterComponent[tPos](w)
-	if !flecs.HasUp(w, child, posID, relE) {
+	if !flecs.HasUp(w.R(), child, posID, relE) {
 		t.Fatal("precondition failed: expected HasUp=true before parent deleted")
 	}
 
@@ -253,11 +253,11 @@ func TestGetUp_DeadParent(t *testing.T) {
 		t.Fatal("precondition: child should still be alive after deleting parent via custom rel")
 	}
 
-	_, ok := flecs.GetUp[tPos](w, child, relE)
+	_, ok := flecs.GetUp[tPos](w.R(), child, relE)
 	if ok {
 		t.Fatal("expected GetUp=false when target is dead")
 	}
-	if flecs.HasUp(w, child, posID, relE) {
+	if flecs.HasUp(w.R(), child, posID, relE) {
 		t.Fatal("expected HasUp=false when target is dead")
 	}
 }
@@ -276,21 +276,21 @@ func TestGetUp_DepthLimit(t *testing.T) {
 	// Connect each entity to the next via a custom relationship (no cascade).
 	relE := w.NewEntity()
 	for i := 0; i < chainLen-1; i++ {
-		flecs.AddID(w, entities[i], flecs.MakePair(relE, entities[i+1]))
+		flecs.AddID(w.W(), entities[i], flecs.MakePair(relE, entities[i+1]))
 	}
 	// Only the deepest ancestor has tPos.
-	flecs.Set(w, entities[chainLen-1], tPos{X: 99})
+	flecs.Set(w.W(), entities[chainLen-1], tPos{X: 99})
 
 	// The chain is 100 long but maxTraversalDepth=64, so we should not reach
 	// entities[64] and beyond.
-	_, ok := flecs.GetUp[tPos](w, entities[0], relE)
+	_, ok := flecs.GetUp[tPos](w.R(), entities[0], relE)
 	if ok {
 		t.Fatal("expected GetUp=false for chain deeper than maxTraversalDepth")
 	}
 
 	// Sanity check: placing component within depth range is found.
-	flecs.Set(w, entities[63], tPos{X: 7})
-	pos, ok := flecs.GetUp[tPos](w, entities[0], relE)
+	flecs.Set(w.W(), entities[63], tPos{X: 7})
+	pos, ok := flecs.GetUp[tPos](w.R(), entities[0], relE)
 	if !ok {
 		t.Fatal("expected GetUp=true when component is within depth limit")
 	}
@@ -305,11 +305,11 @@ func TestGetUp_ViaIsA(t *testing.T) {
 	w := flecs.New()
 	prefab := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, prefab, tPos{X: 5, Y: 6})
-	flecs.AddID(w, child, flecs.MakePair(w.IsA(), prefab))
+	flecs.Set(w.W(), prefab, tPos{X: 5, Y: 6})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 
 	// GetUp with IsA finds the prefab's local tPos (which prefab owns directly).
-	pos, ok := flecs.GetUp[tPos](w, child, w.IsA())
+	pos, ok := flecs.GetUp[tPos](w.R(), child, w.IsA())
 	if !ok {
 		t.Fatal("expected ok=true walking via IsA")
 	}
@@ -325,10 +325,10 @@ func TestGetUp_CustomRelationship(t *testing.T) {
 	myRel := w.NewEntity() // user-defined relationship
 	source := w.NewEntity()
 	dest := w.NewEntity()
-	flecs.Set(w, dest, tPos{X: 3, Y: 4})
-	flecs.AddID(w, source, flecs.MakePair(myRel, dest))
+	flecs.Set(w.W(), dest, tPos{X: 3, Y: 4})
+	flecs.AddID(w.W(), source, flecs.MakePair(myRel, dest))
 
-	pos, ok := flecs.GetUp[tPos](w, source, myRel)
+	pos, ok := flecs.GetUp[tPos](w.R(), source, myRel)
 	if !ok {
 		t.Fatal("expected ok=true for custom relationship")
 	}
@@ -343,13 +343,13 @@ func TestGetUp_ZeroAllocSelfHit(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, child, tPos{X: 1, Y: 2})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), child, tPos{X: 1, Y: 2})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
 	result := testing.Benchmark(func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			_, _ = flecs.GetUp[tPos](w, child, w.ChildOf())
+			_, _ = flecs.GetUp[tPos](w.R(), child, w.ChildOf())
 		}
 	})
 	if result.AllocsPerOp() != 0 {
@@ -364,9 +364,9 @@ func TestHasUp_SelfOwns(t *testing.T) {
 	posID := flecs.RegisterComponent[tPos](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, tPos{X: 1})
+	flecs.Set(w.W(), e, tPos{X: 1})
 
-	if !flecs.HasUp(w, e, posID, w.ChildOf()) {
+	if !flecs.HasUp(w.R(), e, posID, w.ChildOf()) {
 		t.Fatal("expected HasUp=true when entity itself owns the component")
 	}
 }
@@ -379,9 +379,9 @@ func TestTargetUp_NotFound(t *testing.T) {
 
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	owner, ok := flecs.TargetUp(w, child, posID, w.ChildOf())
+	owner, ok := flecs.TargetUp(w.R(), child, posID, w.ChildOf())
 	if ok {
 		t.Fatal("expected ok=false, got true")
 	}
@@ -397,10 +397,10 @@ func TestGetUp_ZeroSizeComponent(t *testing.T) {
 	w := flecs.New()
 	parent := w.NewEntity()
 	child := w.NewEntity()
-	flecs.Set(w, parent, tag{})
-	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
+	flecs.Set(w.W(), parent, tag{})
+	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 
-	_, ok := flecs.GetUp[tag](w, child, w.ChildOf())
+	_, ok := flecs.GetUp[tag](w.R(), child, w.ChildOf())
 	if !ok {
 		t.Fatal("expected ok=true for zero-size component on parent")
 	}
@@ -411,8 +411,8 @@ func TestGetUp_ZeroSizeComponent(t *testing.T) {
 func TestGetUp_ExistingTestsStillPass(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, tPos{X: 9, Y: 8})
-	pos, ok := flecs.Get[tPos](w, e)
+	flecs.Set(w.W(), e, tPos{X: 9, Y: 8})
+	pos, ok := flecs.Get[tPos](w.R(), e)
 	if !ok || pos.X != 9 {
 		t.Fatalf("basic Get[T] broken: got %+v ok=%v", pos, ok)
 	}

@@ -15,10 +15,10 @@ func TestExclusiveAccessOwnerCanWrite(t *testing.T) {
 	e := w.NewEntity()
 
 	w.ExclusiveAccessBegin("test-owner")
-	flecs.Set(w, e, xaPos{1, 2})
+	flecs.Set(w.W(), e, xaPos{1, 2})
 	w.ExclusiveAccessEnd(false)
 
-	pos, ok := flecs.Get[xaPos](w, e)
+	pos, ok := flecs.Get[xaPos](w.R(), e)
 	if !ok || pos.X != 1 || pos.Y != 2 {
 		t.Fatalf("expected pos {1,2}, got %v ok=%v", pos, ok)
 	}
@@ -42,7 +42,7 @@ func TestExclusiveAccessOtherGoroutineWritePanics(t *testing.T) {
 				panicked = true
 			}
 		}()
-		flecs.Set(w, e, xaPos{9, 9})
+		flecs.Set(w.W(), e, xaPos{9, 9})
 	}()
 	wg.Wait()
 
@@ -58,7 +58,7 @@ func TestExclusiveAccessOtherGoroutineWritePanics(t *testing.T) {
 func TestExclusiveAccessLockedWorldRejectsWrites(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, xaPos{5, 6})
+	flecs.Set(w.W(), e, xaPos{5, 6})
 
 	w.ExclusiveAccessBegin("owner")
 	w.ExclusiveAccessEnd(true) // lock world for writes
@@ -70,7 +70,7 @@ func TestExclusiveAccessLockedWorldRejectsWrites(t *testing.T) {
 				panicked = true
 			}
 		}()
-		flecs.Set(w, e, xaPos{9, 9})
+		flecs.Set(w.W(), e, xaPos{9, 9})
 		return false
 	}()
 	if !didPanic {
@@ -78,7 +78,7 @@ func TestExclusiveAccessLockedWorldRejectsWrites(t *testing.T) {
 	}
 
 	// Reads must still pass.
-	pos, ok := flecs.Get[xaPos](w, e)
+	pos, ok := flecs.Get[xaPos](w.R(), e)
 	if !ok || pos.X != 5 {
 		t.Fatalf("expected read to succeed on locked world, got %v ok=%v", pos, ok)
 	}
@@ -94,11 +94,11 @@ func TestExclusiveAccessUnsetIsNoop(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		flecs.Set(w, e, xaPos{3, 4})
+		flecs.Set(w.W(), e, xaPos{3, 4})
 	}()
 	wg.Wait()
 
-	pos, ok := flecs.Get[xaPos](w, e)
+	pos, ok := flecs.Get[xaPos](w.R(), e)
 	if !ok || pos.X != 3 {
 		t.Fatalf("expected {3,4}, got %v ok=%v", pos, ok)
 	}
@@ -212,7 +212,7 @@ func TestGoidGetIsNonZero(t *testing.T) {
 	// would be a no-op and the world would appear unclaimed.
 	w.ExclusiveAccessBegin("goid-check")
 	// Owner can write without panic — proves goid was nonzero and stored correctly.
-	flecs.Set(w, e, xaPos{1, 1})
+	flecs.Set(w.W(), e, xaPos{1, 1})
 	w.ExclusiveAccessEnd(false)
 }
 
@@ -221,10 +221,10 @@ func TestGoidGetIsNonZero(t *testing.T) {
 func TestExclusiveAccessZeroOverheadCommonPath(t *testing.T) {
 	w := flecs.New()
 	e := w.NewEntity()
-	flecs.Set(w, e, xaPos{0, 0}) // warm up archetype
+	flecs.Set(w.W(), e, xaPos{0, 0}) // warm up archetype
 
 	allocs := testing.AllocsPerRun(1000, func() {
-		flecs.Set(w, e, xaPos{1, 2})
+		flecs.Set(w.W(), e, xaPos{1, 2})
 	})
 	if allocs > 0 {
 		t.Fatalf("expected 0 allocations per Set in common path, got %.1f", allocs)

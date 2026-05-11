@@ -20,9 +20,9 @@ func TestQuerySingleTerm(t *testing.T) {
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
 	e3 := w.NewEntity()
-	flecs.Set(w, e1, Position{1, 2})
-	flecs.Set(w, e2, Position{3, 4})
-	flecs.Set(w, e3, Position{5, 6})
+	flecs.Set(w.W(), e1, Position{1, 2})
+	flecs.Set(w.W(), e2, Position{3, 4})
+	flecs.Set(w.W(), e3, Position{5, 6})
 
 	q := flecs.NewQuery(w, posID)
 	var gotEntities []flecs.ID
@@ -59,10 +59,10 @@ func TestQueryTwoTermAND(t *testing.T) {
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
 	e3 := w.NewEntity()
-	flecs.Set(w, e1, Position{1, 0}) // Position only
-	flecs.Set(w, e2, Velocity{0, 1}) // Velocity only
-	flecs.Set(w, e3, Position{3, 0}) // Position + Velocity
-	flecs.Set(w, e3, Velocity{0, 3})
+	flecs.Set(w.W(), e1, Position{1, 0}) // Position only
+	flecs.Set(w.W(), e2, Velocity{0, 1}) // Velocity only
+	flecs.Set(w.W(), e3, Position{3, 0}) // Position + Velocity
+	flecs.Set(w.W(), e3, Velocity{0, 3})
 
 	q := flecs.NewQuery(w, posID, velID)
 	var visited []flecs.ID
@@ -111,8 +111,8 @@ func TestQueryOrderIndependence(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{1, 2})
-	flecs.Set(w, e, Velocity{3, 4})
+	flecs.Set(w.W(), e, Position{1, 2})
+	flecs.Set(w.W(), e, Velocity{3, 4})
 
 	collect := func(ids ...flecs.ID) []flecs.ID {
 		q := flecs.NewQuery(w, ids...)
@@ -146,14 +146,14 @@ func TestQueryMultipleMatchingTables(t *testing.T) {
 
 	// Archetype [P, V]
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{1, 0})
-	flecs.Set(w, e1, Velocity{10, 0})
+	flecs.Set(w.W(), e1, Position{1, 0})
+	flecs.Set(w.W(), e1, Velocity{10, 0})
 
 	// Archetype [P, V, Marker]
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{2, 0})
-	flecs.Set(w, e2, Velocity{20, 0})
-	flecs.Set(w, e2, Marker{})
+	flecs.Set(w.W(), e2, Position{2, 0})
+	flecs.Set(w.W(), e2, Velocity{20, 0})
+	flecs.Set(w.W(), e2, Marker{})
 
 	q := flecs.NewQuery(w, posID, velID)
 	var visited []flecs.ID
@@ -191,8 +191,8 @@ func TestFieldCorrectnessLiveView(t *testing.T) {
 
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
-	flecs.Set(w, e1, Position{1, 2})
-	flecs.Set(w, e2, Position{3, 4})
+	flecs.Set(w.W(), e1, Position{1, 2})
+	flecs.Set(w.W(), e2, Position{3, 4})
 
 	q := flecs.NewQuery(w, posID)
 	it := q.Iter()
@@ -218,7 +218,7 @@ func TestFieldCorrectnessLiveView(t *testing.T) {
 	positions[e1Row].X = 99
 
 	// Re-query and verify the mutation is visible.
-	got, ok := flecs.Get[Position](w, e1)
+	got, ok := flecs.Get[Position](w.R(), e1)
 	if !ok {
 		t.Fatal("live view: Get returned false after mutation")
 	}
@@ -234,7 +234,7 @@ func TestFieldTypeMismatchPanic(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{1, 2})
+	flecs.Set(w.W(), e, Position{1, 2})
 
 	q := flecs.NewQuery(w, posID)
 	it := q.Iter()
@@ -259,7 +259,7 @@ func TestFieldMissingIDPanic(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{1, 2})
+	flecs.Set(w.W(), e, Position{1, 2})
 	// No Velocity on e; velID is not in the [Position] table.
 
 	q := flecs.NewQuery(w, posID)
@@ -284,8 +284,8 @@ func TestQueryTagComponent(t *testing.T) {
 
 	e1 := w.NewEntity()
 	e2 := w.NewEntity()
-	flecs.Set(w, e1, Marker{})
-	flecs.Set(w, e2, Marker{})
+	flecs.Set(w.W(), e1, Marker{})
+	flecs.Set(w.W(), e2, Marker{})
 
 	q := flecs.NewQuery(w, markerID)
 	var count int
@@ -313,7 +313,7 @@ func TestQueryGCSafe(t *testing.T) {
 
 	want := "persistent heap string that must survive GC"
 	e := w.NewEntity()
-	flecs.Set(w, e, WithStr{S: want})
+	flecs.Set(w.W(), e, WithStr{S: want})
 
 	runtime.GC()
 	runtime.GC()
@@ -338,7 +338,7 @@ func TestQueryIterTablePanicsBeforeNext(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{})
+	flecs.Set(w.W(), e, Position{})
 
 	it := flecs.NewQuery(w, posID).Iter()
 	defer func() {
@@ -355,7 +355,7 @@ func TestQueryIterQueryBackref(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 	e := w.NewEntity()
-	flecs.Set(w, e, Position{})
+	flecs.Set(w.W(), e, Position{})
 
 	q := flecs.NewQuery(w, posID)
 	it := q.Iter()
@@ -418,15 +418,15 @@ func TestQuerySmallestSetSeeding(t *testing.T) {
 	// Create 100 entities with Position (all in [Position] table).
 	for i := 0; i < 100; i++ {
 		e := w.NewEntity()
-		flecs.Set(w, e, Position{float32(i), 0})
+		flecs.Set(w.W(), e, Position{float32(i), 0})
 	}
 	// Add Velocity to 2 of them — they migrate to [Position, Velocity].
 	e1 := w.NewEntity()
-	flecs.Set(w, e1, Position{101, 0})
-	flecs.Set(w, e1, Velocity{1, 0})
+	flecs.Set(w.W(), e1, Position{101, 0})
+	flecs.Set(w.W(), e1, Velocity{1, 0})
 	e2 := w.NewEntity()
-	flecs.Set(w, e2, Position{102, 0})
-	flecs.Set(w, e2, Velocity{2, 0})
+	flecs.Set(w.W(), e2, Position{102, 0})
+	flecs.Set(w.W(), e2, Velocity{2, 0})
 
 	// tablesFor(posID) = [[Position], [Position,Velocity]] → 2 tables
 	// tablesFor(velID) = [[Position,Velocity]] → 1 table
