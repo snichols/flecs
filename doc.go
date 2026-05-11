@@ -56,6 +56,41 @@
 //	flecs.AddID(w, child, flecs.MakePair(w.ChildOf(), parent))
 //	flecs.AddID(w, instance, flecs.MakePair(w.IsA(), prefab))
 //
+// # Structured Query Terms
+//
+// [NewQueryFromTerms] and [NewCachedQueryFromTerms] accept a mix of [TermKind]
+// values to express NOT and Optional patterns:
+//
+//	posID  := flecs.RegisterComponent[Position](w)
+//	velID  := flecs.RegisterComponent[Velocity](w)
+//	deadID := w.NewEntity() // tag
+//
+//	// Match entities with Position but NOT Dead.
+//	q := flecs.NewQueryFromTerms(w,
+//	    flecs.With(posID),
+//	    flecs.Without(deadID),
+//	)
+//
+//	// Match entities with Position; Velocity is optional.
+//	q2 := flecs.NewQueryFromTerms(w,
+//	    flecs.With(posID),
+//	    flecs.Maybe(velID),
+//	)
+//	flecs.Each(q2, func(it *flecs.QueryIter) {
+//	    for it.Next() {
+//	        positions := flecs.Field[Position](it, posID)
+//	        velocities, hasVel := flecs.FieldMaybe[Velocity](it, velID)
+//	        for i := range positions {
+//	            if hasVel {
+//	                positions[i].X += velocities[i].X
+//	            }
+//	        }
+//	    }
+//	})
+//
+// At least one [TermAnd] ([With]) term is required; queries with only Not/Optional
+// terms are rejected. Duplicate IDs across terms also panic at construction.
+//
 // # Deferred Mutation
 //
 // [World.Defer] wraps a block so that structural mutations (Set, Remove, Delete,
