@@ -28,12 +28,13 @@ import (
 type World struct {
 	index     *entityindex.Index
 	registry  *component.Registry
-	tables    map[string]*table.Table // sigKey(sorted []ID) → table
-	empty     *table.Table            // canonical empty-signature table for new entities
-	compIndex *componentindex.Index   // reverse map: component ID → tables containing it
-	childOfID ID                      // built-in ChildOf relationship entity (index 1)
-	isAID     ID                      // built-in IsA relationship entity (index 2)
-	nameID    ID                      // built-in Name component entity (index 3; user entities start at index 4)
+	tables    map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty     *table.Table                    // canonical empty-signature table for new entities
+	compIndex *componentindex.Index           // reverse map: component ID → tables containing it
+	observers map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	childOfID ID                              // built-in ChildOf relationship entity (index 1)
+	isAID     ID                              // built-in IsA relationship entity (index 2)
+	nameID    ID                              // built-in Name component entity (index 3; user entities start at index 4)
 }
 
 // New initializes and returns an empty World.
@@ -97,7 +98,7 @@ func (w *World) deleteOne(e ID) bool {
 	if t != nil {
 		for _, id := range t.Type() {
 			info, _ := w.registry.LookupByID(id)
-			w.fireOnRemove(info, e, t.Get(row, id))
+			w.fireOnRemove(info, id, e, t.Get(row, id))
 		}
 		moved, ok := t.RemoveSwap(row)
 		if ok {
@@ -190,14 +191,14 @@ func Set[T any](w *World, e ID, v T) {
 	if t != nil && t.HasComponent(cid) {
 		t.Set(int(rec.Row), cid, unsafe.Pointer(&v))
 		info, _ := component.LookupByType[T](w.registry)
-		w.fireOnSet(info, e, t.Get(int(rec.Row), cid))
+		w.fireOnSet(info, cid, e, t.Get(int(rec.Row), cid))
 		return
 	}
 	w.migrate(e, cid, 0, unsafe.Pointer(&v))
 	// OnAdd fired inside migrate; fire OnSet now that the slot is written.
 	rec = w.index.Get(e)
 	info, _ := component.LookupByType[T](w.registry)
-	w.fireOnSet(info, e, rec.Table.Get(int(rec.Row), cid))
+	w.fireOnSet(info, cid, e, rec.Table.Get(int(rec.Row), cid))
 }
 
 // Get returns the value of component T on entity e. Checks the entity's own
@@ -389,13 +390,13 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	// Fire OnAdd for the newly-added component — destination slot is fully written.
 	if addID != 0 {
 		addInfo, _ := w.registry.LookupByID(addID)
-		w.fireOnAdd(addInfo, e, newTable.Get(newRow, addID))
+		w.fireOnAdd(addInfo, addID, e, newTable.Get(newRow, addID))
 	}
 
 	// Fire OnRemove for the removed component — source slot still intact.
 	if removeID != 0 && oldTable != nil {
 		remInfo, _ := w.registry.LookupByID(removeID)
-		w.fireOnRemove(remInfo, e, oldTable.Get(oldRow, removeID))
+		w.fireOnRemove(remInfo, removeID, e, oldTable.Get(oldRow, removeID))
 	}
 
 	// Remove e from the old table using swap-remove.
