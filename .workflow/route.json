@@ -1,4 +1,18 @@
 {
   "issue": 77,
-  "retries": 0
+  "retries": 1,
+  "last_error": {
+    "class": "session_crash",
+    "detail": "claude exited without signal file",
+    "stage": "",
+    "timestamp": "2026-05-11T06:54:11-05:00"
+  },
+  "error_history": [
+    {
+      "class": "session_crash",
+      "detail": "claude exited without signal file",
+      "stage": "",
+      "timestamp": "2026-05-11T06:54:11-05:00"
+    }
+  ]
 }
