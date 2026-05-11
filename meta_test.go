@@ -131,7 +131,8 @@ func TestComponentInfoRegistered(t *testing.T) {
 // an ID not in the registry.
 func TestComponentInfoUnregistered(t *testing.T) {
 	w := flecs.New()
-	raw := w.NewEntity() // alive but not a component
+	var raw flecs.ID
+	w.Write(func(fw *flecs.Writer) { raw = fw.NewEntity() }) // alive but not a component
 	info, ok := w.ComponentInfo(raw)
 	if ok {
 		t.Errorf("ComponentInfo returned true for non-component entity; info=%+v", info)
@@ -145,10 +146,13 @@ func TestComponentInfoUnregistered(t *testing.T) {
 // via SetPair[T].
 func TestComponentInfoPairWithData(t *testing.T) {
 	w := flecs.New()
-	relID := w.NewEntity()
-	tgtID := w.NewEntity()
-	e := w.NewEntity()
-	flecs.SetPair[Edge](w.W(), e, relID, tgtID, Edge{Weight: 1.5})
+	var relID, tgtID, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		tgtID = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.SetPair[Edge](fw, e, relID, tgtID, Edge{Weight: 1.5})
+	})
 
 	pairID := flecs.MakePair(relID, tgtID)
 	info, ok := w.ComponentInfo(pairID)
@@ -170,11 +174,14 @@ func TestComponentInfoPairWithData(t *testing.T) {
 // via AddID, which auto-registers a zero-size tag TypeInfo.
 func TestComponentInfoPairAsTag(t *testing.T) {
 	w := flecs.New()
-	relID := w.NewEntity()
-	tgtID := w.NewEntity()
-	e := w.NewEntity()
+	var relID, tgtID, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		tgtID = fw.NewEntity()
+		e = fw.NewEntity()
+	})
 	pairID := flecs.MakePair(relID, tgtID)
-	flecs.AddID(w.W(), e, pairID)
+	w.Write(func(fw *flecs.Writer) { flecs.AddID(fw, e, pairID) })
 
 	info, ok := w.ComponentInfo(pairID)
 	if !ok {
@@ -192,9 +199,12 @@ func TestComponentInfoPairAsTag(t *testing.T) {
 // used as a tag (auto-registered via EnsureID by AddID).
 func TestComponentInfoRawTagEntity(t *testing.T) {
 	w := flecs.New()
-	tagID := w.NewEntity()
-	e := w.NewEntity()
-	flecs.AddID(w.W(), e, tagID)
+	var tagID, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tagID = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagID)
+	})
 
 	info, ok := w.ComponentInfo(tagID)
 	if !ok {
@@ -214,16 +224,23 @@ func TestComponentInfoRawTagEntity(t *testing.T) {
 // sorted component IDs for an entity with multiple components including a pair.
 func TestEntityComponentsBasic(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	e := w.NewEntity()
+	var parent, e flecs.ID
 
 	posID := flecs.RegisterComponent[Position](w)
 	velID := flecs.RegisterComponent[Velocity](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		e = fw.NewEntity()
+	})
+
 	childPairID := flecs.MakePair(w.ChildOf(), parent)
 
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Set[Velocity](w.W(), e, Velocity{3, 4})
-	flecs.AddID(w.W(), e, childPairID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Set[Velocity](fw, e, Velocity{3, 4})
+		flecs.AddID(fw, e, childPairID)
+	})
 
 	comps := w.EntityComponents(e)
 	if len(comps) != 3 {
@@ -261,7 +278,8 @@ func TestEntityComponentsBasic(t *testing.T) {
 // for a dead entity.
 func TestEntityComponentsDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 
 	comps := w.EntityComponents(e)
@@ -274,7 +292,8 @@ func TestEntityComponentsDeadEntity(t *testing.T) {
 // for an entity in the empty archetype (no components).
 func TestEntityComponentsEmptyArchetype(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 
 	comps := w.EntityComponents(e)
 	if comps != nil {
@@ -286,9 +305,12 @@ func TestEntityComponentsEmptyArchetype(t *testing.T) {
 // slice does not corrupt the entity's archetype.
 func TestEntityComponentsReturnsFreshSlice(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set[Position](w.W(), e, Position{1, 2})
-	flecs.Set[Velocity](w.W(), e, Velocity{3, 4})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2})
+		flecs.Set[Velocity](fw, e, Velocity{3, 4})
+	})
 
 	comps := w.EntityComponents(e)
 	if len(comps) < 1 {
@@ -309,9 +331,11 @@ func TestEntityComponentsReturnsFreshSlice(t *testing.T) {
 func TestEachEntityVisitsAll(t *testing.T) {
 	w := flecs.New()
 	const n = 5
-	for i := 0; i < n; i++ {
-		w.NewEntity()
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for i := 0; i < n; i++ {
+			fw.NewEntity()
+		}
+	})
 
 	var visited []flecs.ID
 	w.EachEntity(func(e flecs.ID) bool {
@@ -328,9 +352,11 @@ func TestEachEntityVisitsAll(t *testing.T) {
 // TestEachEntityEarlyExit verifies that returning false from fn stops iteration.
 func TestEachEntityEarlyExit(t *testing.T) {
 	w := flecs.New()
-	for i := 0; i < 10; i++ {
-		w.NewEntity()
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for i := 0; i < 10; i++ {
+			fw.NewEntity()
+		}
+	})
 
 	count := 0
 	w.EachEntity(func(e flecs.ID) bool {
@@ -368,8 +394,11 @@ func TestEachEntityIncludesBuiltins(t *testing.T) {
 // + EachEntity compose correctly.
 func TestEachEntityDeferSafeMutation(t *testing.T) {
 	w := flecs.New()
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+	})
 
 	// Collect entities first, then apply mutations deferred.
 	var ids []flecs.ID
@@ -383,14 +412,16 @@ func TestEachEntityDeferSafeMutation(t *testing.T) {
 	})
 
 	// Verify mutations applied.
-	pos, ok := flecs.Get[Position](w.R(), e1)
-	if !ok || pos.X != 1 {
-		t.Errorf("expected Position{1,2}, got %+v ok=%v", pos, ok)
-	}
-	vel, ok := flecs.Get[Velocity](w.R(), e2)
-	if !ok || vel.DX != 3 {
-		t.Errorf("expected Velocity{3,4}, got %+v ok=%v", vel, ok)
-	}
+	w.Read(func(r *flecs.Reader) {
+		pos, ok := flecs.Get[Position](r, e1)
+		if !ok || pos.X != 1 {
+			t.Errorf("expected Position{1,2}, got %+v ok=%v", pos, ok)
+		}
+		vel, ok := flecs.Get[Velocity](r, e2)
+		if !ok || vel.DX != 3 {
+			t.Errorf("expected Velocity{3,4}, got %+v ok=%v", vel, ok)
+		}
+	})
 }
 
 // ── AliveEntities() ───────────────────────────────────────────────────────────
@@ -399,9 +430,11 @@ func TestEachEntityDeferSafeMutation(t *testing.T) {
 // whose length matches w.Count().
 func TestAliveEntitiesMatchesCount(t *testing.T) {
 	w := flecs.New()
-	for i := 0; i < 8; i++ {
-		w.NewEntity()
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for i := 0; i < 8; i++ {
+			fw.NewEntity()
+		}
+	})
 	entities := w.AliveEntities()
 	if len(entities) != w.Count() {
 		t.Errorf("AliveEntities() len=%d, Count()=%d", len(entities), w.Count())
@@ -412,7 +445,7 @@ func TestAliveEntitiesMatchesCount(t *testing.T) {
 // does not affect the world state.
 func TestAliveEntitiesReturnsFreshSlice(t *testing.T) {
 	w := flecs.New()
-	w.NewEntity()
+	w.Write(func(fw *flecs.Writer) { fw.NewEntity() })
 	ents1 := w.AliveEntities()
 	ents1[0] = 0
 	ents2 := w.AliveEntities()
@@ -424,7 +457,8 @@ func TestAliveEntitiesReturnsFreshSlice(t *testing.T) {
 // TestAliveEntitiesAfterDelete verifies that AliveEntities() reflects deletions.
 func TestAliveEntitiesAfterDelete(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	before := w.Count()
 	w.Delete(e)
 	entities := w.AliveEntities()

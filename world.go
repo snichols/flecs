@@ -16,6 +16,11 @@ import (
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
+// Table is an alias for the internal archetype table type. It is exported so
+// that test code in the flecs_test package can hold typed *Table pointers
+// returned by helpers such as TableOf (defined in export_test.go).
+type Table = table.Table
+
 // World is the central ECS object. It owns entities (keyed by ID), component
 // metadata (in a Registry), and archetype tables (keyed by sorted component-ID
 // signature). Components are first-class entities; each registered component
@@ -221,26 +226,9 @@ func (w *World) SetWorkerCount(n int) {
 // serial dispatch (the default).
 func (w *World) WorkerCount() int { return w.workerCount }
 
-// W returns an unsynchronized *Writer backed by this world. For use during
-// single-goroutine setup or tests where no concurrent access occurs. It does
-// not acquire any locks and does not enter a Write scope.
-func (w *World) W() *Writer { return &w.writeCapability }
-
-// R returns an unsynchronized *Reader backed by this world. For use during
-// single-goroutine setup or tests where no concurrent access occurs. It does
-// not acquire any locks and does not enter a Read scope.
-func (w *World) R() *Reader { return &w.readCapability }
-
-// NewEntity allocates a new entity, places it in the empty-signature table,
-// and returns its ID. For use outside of Read/Write scopes (setup time).
-func (w *World) NewEntity() ID {
-	w.checkExclusiveAccessWrite()
-	return w.newEntityInternal()
-}
-
 // newEntityInternal allocates a new entity without the exclusive-access check.
-// Called by Writer.NewEntity (which runs inside a Write scope where access is
-// already guaranteed) and by World.NewEntity (setup-time).
+// Called by Writer.NewEntity which runs inside a Write scope where access is
+// already guaranteed.
 func (w *World) newEntityInternal() ID {
 	e := w.index.Alloc()
 	rec := w.index.Get(e)

@@ -15,10 +15,12 @@ type readonlyPos struct{ X, Y float32 }
 // with no data race.
 func TestReadonlyAllowsConcurrentReaders(t *testing.T) {
 	w := flecs.New()
-	for range 100 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, readonlyPos{X: 1, Y: 2})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for range 100 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, readonlyPos{X: 1, Y: 2})
+		}
+	})
 
 	const goroutines = 8
 	var wg sync.WaitGroup
@@ -50,8 +52,11 @@ func TestReadonlyNestedWithDefer(t *testing.T) {
 	// Case A: Write inside Write — nested Write shares defer queue.
 	{
 		w := flecs.New()
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, readonlyPos{X: 1})
+		var e flecs.ID
+		w.Write(func(fw *flecs.Writer) {
+			e = fw.NewEntity()
+			flecs.Set(fw, e, readonlyPos{X: 1})
+		})
 
 		w.Write(func(outer *flecs.Writer) {
 			flecs.Set(outer, e, readonlyPos{X: 42})
@@ -61,24 +66,31 @@ func TestReadonlyNestedWithDefer(t *testing.T) {
 			})
 		})
 
-		if p, ok := flecs.Get[readonlyPos](w.R(), e); !ok || p.X != 42 {
-			t.Fatalf("case A: expected X=42, got %v (ok=%v)", p, ok)
-		}
+		w.Read(func(r *flecs.Reader) {
+			if p, ok := flecs.Get[readonlyPos](r, e); !ok || p.X != 42 {
+				t.Fatalf("case A: expected X=42, got %v (ok=%v)", p, ok)
+			}
+		})
 	}
 
 	// Case B: sequential Write calls each flush independently.
 	{
 		w := flecs.New()
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, readonlyPos{X: 1})
+		var e flecs.ID
+		w.Write(func(fw *flecs.Writer) {
+			e = fw.NewEntity()
+			flecs.Set(fw, e, readonlyPos{X: 1})
+		})
 
 		w.Write(func(fw *flecs.Writer) {
 			flecs.Set(fw, e, readonlyPos{X: 77})
 		})
 
-		if p, ok := flecs.Get[readonlyPos](w.R(), e); !ok || p.X != 77 {
-			t.Fatalf("case B: expected X=77, got %v (ok=%v)", p, ok)
-		}
+		w.Read(func(r *flecs.Reader) {
+			if p, ok := flecs.Get[readonlyPos](r, e); !ok || p.X != 77 {
+				t.Fatalf("case B: expected X=77, got %v (ok=%v)", p, ok)
+			}
+		})
 	}
 }
 
@@ -86,18 +98,20 @@ func TestReadonlyNestedWithDefer(t *testing.T) {
 // original Each+Write+Delete pattern works correctly and without deadlock.
 func TestDeferWrappedIterationStillPasses(t *testing.T) {
 	w := flecs.New()
-	for range 10 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, readonlyPos{X: -1})
-	}
-	for range 5 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, readonlyPos{X: 1})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, readonlyPos{X: -1})
+		}
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, readonlyPos{X: 1})
+		}
+	})
 
 	var deleted int
 	w.Write(func(fw *flecs.Writer) {
-		flecs.Each1[readonlyPos](w.R(), func(e flecs.ID, p *readonlyPos) {
+		flecs.Each1[readonlyPos](fw.AsReader(), func(e flecs.ID, p *readonlyPos) {
 			if p.X < 0 {
 				fw.Delete(e)
 				deleted++
@@ -110,7 +124,9 @@ func TestDeferWrappedIterationStillPasses(t *testing.T) {
 	}
 	// 5 positive-X entities remain, plus all built-in entities.
 	count := 0
-	flecs.Each1[readonlyPos](w.R(), func(_ flecs.ID, _ *readonlyPos) { count++ })
+	w.Read(func(r *flecs.Reader) {
+		flecs.Each1[readonlyPos](r, func(_ flecs.ID, _ *readonlyPos) { count++ })
+	})
 	if count != 5 {
 		t.Fatalf("expected 5 surviving entities, got %d", count)
 	}

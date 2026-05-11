@@ -57,10 +57,13 @@ func TestStats_AfterEntitiesAndComponents(t *testing.T) {
 	posID := flecs.RegisterComponent[statPos](w)
 	_ = posID
 
-	e1 := w.NewEntity()
-	flecs.Set(w.W(), e1, statPos{1, 2})
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, statPos{3, 4})
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, statPos{1, 2})
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, statPos{3, 4})
+	})
 
 	s := w.Stats()
 	// EntityCount includes builtins + registered component + 2 user entities
@@ -174,22 +177,20 @@ func TestStats_PerComponentTableCount(t *testing.T) {
 	posID := flecs.RegisterComponent[statPos](w)
 	velID := flecs.RegisterComponent[statVel](w)
 
-	// Position-only entity
-	e1 := w.NewEntity()
-	flecs.Set(w.W(), e1, statPos{})
+	w.Write(func(fw *flecs.Writer) {
+		// Position-only entity
+		e1 := fw.NewEntity()
+		flecs.Set(fw, e1, statPos{})
 
-	// Position + Velocity entity
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, statPos{})
-	flecs.Set(w.W(), e2, statVel{})
+		// Position + Velocity entity
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, statPos{})
+		flecs.Set(fw, e2, statVel{})
 
-	// Velocity-only entity
-	e3 := w.NewEntity()
-	flecs.Set(w.W(), e3, statVel{})
-
-	_ = e1
-	_ = e2
-	_ = e3
+		// Velocity-only entity
+		e3 := fw.NewEntity()
+		flecs.Set(fw, e3, statVel{})
+	})
 
 	s := w.Stats()
 
@@ -277,7 +278,9 @@ func TestStats_IsSnapshot(t *testing.T) {
 	s1 := w.Stats()
 	before := s1.EntityCount
 
-	w.NewEntity()
+	w.Write(func(fw *flecs.Writer) {
+		fw.NewEntity()
+	})
 	s2 := w.Stats()
 
 	if s1.EntityCount != before {
@@ -294,9 +297,11 @@ func TestStats_TableCount(t *testing.T) {
 	initial := s0.TableCount
 
 	posID := flecs.RegisterComponent[statPos](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, statPos{})
-	_ = posID
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, statPos{})
+		_ = posID
+	})
 
 	s1 := w.Stats()
 	if s1.TableCount <= initial {

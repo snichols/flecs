@@ -76,8 +76,11 @@ func TestMarshalEmptyWorld(t *testing.T) {
 
 func TestMarshalSingleEntity(t *testing.T) {
 	w := newMarshalWorld()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalPos{X: 1, Y: 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1, Y: 2})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -100,7 +103,9 @@ func TestMarshalSingleEntity(t *testing.T) {
 	if len(userEntities) != 1 {
 		t.Fatalf("expected 1 user entity, got %d", len(userEntities))
 	}
-	p, ok := flecs.Get[marshalPos](w2.R(), userEntities[0])
+	var p marshalPos
+	var ok bool
+	w2.Read(func(r *flecs.Reader) { p, ok = flecs.Get[marshalPos](r, userEntities[0]) })
 	if !ok {
 		t.Fatal("expected marshalPos on restored entity")
 	}
@@ -111,13 +116,15 @@ func TestMarshalSingleEntity(t *testing.T) {
 
 func TestMarshalMultipleEntities(t *testing.T) {
 	w := newMarshalWorld()
-	for i := range 5 {
-		e := w.NewEntity()
-		flecs.Set(w.W(), e, marshalPos{X: float32(i), Y: float32(i * 2)})
-		if i%2 == 0 {
-			flecs.Set(w.W(), e, marshalVel{DX: float32(i), DY: 0})
+	w.Write(func(fw *flecs.Writer) {
+		for i := range 5 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, marshalPos{X: float32(i), Y: float32(i * 2)})
+			if i%2 == 0 {
+				flecs.Set(fw, e, marshalVel{DX: float32(i), DY: 0})
+			}
 		}
-	}
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -147,11 +154,14 @@ func TestMarshalMultipleEntities(t *testing.T) {
 
 func TestMarshalNamesRoundTrip(t *testing.T) {
 	w := newMarshalWorld()
-	e1 := w.NewEntity()
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		e3 = fw.NewEntity()
+	})
 	w.SetName(e1, "alpha")
-	e2 := w.NewEntity()
 	w.SetName(e2, "beta")
-	e3 := w.NewEntity()
 	w.SetName(e3, "gamma")
 
 	data := mustMarshal(t, w)
@@ -186,33 +196,42 @@ func TestMarshalNamesRoundTrip(t *testing.T) {
 func TestMarshalUnmarshalIntoNonEmptyWorld(t *testing.T) {
 	// Populate w with one entity A.
 	w := newMarshalWorld()
-	a := w.NewEntity()
-	flecs.Set(w.W(), a, marshalPos{X: 99, Y: 99})
+	var a flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		a = fw.NewEntity()
+		flecs.Set(fw, a, marshalPos{X: 99, Y: 99})
+	})
 
 	// Marshal a separate world with one entity.
 	w_src := newMarshalWorld()
-	e := w_src.NewEntity()
-	flecs.Set(w_src.W(), e, marshalPos{X: 1, Y: 2})
+	w_src.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1, Y: 2})
+	})
 	data := mustMarshal(t, w_src)
 
 	// Unmarshal into w — A should still exist.
 	if err := w.UnmarshalJSON(data); err != nil {
 		t.Fatalf("UnmarshalJSON: %v", err)
 	}
-	p, ok := flecs.Get[marshalPos](w.R(), a)
-	if !ok {
+	var pA marshalPos
+	var okA bool
+	w.Read(func(r *flecs.Reader) { pA, okA = flecs.Get[marshalPos](r, a) })
+	if !okA {
 		t.Fatal("entity A lost after UnmarshalJSON into non-empty world")
 	}
-	if p.X != 99 || p.Y != 99 {
-		t.Fatalf("entity A value corrupted: %+v", p)
+	if pA.X != 99 || pA.Y != 99 {
+		t.Fatalf("entity A value corrupted: %+v", pA)
 	}
 }
 
 func TestMarshalTagComponents(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalTag](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalTag{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalTag{})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -240,15 +259,19 @@ func TestMarshalTagComponents(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no user entity after unmarshal")
 	}
-	if !flecs.Has[marshalTag](w2.R(), found) {
+	var hasTag bool
+	w2.Read(func(r *flecs.Reader) { hasTag = flecs.Has[marshalTag](r, found) })
+	if !hasTag {
 		t.Fatal("marshalTag not restored")
 	}
 }
 
 func TestMarshalUnregisteredComponentError(t *testing.T) {
 	w := newMarshalWorld()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalPos{X: 1, Y: 2})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1, Y: 2})
+	})
 	data := mustMarshal(t, w)
 
 	// w2 does NOT register marshalPos.
@@ -285,10 +308,12 @@ func TestMarshalMalformedJSONError(t *testing.T) {
 
 func TestMarshalPairComponentsSkipped(t *testing.T) {
 	w := newMarshalWorld()
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.Set(w.W(), child, marshalPos{X: 1, Y: 2})
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	w.Write(func(fw *flecs.Writer) {
+		parent := fw.NewEntity()
+		child := fw.NewEntity()
+		flecs.Set(fw, child, marshalPos{X: 1, Y: 2})
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -322,9 +347,11 @@ func TestMarshalFloatsAndStrings(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
 	flecs.RegisterComponent[marshalStr](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalPos{X: 1.5, Y: 2.25})
-	flecs.Set(w.W(), e, marshalStr{Tag: "hello"})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1.5, Y: 2.25})
+		flecs.Set(fw, e, marshalStr{Tag: "hello"})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -348,12 +375,17 @@ func TestMarshalFloatsAndStrings(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no user entity")
 	}
-	p, ok := flecs.Get[marshalPos](w2.R(), found)
-	if !ok || p.X != 1.5 || p.Y != 2.25 {
+	var p marshalPos
+	var s marshalStr
+	var pOk, sOk bool
+	w2.Read(func(r *flecs.Reader) {
+		p, pOk = flecs.Get[marshalPos](r, found)
+		s, sOk = flecs.Get[marshalStr](r, found)
+	})
+	if !pOk || p.X != 1.5 || p.Y != 2.25 {
 		t.Fatalf("marshalPos: got %+v, want {1.5 2.25}", p)
 	}
-	s, ok := flecs.Get[marshalStr](w2.R(), found)
-	if !ok || s.Tag != "hello" {
+	if !sOk || s.Tag != "hello" {
 		t.Fatalf("marshalStr: got %+v, want {hello}", s)
 	}
 }
@@ -361,8 +393,10 @@ func TestMarshalFloatsAndStrings(t *testing.T) {
 func TestMarshalNestedStructs(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalNested](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalNested{Label: "test", Inner: marshalPos{X: 3, Y: 4}})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalNested{Label: "test", Inner: marshalPos{X: 3, Y: 4}})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -385,7 +419,11 @@ func TestMarshalNestedStructs(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no user entity")
 	}
-	n, ok := flecs.Get[marshalNested](w2.R(), found)
+	var n marshalNested
+	var ok bool
+	w2.Read(func(r *flecs.Reader) {
+		n, ok = flecs.Get[marshalNested](r, found)
+	})
 	if !ok || n.Label != "test" || n.Inner.X != 3 || n.Inner.Y != 4 {
 		t.Fatalf("marshalNested: got %+v", n)
 	}
@@ -393,10 +431,12 @@ func TestMarshalNestedStructs(t *testing.T) {
 
 func TestMarshalJSONValid(t *testing.T) {
 	w := newMarshalWorld()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalPos{X: 1, Y: 2})
-	flecs.Set(w.W(), e, marshalVel{DX: 3, DY: 4})
-	w.SetName(e, "entity1")
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1, Y: 2})
+		flecs.Set(fw, e, marshalVel{DX: 3, DY: 4})
+		w.SetName(e, "entity1")
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -407,11 +447,13 @@ func TestMarshalJSONValid(t *testing.T) {
 func TestMarshalTwoStepRoundTrip(t *testing.T) {
 	// Build world, marshal → unmarshal into w2, marshal w2 → compare.
 	w := newMarshalWorld()
-	e1 := w.NewEntity()
-	flecs.Set(w.W(), e1, marshalPos{X: 1, Y: 2})
-	w.SetName(e1, "e1")
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, marshalVel{DX: 3, DY: 4})
+	w.Write(func(fw *flecs.Writer) {
+		e1 := fw.NewEntity()
+		flecs.Set(fw, e1, marshalPos{X: 1, Y: 2})
+		w.SetName(e1, "e1")
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, marshalVel{DX: 3, DY: 4})
+	})
 
 	data1 := mustMarshal(t, w)
 
@@ -446,11 +488,13 @@ func TestMarshalTwoStepRoundTrip(t *testing.T) {
 
 func TestMarshalParentChildRoundTrip(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "scene")
-	car := w.NewEntity()
-	w.SetName(car, "car")
-	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "scene")
+		car := fw.NewEntity()
+		w.SetName(car, "car")
+		flecs.AddID(fw, car, flecs.MakePair(w.ChildOf(), root))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -485,14 +529,16 @@ func TestMarshalParentChildRoundTrip(t *testing.T) {
 
 func TestMarshalMultiLevelHierarchy(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	flecs.AddID(w.W(), parent, flecs.MakePair(w.ChildOf(), root))
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		parent := fw.NewEntity()
+		w.SetName(parent, "parent")
+		flecs.AddID(fw, parent, flecs.MakePair(w.ChildOf(), root))
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -514,15 +560,17 @@ func TestMarshalMultiLevelHierarchy(t *testing.T) {
 }
 
 func TestMarshalWideHierarchy(t *testing.T) {
-	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
 	const n = 5
-	for i := range n {
-		c := w.NewEntity()
-		w.SetName(c, fmt.Sprintf("child%d", i))
-		flecs.AddID(w.W(), c, flecs.MakePair(w.ChildOf(), root))
-	}
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		for i := range n {
+			c := fw.NewEntity()
+			w.SetName(c, fmt.Sprintf("child%d", i))
+			flecs.AddID(fw, c, flecs.MakePair(w.ChildOf(), root))
+		}
+	})
 
 	data := mustMarshal(t, w)
 	w2 := flecs.New()
@@ -545,11 +593,13 @@ func TestMarshalWideHierarchy(t *testing.T) {
 
 func TestMarshalCascadeDeleteAfterUnmarshal(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), root))
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), root))
+	})
 
 	data := mustMarshal(t, w)
 	w2 := flecs.New()
@@ -571,11 +621,13 @@ func TestMarshalCascadeDeleteAfterUnmarshal(t *testing.T) {
 func TestMarshalTopologicalOrder(t *testing.T) {
 	// Allocate child BEFORE parent in the world, then verify parent serial < child serial.
 	w := flecs.New()
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	w.Write(func(fw *flecs.Writer) {
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		parent := fw.NewEntity()
+		w.SetName(parent, "parent")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -610,11 +662,13 @@ func TestMarshalTopologicalOrder(t *testing.T) {
 
 func TestMarshalCycleDetection(t *testing.T) {
 	w := flecs.New()
-	a := w.NewEntity()
-	b := w.NewEntity()
-	// A and B are each other's ChildOf parent — a mutual cycle.
-	flecs.AddID(w.W(), a, flecs.MakePair(w.ChildOf(), b))
-	flecs.AddID(w.W(), b, flecs.MakePair(w.ChildOf(), a))
+	w.Write(func(fw *flecs.Writer) {
+		a := fw.NewEntity()
+		b := fw.NewEntity()
+		// A and B are each other's ChildOf parent — a mutual cycle.
+		flecs.AddID(fw, a, flecs.MakePair(w.ChildOf(), b))
+		flecs.AddID(fw, b, flecs.MakePair(w.ChildOf(), a))
+	})
 
 	_, err := w.MarshalJSON()
 	if err == nil {
@@ -639,10 +693,12 @@ func TestMarshalMissingParentSerialError(t *testing.T) {
 
 func TestMarshalEntityWithParentNoNameNoComponents(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
-	anon := w.NewEntity()
-	flecs.AddID(w.W(), anon, flecs.MakePair(w.ChildOf(), root))
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		anon := fw.NewEntity()
+		flecs.AddID(fw, anon, flecs.MakePair(w.ChildOf(), root))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -667,11 +723,13 @@ func TestMarshalEntityWithParentNoNameNoComponents(t *testing.T) {
 
 func TestMarshalHierarchyTwoStepRoundTrip(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), root))
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), root))
+	})
 
 	data1 := mustMarshal(t, w)
 
@@ -716,8 +774,10 @@ func TestMarshalHierarchyTwoStepRoundTrip(t *testing.T) {
 func TestMarshalParentNotInJSONWhenAbsent(t *testing.T) {
 	// Existing entities with no parent must not have "parent" in JSON.
 	w := flecs.New()
-	e := w.NewEntity()
-	w.SetName(e, "solo")
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		w.SetName(e, "solo")
+	})
 
 	data := mustMarshal(t, w)
 	if strings.Contains(string(data), `"parent"`) {
@@ -730,14 +790,16 @@ func TestMarshalMultipleChildOfParents(t *testing.T) {
 	// first one in signature order (lowest pair ID, i.e. the parent with the
 	// smaller entity index — p1, allocated first) must appear in the JSON output.
 	w := flecs.New()
-	p1 := w.NewEntity()
-	w.SetName(p1, "parent1")
-	p2 := w.NewEntity()
-	w.SetName(p2, "parent2")
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), p1))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), p2))
+	w.Write(func(fw *flecs.Writer) {
+		p1 := fw.NewEntity()
+		w.SetName(p1, "parent1")
+		p2 := fw.NewEntity()
+		w.SetName(p2, "parent2")
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), p1))
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), p2))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -777,15 +839,17 @@ func TestMarshalMultipleChildOfParents(t *testing.T) {
 func TestMarshalSiblingOrder(t *testing.T) {
 	// Siblings allocated in order sib0..sib3 must appear in that same order in
 	// the JSON output (entity-allocation order, per the topo-sort guarantee).
-	w := flecs.New()
-	root := w.NewEntity()
-	w.SetName(root, "root")
 	const n = 4
-	for i := range n {
-		c := w.NewEntity()
-		w.SetName(c, fmt.Sprintf("sib%d", i))
-		flecs.AddID(w.W(), c, flecs.MakePair(w.ChildOf(), root))
-	}
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+		for i := range n {
+			c := fw.NewEntity()
+			w.SetName(c, fmt.Sprintf("sib%d", i))
+			flecs.AddID(fw, c, flecs.MakePair(w.ChildOf(), root))
+		}
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -824,10 +888,12 @@ func TestMarshalSiblingOrder(t *testing.T) {
 func TestMarshalIsASinglePrefabRoundTrip(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, marshalPos{X: 1, Y: 1})
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, marshalPos{X: 1, Y: 1})
+		child := fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -847,7 +913,11 @@ func TestMarshalIsASinglePrefabRoundTrip(t *testing.T) {
 		if _, ok := skip[e]; ok {
 			return true
 		}
-		p, hasPrefab := flecs.PrefabOf(w2.R(), e)
+		var hasPrefab bool
+		var p flecs.ID
+		w2.Read(func(r *flecs.Reader) {
+			p, hasPrefab = flecs.PrefabOf(r, e)
+		})
 		if hasPrefab {
 			childID2 = e
 			prefabID2 = p
@@ -860,8 +930,12 @@ func TestMarshalIsASinglePrefabRoundTrip(t *testing.T) {
 	_ = prefabID2
 
 	// Child inherits Position from prefab via IsA.
-	pos, ok := flecs.Get[marshalPos](w2.R(), childID2)
-	if !ok {
+	var pos marshalPos
+	var posOk bool
+	w2.Read(func(r *flecs.Reader) {
+		pos, posOk = flecs.Get[marshalPos](r, childID2)
+	})
+	if !posOk {
 		t.Fatal("expected child to inherit marshalPos from prefab")
 	}
 	if pos.X != 1 || pos.Y != 1 {
@@ -873,13 +947,15 @@ func TestMarshalIsAMultiPrefabRoundTrip(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
 	flecs.RegisterComponent[marshalVel](w)
-	p1 := w.NewEntity()
-	flecs.Set(w.W(), p1, marshalPos{X: 1, Y: 1})
-	p2 := w.NewEntity()
-	flecs.Set(w.W(), p2, marshalVel{DX: 3, DY: 4})
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p1))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p2))
+	w.Write(func(fw *flecs.Writer) {
+		p1 := fw.NewEntity()
+		flecs.Set(fw, p1, marshalPos{X: 1, Y: 1})
+		p2 := fw.NewEntity()
+		flecs.Set(fw, p2, marshalVel{DX: 3, DY: 4})
+		child := fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p1))
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p2))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -925,8 +1001,11 @@ func TestMarshalIsAMultiPrefabRoundTrip(t *testing.T) {
 		if _, ok := skip[e]; ok {
 			return true
 		}
-		_, hasPrefab := flecs.PrefabOf(w2.R(), e)
-		if hasPrefab {
+		var hasPrefab2 bool
+		w2.Read(func(r *flecs.Reader) {
+			_, hasPrefab2 = flecs.PrefabOf(r, e)
+		})
+		if hasPrefab2 {
 			childID2 = e
 		}
 		return true
@@ -934,25 +1013,29 @@ func TestMarshalIsAMultiPrefabRoundTrip(t *testing.T) {
 	if childID2 == 0 {
 		t.Fatal("child entity not found after unmarshal")
 	}
-	if _, ok := flecs.Get[marshalPos](w2.R(), childID2); !ok {
-		t.Fatal("child should inherit marshalPos from p1")
-	}
-	if _, ok := flecs.Get[marshalVel](w2.R(), childID2); !ok {
-		t.Fatal("child should inherit marshalVel from p2")
-	}
+	w2.Read(func(r *flecs.Reader) {
+		if _, ok := flecs.Get[marshalPos](r, childID2); !ok {
+			t.Fatal("child should inherit marshalPos from p1")
+		}
+		if _, ok := flecs.Get[marshalVel](r, childID2); !ok {
+			t.Fatal("child should inherit marshalVel from p2")
+		}
+	})
 }
 
 func TestMarshalIsAFirstPrefabWins(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	p1 := w.NewEntity()
-	flecs.Set(w.W(), p1, marshalPos{X: 10, Y: 10})
-	p2 := w.NewEntity()
-	flecs.Set(w.W(), p2, marshalPos{X: 20, Y: 20})
-	child := w.NewEntity()
-	// p1 is added first → first-prefab-wins: child inherits from p1
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p1))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p2))
+	w.Write(func(fw *flecs.Writer) {
+		p1 := fw.NewEntity()
+		flecs.Set(fw, p1, marshalPos{X: 10, Y: 10})
+		p2 := fw.NewEntity()
+		flecs.Set(fw, p2, marshalPos{X: 20, Y: 20})
+		child := fw.NewEntity()
+		// p1 is added first → first-prefab-wins: child inherits from p1
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p1))
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p2))
+	})
 
 	data := mustMarshal(t, w)
 	w2 := flecs.New()
@@ -966,7 +1049,11 @@ func TestMarshalIsAFirstPrefabWins(t *testing.T) {
 		if _, ok := skip[e]; ok {
 			return true
 		}
-		if _, has := flecs.PrefabOf(w2.R(), e); has {
+		var hasPrefab3 bool
+		w2.Read(func(r *flecs.Reader) {
+			_, hasPrefab3 = flecs.PrefabOf(r, e)
+		})
+		if hasPrefab3 {
 			childID2 = e
 		}
 		return true
@@ -974,8 +1061,12 @@ func TestMarshalIsAFirstPrefabWins(t *testing.T) {
 	if childID2 == 0 {
 		t.Fatal("child not found after unmarshal")
 	}
-	pos, ok := flecs.Get[marshalPos](w2.R(), childID2)
-	if !ok {
+	var pos marshalPos
+	var posOk2 bool
+	w2.Read(func(r *flecs.Reader) {
+		pos, posOk2 = flecs.Get[marshalPos](r, childID2)
+	})
+	if !posOk2 {
 		t.Fatal("expected inherited marshalPos")
 	}
 	// First-prefab-wins: should get p1's value {10, 10}.
@@ -988,12 +1079,14 @@ func TestMarshalIsATopoOrder(t *testing.T) {
 	// Allocate child BEFORE prefab; after topo-sort, prefab serial < child serial.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	flecs.Set(w.W(), prefab, marshalPos{X: 5, Y: 5})
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		prefab := fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		flecs.Set(fw, prefab, marshalPos{X: 5, Y: 5})
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1025,15 +1118,17 @@ func TestMarshalIsACombinedChildOfIsATopoOrder(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
 	// Allocate child first, then parent, then prefab — all reversed from topo order.
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	flecs.Set(w.W(), prefab, marshalPos{X: 7, Y: 7})
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		parent := fw.NewEntity()
+		w.SetName(parent, "parent")
+		prefab := fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		flecs.Set(fw, prefab, marshalPos{X: 7, Y: 7})
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1067,10 +1162,12 @@ func TestMarshalIsAMixedCycleDetection(t *testing.T) {
 	// Create a mixed ChildOf→IsA cycle: a has ChildOf(b), b has IsA(a).
 	// predecessors(a) = {b}, predecessors(b) = {a} → cycle.
 	w := flecs.New()
-	a := w.NewEntity()
-	b := w.NewEntity()
-	flecs.AddID(w.W(), a, flecs.MakePair(w.ChildOf(), b))
-	flecs.AddID(w.W(), b, flecs.MakePair(w.IsA(), a))
+	w.Write(func(fw *flecs.Writer) {
+		a := fw.NewEntity()
+		b := fw.NewEntity()
+		flecs.AddID(fw, a, flecs.MakePair(w.ChildOf(), b))
+		flecs.AddID(fw, b, flecs.MakePair(w.IsA(), a))
+	})
 
 	_, err := w.MarshalJSON()
 	if err == nil {
@@ -1085,13 +1182,15 @@ func TestMarshalIsAMultipleIsANoChildOf(t *testing.T) {
 	// Entity has IsA relationships but no ChildOf; "parent" must be absent, "prefabs" present.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	p1 := w.NewEntity()
-	flecs.Set(w.W(), p1, marshalPos{X: 1, Y: 2})
-	p2 := w.NewEntity()
-	flecs.Set(w.W(), p2, marshalPos{X: 3, Y: 4})
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p1))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), p2))
+	w.Write(func(fw *flecs.Writer) {
+		p1 := fw.NewEntity()
+		flecs.Set(fw, p1, marshalPos{X: 1, Y: 2})
+		p2 := fw.NewEntity()
+		flecs.Set(fw, p2, marshalPos{X: 3, Y: 4})
+		child := fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p1))
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), p2))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1128,8 +1227,10 @@ func TestMarshalNoIsARoundTripStable(t *testing.T) {
 	// Entities with no IsA relationships must not emit a "prefabs" field.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, marshalPos{X: 1, Y: 2})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, marshalPos{X: 1, Y: 2})
+	})
 
 	data := mustMarshal(t, w)
 	if strings.Contains(string(data), `"prefabs"`) {
@@ -1154,15 +1255,17 @@ func TestMarshalIsAChildOfCascadeAfterUnmarshal(t *testing.T) {
 	// After unmarshal, deleting parent must cascade-delete child.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	flecs.Set(w.W(), prefab, marshalPos{X: 1, Y: 1})
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	flecs.AddID(w.W(), parent, flecs.MakePair(w.IsA(), prefab))
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		flecs.Set(fw, prefab, marshalPos{X: 1, Y: 1})
+		parent := fw.NewEntity()
+		w.SetName(parent, "parent")
+		flecs.AddID(fw, parent, flecs.MakePair(w.IsA(), prefab))
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	data := mustMarshal(t, w)
 	w2 := flecs.New()
@@ -1194,11 +1297,13 @@ func TestMarshalIsAOverrideAfterIsA(t *testing.T) {
 	// After unmarshal, Get[Position](child) returns the local value (override wins).
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	prefab := w.NewEntity()
-	flecs.Set(w.W(), prefab, marshalPos{X: 1, Y: 1})
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
-	flecs.Set(w.W(), child, marshalPos{X: 99, Y: 99}) // local override
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, marshalPos{X: 1, Y: 1})
+		child := fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, child, marshalPos{X: 99, Y: 99}) // local override
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1255,7 +1360,11 @@ func TestMarshalIsAOverrideAfterIsA(t *testing.T) {
 		if _, ok := skip[e]; ok {
 			return true
 		}
-		if _, has := flecs.PrefabOf(w2.R(), e); has {
+		var hasPrefab4 bool
+		w2.Read(func(r *flecs.Reader) {
+			_, hasPrefab4 = flecs.PrefabOf(r, e)
+		})
+		if hasPrefab4 {
 			childID2 = e
 		}
 		return true
@@ -1263,12 +1372,16 @@ func TestMarshalIsAOverrideAfterIsA(t *testing.T) {
 	if childID2 == 0 {
 		t.Fatal("child not found after unmarshal")
 	}
-	pos, ok := flecs.Get[marshalPos](w2.R(), childID2)
-	if !ok {
+	var pos2 marshalPos
+	var posOk3 bool
+	w2.Read(func(r *flecs.Reader) {
+		pos2, posOk3 = flecs.Get[marshalPos](r, childID2)
+	})
+	if !posOk3 {
 		t.Fatal("expected marshalPos on child")
 	}
-	if pos.X != 99 || pos.Y != 99 {
-		t.Fatalf("override should win: got %+v, want {99 99}", pos)
+	if pos2.X != 99 || pos2.Y != 99 {
+		t.Fatalf("override should win: got %+v, want {99 99}", pos2)
 	}
 }
 
@@ -1276,12 +1389,14 @@ func TestMarshalIsATwoStepRoundTrip(t *testing.T) {
 	// marshal → unmarshal → marshal should produce structurally identical JSON.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalPos](w)
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	flecs.Set(w.W(), prefab, marshalPos{X: 3, Y: 4})
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		flecs.Set(fw, prefab, marshalPos{X: 3, Y: 4})
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	data1 := mustMarshal(t, w)
 
@@ -1336,10 +1451,14 @@ type marshalEdge2 struct{ Label string }
 
 func TestMarshalTagOnlyPairRoundTrip(t *testing.T) {
 	w := flecs.New()
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
-	flecs.AddID(w.W(), alice, flecs.MakePair(follows, bob))
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+		flecs.AddID(fw, alice, flecs.MakePair(follows, bob))
+	})
+	_, _, _ = follows, alice, bob
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1407,10 +1526,13 @@ func TestMarshalTagOnlyPairRoundTrip(t *testing.T) {
 func TestMarshalDataBearingPairRoundTrip(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, bob, marshalEdge{Weight: 0.8})
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+		flecs.SetPair[marshalEdge](fw, alice, follows, bob, marshalEdge{Weight: 0.8})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1479,8 +1601,10 @@ func TestMarshalDataBearingPairRoundTrip(t *testing.T) {
 			bob2 = cid.Second()
 		}
 	}
-	edge, ok := flecs.GetPair[marshalEdge](w2.R(), aliceID2, follows2, bob2)
-	if !ok {
+	var edge marshalEdge
+	var edgeOk bool
+	w2.Read(func(r *flecs.Reader) { edge, edgeOk = flecs.GetPair[marshalEdge](r, aliceID2, follows2, bob2) })
+	if !edgeOk {
 		t.Fatal("expected marshalEdge pair on restored alice")
 	}
 	if edge.Weight != 0.8 {
@@ -1493,19 +1617,22 @@ func TestMarshalMixedChildOfIsAPairRoundTrip(t *testing.T) {
 	// All three must serialize via their respective fields and round-trip correctly.
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	follows := w.NewEntity()
-	w.SetName(follows, "follows")
-	bob := w.NewEntity()
-	w.SetName(bob, "bob")
-	alice := w.NewEntity()
-	w.SetName(alice, "alice")
-	flecs.AddID(w.W(), alice, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w.W(), alice, flecs.MakePair(w.IsA(), prefab))
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, bob, marshalEdge{Weight: 1.5})
+	var prefab, parent, follows, bob, alice flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		parent = fw.NewEntity()
+		w.SetName(parent, "parent")
+		follows = fw.NewEntity()
+		w.SetName(follows, "follows")
+		bob = fw.NewEntity()
+		w.SetName(bob, "bob")
+		alice = fw.NewEntity()
+		w.SetName(alice, "alice")
+		flecs.AddID(fw, alice, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, alice, flecs.MakePair(w.IsA(), prefab))
+		flecs.SetPair[marshalEdge](fw, alice, follows, bob, marshalEdge{Weight: 1.5})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1574,7 +1701,9 @@ func TestMarshalMixedChildOfIsAPairRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("prefab not found in w2")
 	}
-	if !flecs.HasID(w2.R(), aliceID2, flecs.MakePair(w2.IsA(), prefabID2)) {
+	var hasIsA bool
+	w2.Read(func(r *flecs.Reader) { hasIsA = flecs.HasID(r, aliceID2, flecs.MakePair(w2.IsA(), prefabID2)) })
+	if !hasIsA {
 		t.Error("IsA not restored correctly")
 	}
 	// Custom pair restored.
@@ -1586,8 +1715,10 @@ func TestMarshalMixedChildOfIsAPairRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("bob not found in w2")
 	}
-	edge, ok := flecs.GetPair[marshalEdge](w2.R(), aliceID2, followsID2, bobID2)
-	if !ok {
+	var edge marshalEdge
+	var edgeOk bool
+	w2.Read(func(r *flecs.Reader) { edge, edgeOk = flecs.GetPair[marshalEdge](r, aliceID2, followsID2, bobID2) })
+	if !edgeOk {
 		t.Fatal("custom pair not restored")
 	}
 	if edge.Weight != 1.5 {
@@ -1599,21 +1730,24 @@ func TestMarshalMultipleCustomPairsRoundTrip(t *testing.T) {
 	// alice has (follows, bob), (follows, charlie), (likes, dave).
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	follows := w.NewEntity()
-	w.SetName(follows, "follows")
-	likes := w.NewEntity()
-	w.SetName(likes, "likes")
-	alice := w.NewEntity()
-	w.SetName(alice, "alice")
-	bob := w.NewEntity()
-	w.SetName(bob, "bob")
-	charlie := w.NewEntity()
-	w.SetName(charlie, "charlie")
-	dave := w.NewEntity()
-	w.SetName(dave, "dave")
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, bob, marshalEdge{Weight: 1.0})
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, charlie, marshalEdge{Weight: 2.0})
-	flecs.SetPair[marshalEdge](w.W(), alice, likes, dave, marshalEdge{Weight: 3.0})
+	var follows, likes, alice, bob, charlie, dave flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		w.SetName(follows, "follows")
+		likes = fw.NewEntity()
+		w.SetName(likes, "likes")
+		alice = fw.NewEntity()
+		w.SetName(alice, "alice")
+		bob = fw.NewEntity()
+		w.SetName(bob, "bob")
+		charlie = fw.NewEntity()
+		w.SetName(charlie, "charlie")
+		dave = fw.NewEntity()
+		w.SetName(dave, "dave")
+		flecs.SetPair[marshalEdge](fw, alice, follows, bob, marshalEdge{Weight: 1.0})
+		flecs.SetPair[marshalEdge](fw, alice, follows, charlie, marshalEdge{Weight: 2.0})
+		flecs.SetPair[marshalEdge](fw, alice, likes, dave, marshalEdge{Weight: 3.0})
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1636,31 +1770,35 @@ func TestMarshalMultipleCustomPairsRoundTrip(t *testing.T) {
 	charlieID2, _ := w2.Lookup("charlie")
 	daveID2, _ := w2.Lookup("dave")
 
-	e1, ok := flecs.GetPair[marshalEdge](w2.R(), aliceID2, followsID2, bobID2)
-	if !ok || e1.Weight != 1.0 {
-		t.Errorf("(follows, bob) pair: got %v ok=%v, want Weight=1.0", e1, ok)
-	}
-	e2, ok := flecs.GetPair[marshalEdge](w2.R(), aliceID2, followsID2, charlieID2)
-	if !ok || e2.Weight != 2.0 {
-		t.Errorf("(follows, charlie) pair: got %v ok=%v, want Weight=2.0", e2, ok)
-	}
-	e3, ok := flecs.GetPair[marshalEdge](w2.R(), aliceID2, likesID2, daveID2)
-	if !ok || e3.Weight != 3.0 {
-		t.Errorf("(likes, dave) pair: got %v ok=%v, want Weight=3.0", e3, ok)
-	}
+	w2.Read(func(r *flecs.Reader) {
+		e1, ok := flecs.GetPair[marshalEdge](r, aliceID2, followsID2, bobID2)
+		if !ok || e1.Weight != 1.0 {
+			t.Errorf("(follows, bob) pair: got %v ok=%v, want Weight=1.0", e1, ok)
+		}
+		e2, ok := flecs.GetPair[marshalEdge](r, aliceID2, followsID2, charlieID2)
+		if !ok || e2.Weight != 2.0 {
+			t.Errorf("(follows, charlie) pair: got %v ok=%v, want Weight=2.0", e2, ok)
+		}
+		e3, ok := flecs.GetPair[marshalEdge](r, aliceID2, likesID2, daveID2)
+		if !ok || e3.Weight != 3.0 {
+			t.Errorf("(likes, dave) pair: got %v ok=%v, want Weight=3.0", e3, ok)
+		}
+	})
 }
 
 func TestMarshalChildOfIsANotInPairsField(t *testing.T) {
 	// ChildOf and IsA pairs must NOT appear in the "pairs" field.
 	w := flecs.New()
-	parent := w.NewEntity()
-	w.SetName(parent, "parent")
-	prefab := w.NewEntity()
-	w.SetName(prefab, "prefab")
-	child := w.NewEntity()
-	w.SetName(child, "child")
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
+	w.Write(func(fw *flecs.Writer) {
+		parent := fw.NewEntity()
+		w.SetName(parent, "parent")
+		prefab := fw.NewEntity()
+		w.SetName(prefab, "prefab")
+		child := fw.NewEntity()
+		w.SetName(child, "child")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 
 	data := mustMarshal(t, w)
 	if !json.Valid(data) {
@@ -1741,9 +1879,12 @@ func TestMarshalUnknownPairTgtSerialError(t *testing.T) {
 
 func TestSetPairByIDAutoRegisters(t *testing.T) {
 	w := flecs.New()
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+	})
 	w.SetPairByID(alice, follows, bob, marshalEdge{Weight: 0.5})
 
 	// Verify the pair is set.
@@ -1775,9 +1916,12 @@ func TestSetPairByIDAutoRegisters(t *testing.T) {
 
 func TestSetPairByIDTypeMismatchPanics(t *testing.T) {
 	w := flecs.New()
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+	})
 	w.SetPairByID(alice, follows, bob, marshalEdge{Weight: 1.0})
 
 	defer func() {
@@ -1796,9 +1940,12 @@ func TestSetPairByIDTypeMismatchPanics(t *testing.T) {
 func TestSetPairByIDFiresHooks(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+	})
 
 	var onSetCount int
 	flecs.OnSet[marshalEdge](w, func(_ *flecs.Writer, _ flecs.ID, _ marshalEdge) {
@@ -1814,18 +1961,22 @@ func TestSetPairByIDFiresHooks(t *testing.T) {
 func TestAddIDAfterSetPairIsNoOp(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	follows := w.NewEntity()
-	alice := w.NewEntity()
-	bob := w.NewEntity()
-
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, bob, marshalEdge{Weight: 1.5})
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		alice = fw.NewEntity()
+		bob = fw.NewEntity()
+		flecs.SetPair[marshalEdge](fw, alice, follows, bob, marshalEdge{Weight: 1.5})
+	})
 	pairID := flecs.MakePair(follows, bob)
 
 	// AddID after SetPair on the same pairID must be idempotent: entity already has
 	// the pair component, so AddID is a no-op and must not clear the data.
-	flecs.AddID(w.W(), alice, pairID)
+	w.Write(func(fw *flecs.Writer) { flecs.AddID(fw, alice, pairID) })
 
-	if !flecs.HasID(w.R(), alice, pairID) {
+	var hasID bool
+	w.Read(func(r *flecs.Reader) { hasID = flecs.HasID(r, alice, pairID) })
+	if !hasID {
 		t.Fatal("entity lost pair after AddID no-op")
 	}
 	v, ok := w.GetByID(alice, pairID)
@@ -1844,13 +1995,16 @@ func TestAddIDAfterSetPairIsNoOp(t *testing.T) {
 func TestMarshalPairsTwoStepRoundTripStable(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[marshalEdge](w)
-	follows := w.NewEntity()
-	w.SetName(follows, "follows")
-	alice := w.NewEntity()
-	w.SetName(alice, "alice")
-	bob := w.NewEntity()
-	w.SetName(bob, "bob")
-	flecs.SetPair[marshalEdge](w.W(), alice, follows, bob, marshalEdge{Weight: 0.7})
+	var follows, alice, bob flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		follows = fw.NewEntity()
+		w.SetName(follows, "follows")
+		alice = fw.NewEntity()
+		w.SetName(alice, "alice")
+		bob = fw.NewEntity()
+		w.SetName(bob, "bob")
+		flecs.SetPair[marshalEdge](fw, alice, follows, bob, marshalEdge{Weight: 0.7})
+	})
 
 	data1 := mustMarshal(t, w)
 

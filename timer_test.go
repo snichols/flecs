@@ -49,8 +49,11 @@ func TestTimerSetFixedTimestepZeroDisables(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	runs := 0
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -93,8 +96,11 @@ func TestTimerFixedUpdateExactlyOncePerStep(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	runs := 0
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -122,8 +128,11 @@ func TestTimerFixedUpdateMultiplePerProgress(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	runs := 0
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -145,8 +154,11 @@ func TestTimerFixedUpdateDTIsAlwaysStep(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	step := float32(1.0 / 60.0)
 	w.SetFixedTimestep(step)
@@ -174,8 +186,11 @@ func TestTimerVariableUpdateSeesRealDT(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	var capturedDT float32
 	flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(dt float32, it *flecs.QueryIter) {
@@ -197,8 +212,11 @@ func TestTimerPhaseOrderWithFixed(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	var order []string
 	flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -243,17 +261,20 @@ func TestTimerFixedUpdatePerIterationDefer(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	// Each fixed tick: read current X, write X+1. With per-iteration Defer the
 	// write from tick N is visible (flushed) at tick N+1's read time.
 	var seenXValues []float32
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
-			v, _ := flecs.Get[PPos](w.R(), e)
+			v, _ := flecs.Get[PPos](it.Reader(), e)
 			seenXValues = append(seenXValues, v.X)
-			flecs.Set[PPos](w.W(), e, PPos{X: v.X + 1})
+			flecs.Set[PPos](it.Writer(), e, PPos{X: v.X + 1})
 		}
 	})
 
@@ -278,8 +299,11 @@ func TestTimerAccumulatorFractionalCarry(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	runs := 0
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -307,8 +331,11 @@ func TestTimerOnFixedUpdateNeverRunsWhenDisabled(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	ran := false
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -332,8 +359,11 @@ func TestTimerMidGameTimestepChange(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[PPos](w.W(), e, PPos{X: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[PPos](fw, e, PPos{X: 0})
+	})
 
 	runs := 0
 	flecs.NewSystemInPhase(w, w.OnFixedUpdate(), q, func(_ float32, it *flecs.QueryIter) {
@@ -391,7 +421,13 @@ func TestTimerNewSystemInPhaseInvalidPhaseStillPanics(t *testing.T) {
 	}{
 		{"ChildOf", func(w *flecs.World) flecs.ID { return w.ChildOf() }},
 		{"IsA", func(w *flecs.World) flecs.ID { return w.IsA() }},
-		{"NewEntity", func(w *flecs.World) flecs.ID { return w.NewEntity() }},
+		{"NewEntity", func(w *flecs.World) flecs.ID {
+			var id flecs.ID
+			w.Write(func(fw *flecs.Writer) {
+				id = fw.NewEntity()
+			})
+			return id
+		}},
 	}
 
 	for _, tc := range cases {

@@ -14,14 +14,17 @@ func ExampleWorld_Write() {
 
 	w := flecs.New()
 
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e1, defPos{X: -1})
-	flecs.Set(w.W(), e2, defPos{X: 5})
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e1, defPos{X: -1})
+		flecs.Set(fw, e2, defPos{X: 5})
+	})
 
 	// Write queues mutations; reads inside the block still see current state.
 	w.Write(func(fw *flecs.Writer) {
-		flecs.Each1[defPos](w.R(), func(e flecs.ID, p *defPos) {
+		flecs.Each1[defPos](fw.AsReader(), func(e flecs.ID, p *defPos) {
 			if p.X < 0 {
 				fw.Delete(e) // queued, not applied yet
 			}

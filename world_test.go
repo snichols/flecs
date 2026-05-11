@@ -18,7 +18,10 @@ type Tag struct{}
 
 func TestNewEntityIsAliveAndNonZero(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	if e == 0 {
 		t.Fatal("NewEntity returned zero ID")
 	}
@@ -29,7 +32,10 @@ func TestNewEntityIsAliveAndNonZero(t *testing.T) {
 
 func TestIsAliveOnDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	w.Delete(e)
 	if w.IsAlive(e) {
 		t.Fatal("IsAlive true after Delete")
@@ -38,7 +44,10 @@ func TestIsAliveOnDeadEntity(t *testing.T) {
 
 func TestDeleteReturnValues(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	if !w.Delete(e) {
 		t.Fatal("Delete returned false for alive entity")
 	}
@@ -51,8 +60,11 @@ func TestCountReflectsAliveEntities(t *testing.T) {
 	w := flecs.New()
 	// World starts with the built-in ChildOf entity (index 1); user entities begin at index 2.
 	base := w.Count()
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+	})
 	if w.Count() != base+2 {
 		t.Fatalf("Count want base+2=%d after 2 NewEntity, got %d", base+2, w.Count())
 	}
@@ -81,10 +93,17 @@ func TestRegisterComponentIdempotent(t *testing.T) {
 
 func TestSetGetRoundTrip(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
 	want := Position{X: 1, Y: 2}
-	flecs.Set(w.W(), e, want)
-	got, ok := flecs.Get[Position](w.R(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, want)
+	})
+	var got Position
+	var ok bool
+	w.Read(func(r *flecs.Reader) {
+		got, ok = flecs.Get[Position](r, e)
+	})
 	if !ok {
 		t.Fatal("Get returned false after Set")
 	}
@@ -95,10 +114,16 @@ func TestSetGetRoundTrip(t *testing.T) {
 
 func TestAutoRegistrationViaSet(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	// Set without an explicit RegisterComponent call.
-	flecs.Set(w.W(), e, Position{X: 3, Y: 4})
-	_, ok := flecs.Get[Position](w.R(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		// Set without an explicit RegisterComponent call.
+		flecs.Set(fw, e, Position{X: 3, Y: 4})
+	})
+	var ok bool
+	w.Read(func(r *flecs.Reader) {
+		_, ok = flecs.Get[Position](r, e)
+	})
 	if !ok {
 		t.Fatal("Get after auto-registered Set returned false")
 	}
@@ -106,28 +131,40 @@ func TestAutoRegistrationViaSet(t *testing.T) {
 
 func TestSetOnDeadEntityPanics(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
 	w.Delete(e)
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("Set on dead entity should panic")
 		}
 	}()
-	flecs.Set(w.W(), e, Position{})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{})
+	})
 }
 
 // ── Two-component flow ────────────────────────────────────────────────────────
 
 func TestTwoComponentMigrationsAndGet(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
 	p := Position{X: 10, Y: 20}
 	v := Velocity{DX: 1, DY: 2}
-	flecs.Set(w.W(), e, p)
-	flecs.Set(w.W(), e, v)
-
-	gotP, okP := flecs.Get[Position](w.R(), e)
-	gotV, okV := flecs.Get[Velocity](w.R(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, p)
+		flecs.Set(fw, e, v)
+	})
+	var gotP Position
+	var gotV Velocity
+	var okP, okV bool
+	w.Read(func(r *flecs.Reader) {
+		gotP, okP = flecs.Get[Position](r, e)
+		gotV, okV = flecs.Get[Velocity](r, e)
+	})
 	if !okP || gotP != p {
 		t.Fatalf("Position after two-component migration: got (%+v, %v), want (%+v, true)", gotP, okP, p)
 	}
@@ -140,109 +177,161 @@ func TestTwoComponentMigrationsAndGet(t *testing.T) {
 
 func TestHasBeforeAndAfterSetAndRemove(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	if flecs.Has[Position](w.R(), e) {
-		t.Fatal("Has should be false before Set")
-	}
-	flecs.Set(w.W(), e, Position{1, 2})
-	if !flecs.Has[Position](w.R(), e) {
-		t.Fatal("Has should be true after Set")
-	}
-	flecs.Remove[Position](w.W(), e)
-	if flecs.Has[Position](w.R(), e) {
-		t.Fatal("Has should be false after Remove")
-	}
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+	})
+	// Before Set: Has should be false.
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[Position](r, e) {
+			t.Fatal("Has should be false before Set")
+		}
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{1, 2})
+	})
+	// After Set: Has should be true.
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.Has[Position](r, e) {
+			t.Fatal("Has should be true after Set")
+		}
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Remove[Position](fw, e)
+	})
+	// After Remove: Has should be false.
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[Position](r, e) {
+			t.Fatal("Has should be false after Remove")
+		}
+	})
 }
 
 func TestHasOnDeadEntityReturnsFalse(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{})
+	})
 	w.Delete(e)
-	if flecs.Has[Position](w.R(), e) {
-		t.Fatal("Has should be false for dead entity")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[Position](r, e) {
+			t.Fatal("Has should be false for dead entity")
+		}
+	})
 }
 
 // ── Remove ────────────────────────────────────────────────────────────────────
 
 func TestRemoveActuallyRemovesComponent(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{5, 6})
-	if !flecs.Remove[Position](w.W(), e) {
-		t.Fatal("Remove returned false for present component")
-	}
-	_, ok := flecs.Get[Position](w.R(), e)
-	if ok {
-		t.Fatal("Get returned true after Remove")
-	}
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{5, 6})
+	})
+	// Position is now applied; Remove should return true.
+	w.Write(func(fw *flecs.Writer) {
+		if !flecs.Remove[Position](fw, e) {
+			t.Fatal("Remove returned false for present component")
+		}
+	})
+	// After remove, Get should return false.
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, e)
+		if ok {
+			t.Fatal("Get returned true after Remove")
+		}
+	})
 }
 
 func TestRemoveAbsentComponentReturnsFalse(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	if flecs.Remove[Position](w.W(), e) {
-		t.Fatal("Remove returned true for absent component")
-	}
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		if flecs.Remove[Position](fw, e) {
+			t.Fatal("Remove returned true for absent component")
+		}
+	})
 }
 
 func TestRemoveOnDeadEntityReturnsFalse(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{})
+	})
 	w.Delete(e)
-	if flecs.Remove[Position](w.W(), e) {
-		t.Fatal("Remove returned true for dead entity")
-	}
+	w.Write(func(fw *flecs.Writer) {
+		if flecs.Remove[Position](fw, e) {
+			t.Fatal("Remove returned true for dead entity")
+		}
+	})
 }
 
 func TestGetOnUnregisteredTypeReturnsFalse(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	// Velocity was never registered.
-	_, ok := flecs.Get[Velocity](w.R(), e)
-	if ok {
-		t.Fatal("Get on unregistered type should return false")
-	}
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		// Velocity was never registered.
+		_, ok := flecs.Get[Velocity](fw.AsReader(), e)
+		if ok {
+			t.Fatal("Get on unregistered type should return false")
+		}
+	})
 }
 
 func TestGetOnDeadEntityReturnsFalse(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+	})
 	w.Delete(e)
-	_, ok := flecs.Get[Position](w.R(), e)
-	if ok {
-		t.Fatal("Get on dead entity should return false")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, e)
+		if ok {
+			t.Fatal("Get on dead entity should return false")
+		}
+	})
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
 
 func TestDeleteRemovesEntityFromWorld(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+	})
 	w.Delete(e)
 	if w.IsAlive(e) {
 		t.Fatal("IsAlive should be false after Delete")
 	}
-	_, ok := flecs.Get[Position](w.R(), e)
-	if ok {
-		t.Fatal("Get should return false for deleted entity")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, e)
+		if ok {
+			t.Fatal("Get should return false for deleted entity")
+		}
+	})
 }
 
 // ── Multi-entity per archetype ────────────────────────────────────────────────
 
 func TestMultipleEntitiesShareTable(t *testing.T) {
 	w := flecs.New()
-	e1, e2, e3 := w.NewEntity(), w.NewEntity(), w.NewEntity()
+	var e1, e2, e3 flecs.ID
 	p := Position{1, 2}
-	flecs.Set(w.W(), e1, p)
-	flecs.Set(w.W(), e2, p)
-	flecs.Set(w.W(), e3, p)
+	w.Write(func(fw *flecs.Writer) {
+		e1, e2, e3 = fw.NewEntity(), fw.NewEntity(), fw.NewEntity()
+		flecs.Set(fw, e1, p)
+		flecs.Set(fw, e2, p)
+		flecs.Set(fw, e3, p)
+	})
 
 	t1 := flecs.TableOf(w, e1)
 	t2 := flecs.TableOf(w, e2)
@@ -263,25 +352,29 @@ func TestMultipleEntitiesShareTable(t *testing.T) {
 // Subsequent Get operations on e1 and e3 must still return the correct values.
 func TestMigrationUpdatesCoLocatedEntityRow(t *testing.T) {
 	w := flecs.New()
-	e1, e2, e3 := w.NewEntity(), w.NewEntity(), w.NewEntity()
+	var e1, e2, e3 flecs.ID
 	p1, p2, p3 := Position{1, 0}, Position{2, 0}, Position{3, 0}
-	flecs.Set(w.W(), e1, p1)
-	flecs.Set(w.W(), e2, p2)
-	flecs.Set(w.W(), e3, p3)
-
-	// Migrate e2 to a new archetype (Position + Velocity).
-	v := Velocity{DX: 99}
-	flecs.Set(w.W(), e2, v)
-
-	gotP1, ok1 := flecs.Get[Position](w.R(), e1)
-	gotP3, ok3 := flecs.Get[Position](w.R(), e3)
+	w.Write(func(fw *flecs.Writer) {
+		e1, e2, e3 = fw.NewEntity(), fw.NewEntity(), fw.NewEntity()
+		flecs.Set(fw, e1, p1)
+		flecs.Set(fw, e2, p2)
+		flecs.Set(fw, e3, p3)
+		// Migrate e2 to a new archetype (Position + Velocity).
+		flecs.Set(fw, e2, Velocity{DX: 99})
+	})
+	var gotP1, gotP2, gotP3 Position
+	var ok1, ok2, ok3 bool
+	w.Read(func(r *flecs.Reader) {
+		gotP1, ok1 = flecs.Get[Position](r, e1)
+		gotP3, ok3 = flecs.Get[Position](r, e3)
+		gotP2, ok2 = flecs.Get[Position](r, e2)
+	})
 	if !ok1 || gotP1 != p1 {
 		t.Fatalf("e1 Position after migration: got (%+v, %v), want (%+v, true)", gotP1, ok1, p1)
 	}
 	if !ok3 || gotP3 != p3 {
 		t.Fatalf("e3 Position after migration: got (%+v, %v), want (%+v, true)", gotP3, ok3, p3)
 	}
-	gotP2, ok2 := flecs.Get[Position](w.R(), e2)
 	if !ok2 || gotP2 != p2 {
 		t.Fatalf("e2 Position after migration: got (%+v, %v), want (%+v, true)", gotP2, ok2, p2)
 	}
@@ -293,81 +386,108 @@ func TestMigrationUpdatesCoLocatedEntityRow(t *testing.T) {
 // e3 is swap-removed into row 1; Get[Position](e3) must still return Position{3}.
 func TestDeleteMiddleUpdatesLastEntityRow(t *testing.T) {
 	w := flecs.New()
-	e1, e2, e3 := w.NewEntity(), w.NewEntity(), w.NewEntity()
-	flecs.Set(w.W(), e1, Position{1, 0})
-	flecs.Set(w.W(), e2, Position{2, 0})
-	flecs.Set(w.W(), e3, Position{3, 0})
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1, e2, e3 = fw.NewEntity(), fw.NewEntity(), fw.NewEntity()
+		flecs.Set(fw, e1, Position{1, 0})
+		flecs.Set(fw, e2, Position{2, 0})
+		flecs.Set(fw, e3, Position{3, 0})
+	})
 
 	w.Delete(e2)
 
-	got, ok := flecs.Get[Position](w.R(), e3)
-	if !ok || got != (Position{3, 0}) {
-		t.Fatalf("e3 Position after middle delete: got (%+v, %v), want ({3,0}, true)", got, ok)
-	}
-	got1, ok1 := flecs.Get[Position](w.R(), e1)
-	if !ok1 || got1 != (Position{1, 0}) {
-		t.Fatalf("e1 Position after middle delete: got (%+v, %v), want ({1,0}, true)", got1, ok1)
-	}
+	w.Read(func(r *flecs.Reader) {
+		got, ok := flecs.Get[Position](r, e3)
+		if !ok || got != (Position{3, 0}) {
+			t.Fatalf("e3 Position after middle delete: got (%+v, %v), want ({3,0}, true)", got, ok)
+		}
+		got1, ok1 := flecs.Get[Position](r, e1)
+		if !ok1 || got1 != (Position{1, 0}) {
+			t.Fatalf("e1 Position after middle delete: got (%+v, %v), want ({1,0}, true)", got1, ok1)
+		}
+	})
 }
 
 // ── GC-pointer component ──────────────────────────────────────────────────────
 
 func TestGCPointerComponentSurvivesGC(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
 	want := "hello world this is a long string that should survive GC"
-	flecs.Set(w.W(), e, WithStr{S: want})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, WithStr{S: want})
+	})
 
 	// Force two GC cycles to trigger any pointer-scanning issues.
 	runtime.GC()
 	runtime.GC()
 
-	got, ok := flecs.Get[WithStr](w.R(), e)
-	if !ok {
-		t.Fatal("Get returned false after GC")
-	}
-	if got.S != want {
-		t.Fatalf("string corrupted after GC: got len=%d, want len=%d", len(got.S), len(want))
-	}
+	w.Read(func(r *flecs.Reader) {
+		got, ok := flecs.Get[WithStr](r, e)
+		if !ok {
+			t.Fatal("Get returned false after GC")
+		}
+		if got.S != want {
+			t.Fatalf("string corrupted after GC: got len=%d, want len=%d", len(got.S), len(want))
+		}
+	})
 }
 
 // ── Tag component (Size==0) ───────────────────────────────────────────────────
 
 func TestTagComponentSetHasRemove(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-
-	if flecs.Has[Tag](w.R(), e) {
-		t.Fatal("Has[Tag] should be false before Set")
-	}
-
-	flecs.Set(w.W(), e, Tag{})
-	if !flecs.Has[Tag](w.R(), e) {
-		t.Fatal("Has[Tag] should be true after Set")
-	}
-
-	// Get on a tag returns (zero, true) — entity has the tag, no data.
-	_, ok := flecs.Get[Tag](w.R(), e)
-	if !ok {
-		t.Fatal("Get[Tag] should return true (tag present)")
-	}
-
-	if !flecs.Remove[Tag](w.W(), e) {
-		t.Fatal("Remove[Tag] returned false for present tag")
-	}
-	if flecs.Has[Tag](w.R(), e) {
-		t.Fatal("Has[Tag] should be false after Remove")
-	}
+	var e flecs.ID
+	// Create entity; Has should be false before Set.
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[Tag](r, e) {
+			t.Fatal("Has[Tag] should be false before Set")
+		}
+	})
+	// Set the tag; after flush Has should be true and Get should return true.
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Tag{}) })
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.Has[Tag](r, e) {
+			t.Fatal("Has[Tag] should be true after Set")
+		}
+		// Get on a tag returns (zero, true) — entity has the tag, no data.
+		_, ok := flecs.Get[Tag](r, e)
+		if !ok {
+			t.Fatal("Get[Tag] should return true (tag present)")
+		}
+	})
+	// Remove the tag; after flush Has should be false.
+	w.Write(func(fw *flecs.Writer) {
+		if !flecs.Remove[Tag](fw, e) {
+			t.Fatal("Remove[Tag] returned false for present tag")
+		}
+	})
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[Tag](r, e) {
+			t.Fatal("Has[Tag] should be false after Remove")
+		}
+	})
 }
 
 // ── Set in-place (same archetype) ────────────────────────────────────────────
 
 func TestSetOverwritesExistingValue(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
-	flecs.Set(w.W(), e, Position{9, 9})
-	got, ok := flecs.Get[Position](w.R(), e)
+	var e flecs.ID
+	// Set initial value then overwrite it; both are deferred and applied together.
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+		flecs.Set(fw, e, Position{9, 9})
+	})
+	// Read after flush; the last Set wins.
+	var got Position
+	var ok bool
+	w.Read(func(r *flecs.Reader) {
+		got, ok = flecs.Get[Position](r, e)
+	})
 	if !ok || got != (Position{9, 9}) {
 		t.Fatalf("overwritten Position: got (%+v, %v), want ({9,9}, true)", got, ok)
 	}
@@ -377,12 +497,18 @@ func TestSetOverwritesExistingValue(t *testing.T) {
 
 func TestRecycledEntityHasNoLeftoverComponents(t *testing.T) {
 	w := flecs.New()
-	e1 := w.NewEntity()
-	flecs.Set(w.W(), e1, Position{7, 8})
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, Position{7, 8})
+	})
 	w.Delete(e1)
 
 	// The recycled entity should start fresh.
-	e2 := w.NewEntity()
+	var e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e2 = fw.NewEntity()
+	})
 	if !w.IsAlive(e2) {
 		t.Fatal("recycled entity should be alive")
 	}
@@ -391,41 +517,60 @@ func TestRecycledEntityHasNoLeftoverComponents(t *testing.T) {
 		t.Fatal("old handle should be dead after recycle")
 	}
 	// New entity should not have Position data from e1.
-	_, ok := flecs.Get[Position](w.R(), e2)
-	if ok {
-		t.Fatal("recycled entity should not have Position from deleted predecessor")
-	}
-	// Get with old handle returns false.
-	_, ok = flecs.Get[Position](w.R(), e1)
-	if ok {
-		t.Fatal("stale handle Get should return false")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, e2)
+		if ok {
+			t.Fatal("recycled entity should not have Position from deleted predecessor")
+		}
+		// Get with old handle returns false.
+		_, ok = flecs.Get[Position](r, e1)
+		if ok {
+			t.Fatal("stale handle Get should return false")
+		}
+	})
 }
 
 // ── Remove all components → empty table ──────────────────────────────────────
 
 func TestRemoveAllComponentsLeavesEntityInEmptyTable(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
-	flecs.Remove[Position](w.W(), e)
+	var e flecs.ID
+	// Set Position; flush so it is applied.
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+	})
+	// Remove Position in a separate Write scope so the table is already populated.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Remove[Position](fw, e)
+	})
 	if !w.IsAlive(e) {
 		t.Fatal("entity should still be alive after removing all components")
 	}
-	_, ok := flecs.Get[Position](w.R(), e)
-	if ok {
-		t.Fatal("Get should return false after removing all components")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, e)
+		if ok {
+			t.Fatal("Get should return false after removing all components")
+		}
+	})
 }
 
 // ── unsafe.Sizeof usage via Set parameter ─────────────────────────────────────
 
 func TestSetUsesUnsafePointerCorrectly(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
 	p := Position{X: 3.14, Y: 2.71}
-	flecs.Set(w.W(), e, p)
-	got, ok := flecs.Get[Position](w.R(), e)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, p)
+	})
+	// Read after Write so the deferred Set has been flushed.
+	var got Position
+	var ok bool
+	w.Read(func(r *flecs.Reader) {
+		got, ok = flecs.Get[Position](r, e)
+	})
 	if !ok || got.X != p.X || got.Y != p.Y {
 		t.Fatalf("pointer round-trip failed: got %+v, want %+v", got, p)
 	}
@@ -446,9 +591,13 @@ func TestEdgeCacheHitOnSecondMigration(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	e1 := w.NewEntity()
+	// Create e1 in empty table.
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) { e1 = fw.NewEntity() })
 	emptyTable := flecs.TableOf(w, e1)
-	flecs.Set(w.W(), e1, Position{1, 2})
+
+	// Migrate e1 to [Position] table via Set; edge cache is populated after flush.
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e1, Position{1, 2}) })
 	posTable := flecs.TableOf(w, e1)
 
 	// After first migration the empty table must have an add-edge for posID.
@@ -461,14 +610,20 @@ func TestEdgeCacheHitOnSecondMigration(t *testing.T) {
 	}
 
 	// Second entity migrates via the cache path.
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, Position{3, 4})
+	var e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, Position{3, 4})
+	})
 	if flecs.TableOf(w, e2) != posTable {
 		t.Fatal("e2 not in same table as e1 after cache-hit migration")
 	}
 
-	got1, _ := flecs.Get[Position](w.R(), e1)
-	got2, _ := flecs.Get[Position](w.R(), e2)
+	var got1, got2 Position
+	w.Read(func(r *flecs.Reader) {
+		got1, _ = flecs.Get[Position](r, e1)
+		got2, _ = flecs.Get[Position](r, e2)
+	})
 	if got1 != (Position{1, 2}) || got2 != (Position{3, 4}) {
 		t.Fatalf("values wrong after cache-hit migration: e1=%+v e2=%+v", got1, got2)
 	}
@@ -480,13 +635,17 @@ func TestEdgeCacheRoundTrip(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 
-	e := w.NewEntity()
+	// Create entity in empty table.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	emptyTable := flecs.TableOf(w, e)
 
-	flecs.Set(w.W(), e, Position{1, 2})
+	// Set Position → migrates to [P] table.
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Position{1, 2}) })
 	posTable := flecs.TableOf(w, e)
 
-	flecs.Remove[Position](w.W(), e)
+	// Remove Position → migrates back.
+	w.Write(func(fw *flecs.Writer) { flecs.Remove[Position](fw, e) })
 	backTable := flecs.TableOf(w, e)
 
 	addDst, addOK := emptyTable.NextOnAdd(posID)
@@ -500,7 +659,7 @@ func TestEdgeCacheRoundTrip(t *testing.T) {
 	}
 
 	// Subsequent Set must hit the cached add-edge.
-	flecs.Set(w.W(), e, Position{5, 6})
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Position{5, 6}) })
 	if flecs.TableOf(w, e) != posTable {
 		t.Fatal("second Set did not land in cached [P] table")
 	}
@@ -513,13 +672,20 @@ func TestEdgeCacheDistinctComponents(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	velID := flecs.RegisterComponent[Velocity](w)
 
-	ep := w.NewEntity()
+	// Create entities in empty table.
+	var ep, ev flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		ep = fw.NewEntity()
+		ev = fw.NewEntity()
+	})
 	emptyTable := flecs.TableOf(w, ep)
-	flecs.Set(w.W(), ep, Position{1, 0})
-	posTable := flecs.TableOf(w, ep)
 
-	ev := w.NewEntity()
-	flecs.Set(w.W(), ev, Velocity{0, 1})
+	// Migrate each entity to its component table.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, ep, Position{1, 0})
+		flecs.Set(fw, ev, Velocity{0, 1})
+	})
+	posTable := flecs.TableOf(w, ep)
 	velTable := flecs.TableOf(w, ev)
 
 	pdst, pok := emptyTable.NextOnAdd(posID)
@@ -542,9 +708,12 @@ func TestEdgeCacheTagComponent(t *testing.T) {
 	w := flecs.New()
 	tagID := flecs.RegisterComponent[Tag](w)
 
-	e := w.NewEntity()
+	// Create entity then migrate to [Tag] table in separate writes.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	emptyTable := flecs.TableOf(w, e)
-	flecs.Set(w.W(), e, Tag{})
+
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Tag{}) })
 	tagTable := flecs.TableOf(w, e)
 
 	dst, ok := emptyTable.NextOnAdd(tagID)
@@ -561,13 +730,15 @@ func TestEdgeCacheNoLeak(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	velID := flecs.RegisterComponent[Velocity](w)
 
-	e := w.NewEntity()
+	// Create entity then add components in separate writes so each migration is applied.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	emptyTable := flecs.TableOf(w, e)
 
-	flecs.Set(w.W(), e, Position{1, 0})
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Position{1, 0}) })
 	posTable := flecs.TableOf(w, e)
 
-	flecs.Set(w.W(), e, Velocity{0, 1})
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Velocity{0, 1}) })
 	pvTable := flecs.TableOf(w, e)
 
 	if _, ok := emptyTable.NextOnAdd(posID); !ok {
@@ -590,17 +761,21 @@ func TestCacheAddEdgeIdempotent(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	velID := flecs.RegisterComponent[Velocity](w)
 
-	// Set up two destination tables by migrating entities.
-	ep := w.NewEntity()
-	flecs.Set(w.W(), ep, Position{})
+	// Create entities and migrate them in separate writes.
+	var ep, ev, newE flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		ep = fw.NewEntity()
+		ev = fw.NewEntity()
+		newE = fw.NewEntity()
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, ep, Position{})
+		flecs.Set(fw, ev, Velocity{})
+	})
 	posTable := flecs.TableOf(w, ep)
-
-	ev := w.NewEntity()
-	flecs.Set(w.W(), ev, Velocity{})
 	velTable := flecs.TableOf(w, ev)
+	emptyTable := flecs.TableOf(w, newE)
 
-	// emptyTable already has +posID→posTable cached by the above Set calls.
-	emptyTable := flecs.TableOf(w, w.NewEntity())
 	dst, ok := emptyTable.NextOnAdd(posID)
 	if !ok {
 		t.Fatal("add-edge should be populated after Set[Position]")
@@ -640,8 +815,10 @@ func TestCacheAddEdgeIdempotent(t *testing.T) {
 func TestTablesFor_singleComponent(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+	})
 
 	tables := w.TablesFor(posID)
 	if len(tables) != 1 {
@@ -653,9 +830,16 @@ func TestTablesFor_twoComponentsMigration(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 	velID := flecs.RegisterComponent[Velocity](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
-	flecs.Set(w.W(), e, Velocity{3, 4})
+	// Use separate Write scopes so each Set applies immediately and creates a
+	// distinct intermediate table (empty→[P], then [P]→[P,V]).
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Velocity{3, 4})
+	})
 
 	posTables := w.TablesFor(posID)
 	// Must contain [Position] table AND [Position,Velocity] table.
@@ -672,10 +856,12 @@ func TestTablesFor_twoComponentsMigration(t *testing.T) {
 func TestTablesFor_sharedTableNoDuplicate(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e1, Position{1, 2})
-	flecs.Set(w.W(), e2, Position{3, 4})
+	w.Write(func(fw *flecs.Writer) {
+		e1 := fw.NewEntity()
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e1, Position{1, 2})
+		flecs.Set(fw, e2, Position{3, 4})
+	})
 
 	tables := w.TablesFor(posID)
 	if len(tables) != 1 {
@@ -688,9 +874,16 @@ func TestTablesFor_sharedTableNoDuplicate(t *testing.T) {
 func TestTablesFor_ghostTableAfterMigration(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2}) // creates [Position] table
-	flecs.Set(w.W(), e, Velocity{3, 4}) // creates [Position,Velocity] table
+	// Use separate Write scopes so each Set applies immediately, creating both
+	// the [Position] and [Position,Velocity] tables as distinct intermediate steps.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2}) // creates [Position] table
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Velocity{3, 4}) // creates [Position,Velocity] table
+	})
 
 	tables := w.TablesFor(posID)
 	// Both tables (including the now-empty [Position] table) must be present.
@@ -702,8 +895,10 @@ func TestTablesFor_ghostTableAfterMigration(t *testing.T) {
 func TestTablesFor_tagComponent(t *testing.T) {
 	w := flecs.New()
 	tagID := flecs.RegisterComponent[Tag](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Tag{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Tag{})
+	})
 
 	tables := w.TablesFor(tagID)
 	if len(tables) != 1 {
@@ -724,9 +919,11 @@ func TestTablesFor_emptyTableNotIndexed(t *testing.T) {
 func TestEachTableFor_earlyStop(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{1, 2})
-	flecs.Set(w.W(), e, Velocity{3, 4}) // creates second table containing posID
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{1, 2})
+		flecs.Set(fw, e, Velocity{3, 4}) // creates second table containing posID
+	})
 
 	// posID is in two tables; stopping after 1 should visit exactly 1.
 	if got := flecs.EachTableForCount(w, posID, 1); got != 1 {

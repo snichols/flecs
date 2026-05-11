@@ -11,18 +11,31 @@ import (
 func ExampleMakePair() {
 	w := flecs.New()
 
-	likes := w.NewEntity() // relationship entity
-	alice := w.NewEntity()
-	pizza := w.NewEntity()
+	var likes, alice, pizza flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		likes = fw.NewEntity() // relationship entity
+		alice = fw.NewEntity()
+		pizza = fw.NewEntity()
 
-	// Construct a pair ID and attach it as a tag.
-	pairID := flecs.MakePair(likes, pizza)
-	flecs.AddID(w.W(), alice, pairID)
+		// Construct a pair ID and attach it as a tag.
+		pairID := flecs.MakePair(likes, pizza)
+		flecs.AddID(fw, alice, pairID)
+	})
 
-	fmt.Println("has pair:", flecs.HasID(w.R(), alice, pairID))
+	w.Read(func(r *flecs.Reader) {
+		pairID := flecs.MakePair(likes, pizza)
+		fmt.Println("has pair:", flecs.HasID(r, alice, pairID))
+	})
 
-	flecs.RemoveID(w.W(), alice, pairID)
-	fmt.Println("after remove:", flecs.HasID(w.R(), alice, pairID))
+	w.Write(func(fw *flecs.Writer) {
+		pairID := flecs.MakePair(likes, pizza)
+		flecs.RemoveID(fw, alice, pairID)
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		pairID := flecs.MakePair(likes, pizza)
+		fmt.Println("after remove:", flecs.HasID(r, alice, pairID))
+	})
 
 	// Output:
 	// has pair: true
@@ -35,20 +48,27 @@ func ExampleAddID() {
 
 	w := flecs.New()
 
-	near := w.NewEntity() // relationship entity
-	bob := w.NewEntity()
-	home := w.NewEntity()
-	office := w.NewEntity()
+	var near, bob, home, office flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		near = fw.NewEntity() // relationship entity
+		bob = fw.NewEntity()
+		home = fw.NewEntity()
+		office = fw.NewEntity()
 
-	// Pair-as-tag: express bob is near home (no data).
-	flecs.AddID(w.W(), bob, flecs.MakePair(near, home))
-	fmt.Println("near home:", flecs.HasID(w.R(), bob, flecs.MakePair(near, home)))
+		// Pair-as-tag: express bob is near home (no data).
+		flecs.AddID(fw, bob, flecs.MakePair(near, home))
 
-	// Pair-with-data: store the distance to office.
-	flecs.SetPair(w.W(), bob, near, office, pairDist{Meters: 500})
-	if d, ok := flecs.GetPair[pairDist](w.R(), bob, near, office); ok {
-		fmt.Printf("dist to office: %.0f m\n", d.Meters)
-	}
+		// Pair-with-data: store the distance to office.
+		flecs.SetPair(fw, bob, near, office, pairDist{Meters: 500})
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		fmt.Println("near home:", flecs.HasID(r, bob, flecs.MakePair(near, home)))
+
+		if d, ok := flecs.GetPair[pairDist](r, bob, near, office); ok {
+			fmt.Printf("dist to office: %.0f m\n", d.Meters)
+		}
+	})
 
 	// Output:
 	// near home: true

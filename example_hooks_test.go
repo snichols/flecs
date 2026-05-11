@@ -18,9 +18,11 @@ func ExampleOnSet() {
 		fmt.Printf("set: %d\n", s.Points)
 	})
 
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, hookScore{Points: 10}) // hook fires
-	flecs.Set(w.W(), e, hookScore{Points: 20}) // hook fires again on overwrite
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, hookScore{Points: 10}) // hook fires
+		flecs.Set(fw, e, hookScore{Points: 20}) // hook fires again on overwrite
+	})
 
 	// Output:
 	// set: 10

@@ -79,9 +79,12 @@ type logType struct{ X, Y float32 }
 // TestLoggerDefault: no panic when performing operations without a logger.
 func TestLoggerDefault(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
 	flecs.RegisterComponent[logType](w)
-	flecs.Set(w.W(), e, logType{1, 2})
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, logType{1, 2})
+	})
 	w.Delete(e)
 }
 
@@ -92,7 +95,7 @@ func TestLoggerSetThenUnset(t *testing.T) {
 	w.SetLogger(slog.New(h))
 	w.SetLogger(nil)
 
-	_ = w.NewEntity()
+	w.Write(func(fw *flecs.Writer) { fw.NewEntity() })
 
 	if h.count() != 0 {
 		t.Errorf("expected 0 records after SetLogger(nil), got %d: %v", h.count(), h.messages())
@@ -122,7 +125,8 @@ func TestLoggerEntityCreated(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 
 	if h.count() != 1 {
 		t.Fatalf("expected 1 record, got %d: %v", h.count(), h.messages())
@@ -143,7 +147,8 @@ func TestLoggerEntityDeleted(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 
 	msgs := h.messages()
@@ -214,8 +219,10 @@ func TestLoggerTableCreated(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, logType{1, 2}) // migration → new table for [logType]
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, logType{1, 2}) // migration → new table for [logType]
+	})
 
 	if !hasMessage(h.messages(), "table created") {
 		t.Errorf("no 'table created' record; messages: %v", h.messages())
@@ -392,7 +399,7 @@ func TestLoggerSnapshotSerialized(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	_ = w.NewEntity()
+	w.Write(func(fw *flecs.Writer) { fw.NewEntity() })
 
 	data, err := w.MarshalJSON()
 	if err != nil {
@@ -408,7 +415,7 @@ func TestLoggerSnapshotSerialized(t *testing.T) {
 // TestLoggerSnapshotLoaded: "snapshot loaded" fires after UnmarshalJSON.
 func TestLoggerSnapshotLoaded(t *testing.T) {
 	w := flecs.New()
-	_ = w.NewEntity()
+	w.Write(func(fw *flecs.Writer) { fw.NewEntity() })
 	data, err := w.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
@@ -430,8 +437,10 @@ func TestLoggerSnapshotLoaded(t *testing.T) {
 // TestLoggerSnapshotEntityCount: "snapshot serialized" and "snapshot loaded" include entities count.
 func TestLoggerSnapshotEntityCount(t *testing.T) {
 	w := flecs.New()
-	_ = w.NewEntity()
-	_ = w.NewEntity()
+	w.Write(func(fw *flecs.Writer) {
+		fw.NewEntity()
+		fw.NewEntity()
+	})
 
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
@@ -465,9 +474,11 @@ func TestLoggerLevelFilter(t *testing.T) {
 	h := &testHandler{minLevel: slog.LevelInfo}
 	w.SetLogger(slog.New(h))
 
-	e := w.NewEntity()
 	flecs.RegisterComponent[logType](w)
-	flecs.Set(w.W(), e, logType{1, 2})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, logType{1, 2})
+	})
 
 	if h.count() != 0 {
 		t.Errorf("expected 0 records at INFO level for DEBUG events, got %d: %v", h.count(), h.messages())
@@ -478,14 +489,19 @@ func TestLoggerLevelFilter(t *testing.T) {
 func TestLoggerNoLogOnReadPaths(t *testing.T) {
 	w := flecs.New()
 	flecs.RegisterComponent[logType](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, logType{1, 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, logType{1, 2})
+	})
 
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
-	_, _ = flecs.Get[logType](w.R(), e)
-	_ = flecs.Has[logType](w.R(), e)
+	w.Read(func(r *flecs.Reader) {
+		_, _ = flecs.Get[logType](r, e)
+		_ = flecs.Has[logType](r, e)
+	})
 	_ = w.IsAlive(e)
 
 	if h.count() != 0 {
@@ -496,14 +512,19 @@ func TestLoggerNoLogOnReadPaths(t *testing.T) {
 // TestLoggerNoLogOnHotPaths: 1000 same-component Set calls fire no log records.
 func TestLoggerNoLogOnHotPaths(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, logType{1, 2}) // initial set; triggers migration
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, logType{1, 2}) // initial set; triggers migration
+	})
 
 	h := &testHandler{minLevel: slog.LevelDebug}
 	w.SetLogger(slog.New(h))
 
 	for range 1000 {
-		flecs.Set(w.W(), e, logType{2, 3}) // re-set on existing component; no migration
+		w.Write(func(fw *flecs.Writer) {
+			flecs.Set(fw, e, logType{2, 3}) // re-set on existing component; no migration
+		})
 	}
 
 	if h.count() != 0 {

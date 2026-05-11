@@ -42,15 +42,20 @@ func TestChildOfDistinctAcrossWorlds(t *testing.T) {
 
 func TestAddIDChildOfPairHasIDAndParentOf(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	child := w.NewEntity()
+	var parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+	})
 
 	pairID := flecs.MakePair(w.ChildOf(), parent)
-	flecs.AddID(w.W(), child, pairID)
+	w.Write(func(fw *flecs.Writer) { flecs.AddID(fw, child, pairID) })
 
-	if !flecs.HasID(w.R(), child, pairID) {
-		t.Fatal("HasID returned false after AddID with ChildOf pair")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, child, pairID) {
+			t.Fatal("HasID returned false after AddID with ChildOf pair")
+		}
+	})
 
 	got, ok := w.ParentOf(child)
 	if !ok {
@@ -63,7 +68,8 @@ func TestAddIDChildOfPairHasIDAndParentOf(t *testing.T) {
 
 func TestParentOfNoChildOf(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 
 	got, ok := w.ParentOf(e)
 	if ok {
@@ -76,7 +82,8 @@ func TestParentOfNoChildOf(t *testing.T) {
 
 func TestParentOfDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 
 	got, ok := w.ParentOf(e)
@@ -92,14 +99,17 @@ func TestParentOfDeadEntity(t *testing.T) {
 
 func TestEachChildThreeChildren(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	c1 := w.NewEntity()
-	c2 := w.NewEntity()
-	c3 := w.NewEntity()
+	var parent, c1, c2, c3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		c1 = fw.NewEntity()
+		c2 = fw.NewEntity()
+		c3 = fw.NewEntity()
 
-	for _, child := range []flecs.ID{c1, c2, c3} {
-		flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	}
+		for _, child := range []flecs.ID{c1, c2, c3} {
+			flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		}
+	})
 
 	seen := make(map[flecs.ID]bool)
 	w.EachChild(parent, func(child flecs.ID) bool {
@@ -119,10 +129,13 @@ func TestEachChildThreeChildren(t *testing.T) {
 
 func TestEachChildNotCalledOnNonChildren(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	other := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	var parent, child, other flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+		other = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	seen := make(map[flecs.ID]bool)
 	w.EachChild(parent, func(id flecs.ID) bool {
@@ -140,11 +153,14 @@ func TestEachChildNotCalledOnNonChildren(t *testing.T) {
 
 func TestEachChildEarlyExit(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	for i := 0; i < 5; i++ {
-		child := w.NewEntity()
-		flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	}
+	var parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		for i := 0; i < 5; i++ {
+			child := fw.NewEntity()
+			flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		}
+	})
 
 	count := 0
 	w.EachChild(parent, func(_ flecs.ID) bool {
@@ -159,7 +175,8 @@ func TestEachChildEarlyExit(t *testing.T) {
 
 func TestEachChildNoChildren(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
+	var parent flecs.ID
+	w.Write(func(fw *flecs.Writer) { parent = fw.NewEntity() })
 
 	called := false
 	w.EachChild(parent, func(_ flecs.ID) bool {
@@ -176,12 +193,15 @@ func TestEachChildNoChildren(t *testing.T) {
 
 func TestCascadeDeleteSingleLevel(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	c1 := w.NewEntity()
-	c2 := w.NewEntity()
+	var parent, c1, c2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		c1 = fw.NewEntity()
+		c2 = fw.NewEntity()
 
-	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	w.Delete(parent)
 
@@ -200,12 +220,15 @@ func TestCascadeDeleteSingleLevel(t *testing.T) {
 
 func TestCascadeDeleteMultiLevel(t *testing.T) {
 	w := flecs.New()
-	grandparent := w.NewEntity()
-	parent := w.NewEntity()
-	child := w.NewEntity()
+	var grandparent, parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		grandparent = fw.NewEntity()
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
 
-	flecs.AddID(w.W(), parent, flecs.MakePair(w.ChildOf(), grandparent))
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, parent, flecs.MakePair(w.ChildOf(), grandparent))
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	w.Delete(grandparent)
 
@@ -224,13 +247,16 @@ func TestCascadeDeleteMultiLevel(t *testing.T) {
 
 func TestCascadeIsolation(t *testing.T) {
 	w := flecs.New()
-	p1 := w.NewEntity()
-	p2 := w.NewEntity()
-	c1 := w.NewEntity()
-	c2 := w.NewEntity()
+	var p1, p2, c1, c2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 = fw.NewEntity()
+		p2 = fw.NewEntity()
+		c1 = fw.NewEntity()
+		c2 = fw.NewEntity()
 
-	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), p1))
-	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), p2))
+		flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), p1))
+		flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), p2))
+	})
 
 	w.Delete(p1)
 
@@ -246,31 +272,40 @@ func TestCascadeIsolation(t *testing.T) {
 
 func TestCascadeScrubsRowData(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
-	flecs.Set[Position](w.W(), child, Position{X: 99, Y: 42})
+	var parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+		flecs.Set[Position](fw, child, Position{X: 99, Y: 42})
+	})
 
 	w.Delete(parent)
 
 	// Recycle the child's former entity slot by allocating a new entity.
-	recycled := w.NewEntity()
+	var recycled flecs.ID
+	w.Write(func(fw *flecs.Writer) { recycled = fw.NewEntity() })
 	_ = recycled
 
 	// The recycled entity must not inherit Position from the deleted child.
-	_, ok := flecs.Get[Position](w.R(), recycled)
-	if ok {
-		t.Fatal("recycled entity must not inherit Position from deleted child")
-	}
+	w.Read(func(r *flecs.Reader) {
+		_, ok := flecs.Get[Position](r, recycled)
+		if ok {
+			t.Fatal("recycled entity must not inherit Position from deleted child")
+		}
+	})
 }
 
 // ── Cascade post-order proxy ──────────────────────────────────────────────────
 
 func TestCascadePostOrder(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	var parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 
 	w.Delete(parent)
 
@@ -287,12 +322,15 @@ func TestCascadePostOrder(t *testing.T) {
 func TestWideCascade(t *testing.T) {
 	const n = 100
 	w := flecs.New()
-	parent := w.NewEntity()
+	var parent flecs.ID
 	children := make([]flecs.ID, n)
-	for i := range children {
-		children[i] = w.NewEntity()
-		flecs.AddID(w.W(), children[i], flecs.MakePair(w.ChildOf(), parent))
-	}
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		for i := range children {
+			children[i] = fw.NewEntity()
+			flecs.AddID(fw, children[i], flecs.MakePair(w.ChildOf(), parent))
+		}
+	})
 	before := w.Count()
 	w.Delete(parent)
 
@@ -314,7 +352,8 @@ func TestWideCascade(t *testing.T) {
 
 func TestDeleteNonParentAlive(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	if !w.Delete(e) {
 		t.Fatal("Delete of alive non-parent entity must return true")
 	}
@@ -322,7 +361,8 @@ func TestDeleteNonParentAlive(t *testing.T) {
 
 func TestDeleteNonParentDead(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 	if w.Delete(e) {
 		t.Fatal("Delete of dead entity must return false")
@@ -333,9 +373,12 @@ func TestDeleteNonParentDead(t *testing.T) {
 
 func TestDeleteSelfCycleTerminates(t *testing.T) {
 	w := flecs.New()
-	p := w.NewEntity()
-	// p is its own parent — deliberate cycle
-	flecs.AddID(w.W(), p, flecs.MakePair(w.ChildOf(), p))
+	var p flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p = fw.NewEntity()
+		// p is its own parent — deliberate cycle
+		flecs.AddID(fw, p, flecs.MakePair(w.ChildOf(), p))
+	})
 
 	w.Delete(p) // must terminate
 

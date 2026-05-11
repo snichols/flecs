@@ -78,6 +78,8 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 func setPairOnWorld[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	w.deferMu.Lock()
 	if w.deferDepth > 0 {
+		// RegisterPairData may panic; unlock via defer so the mutex is always released.
+		defer w.deferMu.Unlock()
 		pairID := MakePair(rel, tgt)
 		pairInfo := component.RegisterPairData[T](w.registry, pairID)
 		if pairInfo.Size > 0 {
@@ -88,7 +90,6 @@ func setPairOnWorld[T any](w *World, e ID, rel ID, tgt ID, v T) {
 		} else {
 			w.deferred.append(cmd{kind: cmdSetPair, entity: e, id: pairID})
 		}
-		w.deferMu.Unlock()
 		return
 	}
 	w.deferMu.Unlock()

@@ -11,8 +11,10 @@ import (
 func TestChangedInitialStateTrue(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -40,8 +42,10 @@ func TestChangedNewTablePostConstruction(t *testing.T) {
 	}
 
 	// Creating an entity with Position creates a new matching table.
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	if !cq.Changed() {
 		t.Fatal("new matching table: Changed() should return true")
@@ -56,8 +60,11 @@ func TestChangedNewTablePostConstruction(t *testing.T) {
 func TestChangedColumnWriteSameArchetype(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -66,7 +73,9 @@ func TestChangedColumnWriteSameArchetype(t *testing.T) {
 	cq.Changed()
 
 	// Write to an entity that already has Position (no migration).
-	flecs.Set(w.W(), e, Position{X: 2})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{X: 2})
+	})
 	if !cq.Changed() {
 		t.Fatal("column write: Changed() should return true")
 	}
@@ -80,8 +89,10 @@ func TestChangedColumnWriteSameArchetype(t *testing.T) {
 func TestChangedAppendNewEntity(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -90,8 +101,10 @@ func TestChangedAppendNewEntity(t *testing.T) {
 	cq.Changed()
 
 	// Add a second entity to the same [Position] table.
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, Position{X: 2})
+	w.Write(func(fw *flecs.Writer) {
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, Position{X: 2})
+	})
 
 	if !cq.Changed() {
 		t.Fatal("new entity in matching table: Changed() should return true")
@@ -108,8 +121,11 @@ func TestChangedMigrateOutOfMatchingArchetype(t *testing.T) {
 	posID := flecs.RegisterComponent[Position](w)
 	_ = flecs.RegisterComponent[Velocity](w)
 
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -119,7 +135,9 @@ func TestChangedMigrateOutOfMatchingArchetype(t *testing.T) {
 
 	// Adding Velocity migrates e from [Pos] to [Pos,Vel].
 	// Source table [Pos] gets a RemoveSwap → changeCount bumped.
-	flecs.Set(w.W(), e, Velocity{DX: 1})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Velocity{DX: 1})
+	})
 
 	if !cq.Changed() {
 		t.Fatal("migration out of matching table: Changed() should return true")
@@ -131,10 +149,13 @@ func TestChangedMigrateOutOfMatchingArchetype(t *testing.T) {
 func TestChangedDeleteEntity(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
-	e2 := w.NewEntity()
-	flecs.Set(w.W(), e2, Position{X: 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, Position{X: 2})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -154,8 +175,11 @@ func TestChangedDeleteEntity(t *testing.T) {
 func TestChangedMultipleSetsCoalesce(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -164,9 +188,11 @@ func TestChangedMultipleSetsCoalesce(t *testing.T) {
 	cq.Changed()
 
 	// Multiple writes — should all coalesce into one Changed()=true.
-	flecs.Set(w.W(), e, Position{X: 2})
-	flecs.Set(w.W(), e, Position{X: 3})
-	flecs.Set(w.W(), e, Position{X: 4})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{X: 2})
+		flecs.Set(fw, e, Position{X: 3})
+		flecs.Set(fw, e, Position{X: 4})
+	})
 
 	if !cq.Changed() {
 		t.Fatal("multiple sets: Changed() should return true")
@@ -184,12 +210,15 @@ func TestChangedTwoQueriesCrossIndependence(t *testing.T) {
 	velID := flecs.RegisterComponent[Velocity](w)
 
 	// Create a [Pos]-only entity and a [Pos,Vel] entity.
-	ePos := w.NewEntity()
-	flecs.Set(w.W(), ePos, Position{X: 1})
+	var ePos, ePosVel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		ePos = fw.NewEntity()
+		flecs.Set(fw, ePos, Position{X: 1})
 
-	ePosVel := w.NewEntity()
-	flecs.Set(w.W(), ePosVel, Position{X: 2})
-	flecs.Set(w.W(), ePosVel, Velocity{DX: 1})
+		ePosVel = fw.NewEntity()
+		flecs.Set(fw, ePosVel, Position{X: 2})
+		flecs.Set(fw, ePosVel, Velocity{DX: 1})
+	})
 
 	q1 := flecs.NewCachedQuery(w, posID)        // matches [Pos] and [Pos,Vel]
 	q2 := flecs.NewCachedQuery(w, posID, velID) // matches only [Pos,Vel]
@@ -201,7 +230,9 @@ func TestChangedTwoQueriesCrossIndependence(t *testing.T) {
 	q2.Changed()
 
 	// Write to ePos — only the [Pos] table is dirty.
-	flecs.Set(w.W(), ePos, Position{X: 99})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, ePos, Position{X: 99})
+	})
 
 	if !q1.Changed() {
 		t.Fatal("q1 (matches [Pos]): should detect the column write on [Pos] table")
@@ -209,6 +240,7 @@ func TestChangedTwoQueriesCrossIndependence(t *testing.T) {
 	if q2.Changed() {
 		t.Fatal("q2 (only [Pos,Vel]): should NOT detect write on [Pos]-only table")
 	}
+	_ = ePosVel
 }
 
 // ── Cross-query independence ──────────────────────────────────────────────────
@@ -216,8 +248,11 @@ func TestChangedTwoQueriesCrossIndependence(t *testing.T) {
 func TestChangedCrossQueryIndependence(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	q1 := flecs.NewCachedQuery(w, posID)
 	q2 := flecs.NewCachedQuery(w, posID)
@@ -229,7 +264,9 @@ func TestChangedCrossQueryIndependence(t *testing.T) {
 	q2.Changed()
 
 	// Mutate — both should see it, independently.
-	flecs.Set(w.W(), e, Position{X: 2})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{X: 2})
+	})
 	if !q1.Changed() {
 		t.Fatal("q1: should see the change")
 	}
@@ -251,8 +288,10 @@ func TestChangedCrossQueryIndependence(t *testing.T) {
 func TestChangedAfterClose(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	cq.Close()
@@ -267,10 +306,13 @@ func TestChangedAfterClose(t *testing.T) {
 
 func TestChangedSetPairTriggersChanged(t *testing.T) {
 	w := flecs.New()
-	rel := w.NewEntity()
+	var rel, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
 
-	e := w.NewEntity()
-	flecs.SetPair[Edge](w.W(), e, rel, e, Edge{Weight: 1.0})
+		e = fw.NewEntity()
+		flecs.SetPair[Edge](fw, e, rel, e, Edge{Weight: 1.0})
+	})
 
 	pairID := flecs.MakePair(rel, e)
 	cq := flecs.NewCachedQuery(w, pairID)
@@ -280,7 +322,9 @@ func TestChangedSetPairTriggersChanged(t *testing.T) {
 	cq.Changed()
 
 	// In-place pair write.
-	flecs.SetPair[Edge](w.W(), e, rel, e, Edge{Weight: 2.0})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.SetPair[Edge](fw, e, rel, e, Edge{Weight: 2.0})
+	})
 	if !cq.Changed() {
 		t.Fatal("SetPair column write: Changed() should return true")
 	}
@@ -294,8 +338,11 @@ func TestChangedSetPairTriggersChanged(t *testing.T) {
 func TestChangedDeferBlockTriggersAfterFlush(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, Position{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
 
 	cq := flecs.NewCachedQuery(w, posID)
 	defer cq.Close()
@@ -305,7 +352,9 @@ func TestChangedDeferBlockTriggersAfterFlush(t *testing.T) {
 
 	// Queue a write inside Defer — it should not trigger Changed until flushed.
 	flecs.DeferBeginForTest(w)
-	flecs.Set(w.W(), e, Position{X: 2})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set(fw, e, Position{X: 2})
+	})
 	// Still inside defer: not flushed yet. Changed() should be false.
 	if cq.Changed() {
 		t.Fatal("inside defer: write not yet flushed, Changed() should be false")

@@ -31,7 +31,8 @@ func TestNameBuiltinAllocation(t *testing.T) {
 
 func TestSetNameGetNameRoundTrip(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "foo")
 	got, ok := w.GetName(e)
 	if !ok || got != "foo" {
@@ -41,7 +42,8 @@ func TestSetNameGetNameRoundTrip(t *testing.T) {
 
 func TestGetNameDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.Delete(e)
 	got, ok := w.GetName(e)
 	if ok || got != "" {
@@ -51,7 +53,8 @@ func TestGetNameDeadEntity(t *testing.T) {
 
 func TestGetNameUnnamedEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	got, ok := w.GetName(e)
 	if ok || got != "" {
 		t.Fatalf("GetName on unnamed entity want (\"\", false), got (%q, %v)", got, ok)
@@ -60,7 +63,8 @@ func TestGetNameUnnamedEntity(t *testing.T) {
 
 func TestGetNameEmptyValueTreatedAsUnnamed(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "")
 	got, ok := w.GetName(e)
 	if ok || got != "" {
@@ -70,7 +74,8 @@ func TestGetNameEmptyValueTreatedAsUnnamed(t *testing.T) {
 
 func TestReSetName(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "foo")
 	w.SetName(e, "bar")
 	got, ok := w.GetName(e)
@@ -83,7 +88,8 @@ func TestReSetName(t *testing.T) {
 
 func TestRemoveName(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "foo")
 	if !w.RemoveName(e) {
 		t.Fatal("RemoveName should return true when entity had a Name")
@@ -96,7 +102,8 @@ func TestRemoveName(t *testing.T) {
 
 func TestRemoveNameOnUnnamed(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	if w.RemoveName(e) {
 		t.Fatal("RemoveName on unnamed entity should return false")
 	}
@@ -106,18 +113,22 @@ func TestRemoveNameOnUnnamed(t *testing.T) {
 
 func TestNameIsRegularComponent(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "thing")
-	if !flecs.Has[flecs.Name](w.R(), e) {
-		t.Fatal("Has[Name] should return true after SetName")
-	}
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.Has[flecs.Name](r, e) {
+			t.Fatal("Has[Name] should return true after SetName")
+		}
+	})
 }
 
 // --- Lookup single segment ---
 
 func TestLookupSingleSegmentRootScope(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "scene")
 	found, ok := w.Lookup("scene")
 	if !ok || found != e {
@@ -130,15 +141,16 @@ func TestLookupSingleSegmentRootScope(t *testing.T) {
 func TestLookupNested(t *testing.T) {
 	w := flecs.New()
 
-	root := w.NewEntity()
+	var root, car, wheel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		root = fw.NewEntity()
+		car = fw.NewEntity()
+		flecs.AddID(fw, car, flecs.MakePair(w.ChildOf(), root))
+		wheel = fw.NewEntity()
+		flecs.AddID(fw, wheel, flecs.MakePair(w.ChildOf(), car))
+	})
 	w.SetName(root, "scene")
-
-	car := w.NewEntity()
-	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
-
-	wheel := w.NewEntity()
-	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	found, ok := w.Lookup("scene.car.wheel")
@@ -161,7 +173,8 @@ func TestLookupMissing(t *testing.T) {
 		t.Fatalf("Lookup(nonexistent) want (0, false), got (%v, %v)", found, ok)
 	}
 
-	root := w.NewEntity()
+	var root flecs.ID
+	w.Write(func(fw *flecs.Writer) { root = fw.NewEntity() })
 	w.SetName(root, "root")
 	found, ok = w.Lookup("root.missing")
 	if ok || found != 0 {
@@ -191,9 +204,12 @@ func TestLookupMalformed(t *testing.T) {
 
 func TestLookupChildBasics(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
+	var parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 	w.SetName(child, "target")
 
 	found, ok := w.LookupChild(parent, "target")
@@ -204,7 +220,8 @@ func TestLookupChildBasics(t *testing.T) {
 
 func TestLookupChildMiss(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
+	var parent flecs.ID
+	w.Write(func(fw *flecs.Writer) { parent = fw.NewEntity() })
 	found, ok := w.LookupChild(parent, "nope")
 	if ok || found != 0 {
 		t.Fatalf("LookupChild miss want (0, false), got (%v, %v)", found, ok)
@@ -213,15 +230,17 @@ func TestLookupChildMiss(t *testing.T) {
 
 func TestLookupChildRootScope(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e, parent, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		parent = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
 	w.SetName(e, "rooted")
-
-	// A child entity should NOT match root scope.
-	parent := w.NewEntity()
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.ChildOf(), parent))
 	w.SetName(child, "rooted") // same name, but has a parent
 
+	// A child entity should NOT match root scope.
 	found, ok := w.LookupChild(0, "rooted")
 	if !ok || found != e {
 		t.Fatalf("LookupChild(0, rooted) want (%v, true), got (%v, %v)", e, found, ok)
@@ -230,11 +249,14 @@ func TestLookupChildRootScope(t *testing.T) {
 
 func TestLookupChildSiblingCollision(t *testing.T) {
 	w := flecs.New()
-	parent := w.NewEntity()
-	c1 := w.NewEntity()
-	c2 := w.NewEntity()
-	flecs.AddID(w.W(), c1, flecs.MakePair(w.ChildOf(), parent))
-	flecs.AddID(w.W(), c2, flecs.MakePair(w.ChildOf(), parent))
+	var parent, c1, c2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		c1 = fw.NewEntity()
+		c2 = fw.NewEntity()
+		flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+	})
 	w.SetName(c1, "twin")
 	w.SetName(c2, "twin")
 
@@ -252,7 +274,8 @@ func TestLookupChildSiblingCollision(t *testing.T) {
 
 func TestPathOfNamedRoot(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "scene")
 	if got := w.PathOf(e); got != "scene" {
 		t.Fatalf("PathOf named root want \"scene\", got %q", got)
@@ -261,13 +284,16 @@ func TestPathOfNamedRoot(t *testing.T) {
 
 func TestPathOfNestedChain(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
+	var root, car, wheel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		root = fw.NewEntity()
+		car = fw.NewEntity()
+		flecs.AddID(fw, car, flecs.MakePair(w.ChildOf(), root))
+		wheel = fw.NewEntity()
+		flecs.AddID(fw, wheel, flecs.MakePair(w.ChildOf(), car))
+	})
 	w.SetName(root, "scene")
-	car := w.NewEntity()
-	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
-	wheel := w.NewEntity()
-	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	if got := w.PathOf(wheel); got != "scene.car.wheel" {
@@ -277,7 +303,8 @@ func TestPathOfNestedChain(t *testing.T) {
 
 func TestPathOfUnnamedEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	if got := w.PathOf(e); got != "" {
 		t.Fatalf("PathOf unnamed entity want \"\", got %q", got)
 	}
@@ -285,7 +312,8 @@ func TestPathOfUnnamedEntity(t *testing.T) {
 
 func TestPathOfDeadEntity(t *testing.T) {
 	w := flecs.New()
-	e := w.NewEntity()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 	w.SetName(e, "gone")
 	w.Delete(e)
 	if got := w.PathOf(e); got != "" {
@@ -295,12 +323,15 @@ func TestPathOfDeadEntity(t *testing.T) {
 
 func TestPathOfUnnamedParentTruncation(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
+	var root, mid, leaf flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		root = fw.NewEntity()
+		mid = fw.NewEntity() // unnamed intermediate
+		flecs.AddID(fw, mid, flecs.MakePair(w.ChildOf(), root))
+		leaf = fw.NewEntity()
+		flecs.AddID(fw, leaf, flecs.MakePair(w.ChildOf(), mid))
+	})
 	w.SetName(root, "scene")
-	mid := w.NewEntity() // unnamed intermediate
-	flecs.AddID(w.W(), mid, flecs.MakePair(w.ChildOf(), root))
-	leaf := w.NewEntity()
-	flecs.AddID(w.W(), leaf, flecs.MakePair(w.ChildOf(), mid))
 	w.SetName(leaf, "wheel")
 
 	// mid is unnamed, so PathOf(leaf) stops at mid and returns just "wheel".
@@ -313,13 +344,16 @@ func TestPathOfUnnamedParentTruncation(t *testing.T) {
 
 func TestPathRoundTrip(t *testing.T) {
 	w := flecs.New()
-	root := w.NewEntity()
+	var root, car, wheel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		root = fw.NewEntity()
+		car = fw.NewEntity()
+		flecs.AddID(fw, car, flecs.MakePair(w.ChildOf(), root))
+		wheel = fw.NewEntity()
+		flecs.AddID(fw, wheel, flecs.MakePair(w.ChildOf(), car))
+	})
 	w.SetName(root, "scene")
-	car := w.NewEntity()
-	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), root))
 	w.SetName(car, "car")
-	wheel := w.NewEntity()
-	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
 	w.SetName(wheel, "wheel")
 
 	path := w.PathOf(wheel)
@@ -333,11 +367,13 @@ func TestPathRoundTrip(t *testing.T) {
 
 func TestNameInheritedViaIsA(t *testing.T) {
 	w := flecs.New()
-	prefab := w.NewEntity()
+	var prefab, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+	})
 	w.SetName(prefab, "proto")
-
-	child := w.NewEntity()
-	flecs.AddID(w.W(), child, flecs.MakePair(w.IsA(), prefab))
 
 	// child has no own Name; Get[Name] walks IsA and finds prefab's name.
 	got, ok := w.GetName(child)
@@ -351,8 +387,11 @@ func TestNameInheritedViaIsA(t *testing.T) {
 func TestNameDoesNotBreakCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	e1 := w.NewEntity()
-	e2 := w.NewEntity()
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+	})
 	if w.Count() != base+2 {
 		t.Fatalf("Count want base+2=%d, got %d", base+2, w.Count())
 	}

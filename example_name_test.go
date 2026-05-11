@@ -12,12 +12,15 @@ func ExampleWorld_name() {
 	w := flecs.New()
 
 	// Build a two-level hierarchy: scene.player.
-	scene := w.NewEntity()
-	player := w.NewEntity()
+	var scene, player flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		scene = fw.NewEntity()
+		player = fw.NewEntity()
 
-	w.SetName(scene, "scene")
-	w.SetName(player, "player")
-	flecs.AddID(w.W(), player, flecs.MakePair(w.ChildOf(), scene))
+		w.SetName(scene, "scene")
+		w.SetName(player, "player")
+		flecs.AddID(fw, player, flecs.MakePair(w.ChildOf(), scene))
+	})
 
 	// PathOf reconstructs the full dot-separated path from the root.
 	fmt.Println(w.PathOf(player))

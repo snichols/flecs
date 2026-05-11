@@ -20,8 +20,10 @@ func Example_pipeline() {
 	w.SetFixedTimestep(1.0)
 
 	tickID := flecs.RegisterComponent[plTick](w)
-	e := w.NewEntity()
-	flecs.Set(w.W(), e, plTick{})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, plTick{})
+	})
 
 	preQ := flecs.NewCachedQuery(w, tickID)
 	flecs.NewSystemInPhase(w, w.PreUpdate(), preQ, func(dt float32, it *flecs.QueryIter) {

@@ -25,8 +25,11 @@ func TestSystemBasicRunsOnProgress(t *testing.T) {
 		}
 	})
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	w.Progress(0)
 	if count != 1 {
@@ -44,10 +47,12 @@ func TestSystemSeesMatchingEntities(t *testing.T) {
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	for _, x := range []float32{1, 2, 3} {
-		e := w.NewEntity()
-		flecs.Set[SPos](w.W(), e, SPos{X: x})
-	}
+	w.Write(func(fw *flecs.Writer) {
+		for _, x := range []float32{1, 2, 3} {
+			e := fw.NewEntity()
+			flecs.Set[SPos](fw, e, SPos{X: x})
+		}
+	})
 
 	var sum float32
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
@@ -70,8 +75,11 @@ func TestSystemDtPassThrough(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	var captured float32
 	flecs.NewSystem(w, q, func(dt float32, it *flecs.QueryIter) {
@@ -97,9 +105,12 @@ func TestSystemVelocityIntegration(t *testing.T) {
 	velID := flecs.RegisterComponent[SVel](w)
 	q := flecs.NewCachedQuery(w, posID, velID)
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{X: 0, Y: 0})
-	flecs.Set[SVel](w.W(), e, SVel{X: 1, Y: 2})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{X: 0, Y: 0})
+		flecs.Set[SVel](fw, e, SVel{X: 1, Y: 2})
+	})
 
 	flecs.NewSystem(w, q, func(dt float32, it *flecs.QueryIter) {
 		for it.Next() {
@@ -118,17 +129,19 @@ func TestSystemVelocityIntegration(t *testing.T) {
 		w.Progress(dt)
 	}
 
-	pos, _ := flecs.Get[SPos](w.R(), e)
-	approxEq := func(a, b float32) bool {
-		d := a - b
-		if d < 0 {
-			d = -d
+	w.Read(func(r *flecs.Reader) {
+		pos, _ := flecs.Get[SPos](r, e)
+		approxEq := func(a, b float32) bool {
+			d := a - b
+			if d < 0 {
+				d = -d
+			}
+			return d < 1e-4
 		}
-		return d < 1e-4
-	}
-	if !approxEq(pos.X, 1*dt*frames) || !approxEq(pos.Y, 2*dt*frames) {
-		t.Fatalf("expected approx {%v %v}, got %v", 1*dt*frames, 2*dt*frames, pos)
-	}
+		if !approxEq(pos.X, 1*dt*frames) || !approxEq(pos.Y, 2*dt*frames) {
+			t.Fatalf("expected approx {%v %v}, got %v", 1*dt*frames, 2*dt*frames, pos)
+		}
+	})
 }
 
 // TestSystemMultipleRunInOrder verifies systems execute in registration order.
@@ -136,8 +149,11 @@ func TestSystemMultipleRunInOrder(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	var order []string
 	for _, name := range []string{"A", "B", "C"} {
@@ -160,8 +176,11 @@ func TestSystemCloseStopsExecution(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	called := false
 	s := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
@@ -198,8 +217,11 @@ func TestSystemCloseDuringDispatch(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	bRan := false
 	var sysB *flecs.System
@@ -281,8 +303,11 @@ func TestSystemDeferBehavior(t *testing.T) {
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+	})
 
 	seenAliveInsideFn := false
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
@@ -311,15 +336,18 @@ func TestSystemMutationDuringIteration(t *testing.T) {
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{X: 1})
+	})
 
 	var seenInside float32
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
 			// Queue a mutation. The outer Defer ensures it's not yet applied.
-			flecs.Set[SPos](w.W(), e, SPos{X: 99})
-			v, _ := flecs.Get[SPos](w.R(), e)
+			flecs.Set[SPos](it.Writer(), e, SPos{X: 99})
+			v, _ := flecs.Get[SPos](it.Reader(), e)
 			seenInside = v.X
 		}
 	})
@@ -329,10 +357,12 @@ func TestSystemMutationDuringIteration(t *testing.T) {
 	if seenInside != 1 {
 		t.Fatalf("expected old value 1 inside fn (mutation deferred), got %v", seenInside)
 	}
-	v, _ := flecs.Get[SPos](w.R(), e)
-	if v.X != 99 {
-		t.Fatalf("expected new value 99 after Progress, got %v", v.X)
-	}
+	w.Read(func(r *flecs.Reader) {
+		v, _ := flecs.Get[SPos](r, e)
+		if v.X != 99 {
+			t.Fatalf("expected new value 99 after Progress, got %v", v.X)
+		}
+	})
 }
 
 // TestSystemMultipleProgressCalls verifies sustained integration over 100 frames.
@@ -342,9 +372,12 @@ func TestSystemMultipleProgressCalls(t *testing.T) {
 	velID := flecs.RegisterComponent[SVel](w)
 	q := flecs.NewCachedQuery(w, posID, velID)
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{})
-	flecs.Set[SVel](w.W(), e, SVel{X: 1, Y: 0})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{})
+		flecs.Set[SVel](fw, e, SVel{X: 1, Y: 0})
+	})
 
 	flecs.NewSystem(w, q, func(dt float32, it *flecs.QueryIter) {
 		for it.Next() {
@@ -362,15 +395,17 @@ func TestSystemMultipleProgressCalls(t *testing.T) {
 		w.Progress(dt)
 	}
 
-	pos, _ := flecs.Get[SPos](w.R(), e)
-	want := float32(1) * dt * frames
-	diff := pos.X - want
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 1e-3 {
-		t.Fatalf("expected X≈%v after %d frames, got %v", want, frames, pos.X)
-	}
+	w.Read(func(r *flecs.Reader) {
+		pos, _ := flecs.Get[SPos](r, e)
+		want := float32(1) * dt * frames
+		diff := pos.X - want
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 1e-3 {
+			t.Fatalf("expected X≈%v after %d frames, got %v", want, frames, pos.X)
+		}
+	})
 }
 
 // TestSystemNoNextCall verifies that a system that never calls it.Next() is safe.
@@ -378,8 +413,11 @@ func TestSystemNoNextCall(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{X: 7})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{X: 7})
+	})
 
 	ran := false
 	flecs.NewSystem(w, q, func(_ float32, _ *flecs.QueryIter) {
@@ -393,10 +431,12 @@ func TestSystemNoNextCall(t *testing.T) {
 		t.Fatal("expected fn to be called")
 	}
 	// Entity position must be unchanged.
-	pos, _ := flecs.Get[SPos](w.R(), e)
-	if pos.X != 7 {
-		t.Fatalf("expected X=7 (unchanged), got %v", pos.X)
-	}
+	w.Read(func(r *flecs.Reader) {
+		pos, _ := flecs.Get[SPos](r, e)
+		if pos.X != 7 {
+			t.Fatalf("expected X=7 (unchanged), got %v", pos.X)
+		}
+	})
 }
 
 // TestSystemPanicPropagates verifies that a panicking system propagates the
@@ -407,11 +447,14 @@ func TestSystemPanicPropagates(t *testing.T) {
 	q := flecs.NewCachedQuery(w, posID)
 
 	// System A sets a value on an entity — queued via the outer Defer.
-	eA := w.NewEntity()
-	flecs.Set[SPos](w.W(), eA, SPos{})
+	var eA flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		eA = fw.NewEntity()
+		flecs.Set[SPos](fw, eA, SPos{})
+	})
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
 		for it.Next() {
-			flecs.Set[SPos](w.W(), eA, SPos{X: 42})
+			flecs.Set[SPos](it.Writer(), eA, SPos{X: 42})
 		}
 	})
 
@@ -426,10 +469,12 @@ func TestSystemPanicPropagates(t *testing.T) {
 			t.Fatal("expected panic from Progress")
 		}
 		// The outer Defer's DeferEnd must have run: A's queued Set should be applied.
-		pos, ok := flecs.Get[SPos](w.R(), eA)
-		if !ok || pos.X != 42 {
-			t.Fatalf("expected A's mutation to be flushed after panic, got %v ok=%v", pos, ok)
-		}
+		w.Read(func(r *flecs.Reader) {
+			pos, ok := flecs.Get[SPos](r, eA)
+			if !ok || pos.X != 42 {
+				t.Fatalf("expected A's mutation to be flushed after panic, got %v ok=%v", pos, ok)
+			}
+		})
 	}()
 
 	w.Progress(0)
@@ -496,8 +541,11 @@ func TestSystemMultipleSystemsSameQuery(t *testing.T) {
 	posID := flecs.RegisterComponent[SPos](w)
 	q := flecs.NewCachedQuery(w, posID)
 
-	e := w.NewEntity()
-	flecs.Set[SPos](w.W(), e, SPos{X: 1})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[SPos](fw, e, SPos{X: 1})
+	})
 
 	var sumA, sumB float32
 	flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {

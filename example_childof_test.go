@@ -12,17 +12,20 @@ func ExampleWorld_childOf() {
 	w := flecs.New()
 
 	// Build: scene → car → wheel.
-	scene := w.NewEntity()
-	car := w.NewEntity()
-	wheel := w.NewEntity()
+	var scene, car, wheel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		scene = fw.NewEntity()
+		car = fw.NewEntity()
+		wheel = fw.NewEntity()
 
-	w.SetName(scene, "scene")
-	w.SetName(car, "car")
-	w.SetName(wheel, "wheel")
+		w.SetName(scene, "scene")
+		w.SetName(car, "car")
+		w.SetName(wheel, "wheel")
 
-	// ChildOf pair attaches a child to its parent.
-	flecs.AddID(w.W(), car, flecs.MakePair(w.ChildOf(), scene))
-	flecs.AddID(w.W(), wheel, flecs.MakePair(w.ChildOf(), car))
+		// ChildOf pair attaches a child to its parent.
+		flecs.AddID(fw, car, flecs.MakePair(w.ChildOf(), scene))
+		flecs.AddID(fw, wheel, flecs.MakePair(w.ChildOf(), car))
+	})
 
 	// Navigate upward.
 	if parent, ok := w.ParentOf(wheel); ok {

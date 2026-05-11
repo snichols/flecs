@@ -20,8 +20,9 @@
 //	type Position struct{ X, Y float32 }
 //
 //	posID := flecs.RegisterComponent[Position](w)
-//	e     := w.NewEntity()
+//	var e flecs.ID
 //	w.Write(func(fw *flecs.Writer) {
+//	    e = fw.NewEntity()
 //	    flecs.Set(fw, e, Position{X: 1, Y: 2})
 //	})
 //	w.Read(func(fr *flecs.Reader) {
@@ -71,7 +72,8 @@
 //
 //	posID  := flecs.RegisterComponent[Position](w)
 //	velID  := flecs.RegisterComponent[Velocity](w)
-//	deadID := w.NewEntity() // tag
+//	var deadID flecs.ID
+//	w.Write(func(fw *flecs.Writer) { deadID = fw.NewEntity() }) // tag
 //
 //	// Match entities with Position but NOT Dead.
 //	q := flecs.NewQueryFromTerms(w,
@@ -130,7 +132,7 @@
 // when the scope exits. This makes it safe to mutate the world during iteration:
 //
 //	w.Write(func(fw *flecs.Writer) {
-//	    flecs.Each1[Position](w.R(), func(e flecs.ID, p *Position) {
+//	    flecs.Each1[Position](fw.AsReader(), func(e flecs.ID, p *Position) {
 //	        if p.X < 0 { fw.Delete(e) } // queued, not immediate
 //	    })
 //	})
@@ -214,9 +216,10 @@
 //
 //	type Edge struct{ Weight float32 }
 //
-//	follows := w.NewEntity()
-//	alice, bob, charlie := w.NewEntity(), w.NewEntity(), w.NewEntity()
+//	var follows, alice, bob, charlie flecs.ID
 //	w.Write(func(fw *flecs.Writer) {
+//	    follows = fw.NewEntity()
+//	    alice, bob, charlie = fw.NewEntity(), fw.NewEntity(), fw.NewEntity()
 //	    flecs.SetPair[Edge](fw, alice, follows, bob, Edge{Weight: 0.8})
 //	    flecs.AddID(fw, alice, flecs.MakePair(follows, charlie)) // tag-only
 //	})
@@ -235,9 +238,10 @@
 // IsA prefab example — a prefab entity is serialized before its instances, and
 // inheritance is restored transparently after UnmarshalJSON:
 //
-//	prefab := w.NewEntity()
-//	inst := w.NewEntity()
+//	var prefab, inst flecs.ID
 //	w.Write(func(fw *flecs.Writer) {
+//	    prefab = fw.NewEntity()
+//	    inst = fw.NewEntity()
 //	    flecs.Set(fw, prefab, Position{X: 1, Y: 1})
 //	    flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
 //	})
@@ -400,10 +404,10 @@
 //	posID := flecs.RegisterComponent[Position](w)
 //	// -> DEBUG msg="component registered" name=pkg.Position id=<n> size=<n>
 //
-//	e := w.NewEntity()
-//	// -> DEBUG msg="entity created" id=<n>
-//
+//	var e flecs.ID
 //	w.Write(func(fw *flecs.Writer) {
+//	    e = fw.NewEntity()
+//	    // -> DEBUG msg="entity created" id=<n>
 //	    flecs.Set(fw, e, Position{1, 2})
 //	})
 //	// -> DEBUG msg="table created" signature_len=1 signature="<id>"
