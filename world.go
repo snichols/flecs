@@ -297,22 +297,8 @@ func Set[T any](w *World, e ID, v T) {
 
 func setImmediate[T any](w *World, e ID, v T) {
 	cid := RegisterComponent[T](w)
-	rec := w.index.Get(e)
-	if rec == nil {
-		panic("flecs: Set called on dead entity")
-	}
-	t := rec.Table
-	if t != nil && t.HasComponent(cid) {
-		t.Set(int(rec.Row), cid, unsafe.Pointer(&v))
-		info, _ := component.LookupByType[T](w.registry)
-		w.fireOnSet(info, cid, e, t.Get(int(rec.Row), cid))
-		return
-	}
-	w.migrate(e, cid, 0, unsafe.Pointer(&v))
-	// OnAdd fired inside migrate; fire OnSet now that the slot is written.
-	rec = w.index.Get(e)
 	info, _ := component.LookupByType[T](w.registry)
-	w.fireOnSet(info, cid, e, rec.Table.Get(int(rec.Row), cid))
+	setImmediateByPtr(w, e, cid, unsafe.Pointer(&v), info)
 }
 
 // Get returns the value of component T on entity e. Checks the entity's own
