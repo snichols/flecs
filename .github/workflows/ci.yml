@@ -33,6 +33,20 @@ jobs:
       - name: Run benchmarks (smoke test)
         run: go test -bench=. -benchmem -benchtime=100ms ./...
 
+  test-exclusive-access:
+    name: Test (exclusive_access debug build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      - name: Run tests with exclusive_access tag
+        run: go test -tags flecs_exclusive_access -race -count=10 ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

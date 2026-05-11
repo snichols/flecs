@@ -81,6 +81,7 @@ func (o *Observer) Unsubscribe() {
 // registered for the same (T, event), and after observers registered earlier.
 // Returns an *Observer handle; call Unsubscribe to cancel.
 func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
+	w.checkExclusiveAccessWrite()
 	id := RegisterComponent[T](w)
 	callback := func(e ID, ptr unsafe.Pointer) {
 		fn(e, (*T)(ptr))
@@ -102,6 +103,7 @@ func Observe[T any](w *World, event EventKind, fn func(e ID, v *T)) *Observer {
 // helper call (AddID, Set, SetPair, Delete paths).
 // Returns an *Observer handle; call Unsubscribe to cancel.
 func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointer)) *Observer {
+	w.checkExclusiveAccessWrite()
 	obs := &Observer{w: w}
 	node := w.addObserverNode(id, event, fn)
 	obs.nodes = append(obs.nodes, node)
@@ -118,6 +120,7 @@ func ObserveID(w *World, id ID, event EventKind, fn func(e ID, ptr unsafe.Pointe
 // function to handle Add, Set, and Remove events. Returns a single *Observer
 // handle; Unsubscribe cancels all subscriptions.
 func Observe2[T any](w *World, events []EventKind, fn func(event EventKind, e ID, v *T)) *Observer {
+	w.checkExclusiveAccessWrite()
 	id := RegisterComponent[T](w)
 	obs := &Observer{w: w}
 	for _, ev := range events {

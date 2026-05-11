@@ -74,6 +74,7 @@ type ComponentStat struct {
 // ComponentStats includes all registered components: data types (Size > 0),
 // tag types (Size == 0), and pair types (both data-bearing and tag-only).
 func (w *World) Stats() Stats {
+	w.checkExclusiveAccessRead()
 	s := Stats{
 		EntityCount:      w.Count(),
 		TableCount:       len(w.tables),
