@@ -205,6 +205,9 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 	if t != nil && t.HasComponent(id) {
 		t.Set(int(rec.Row), id, srcPtr)
 		w.fireOnSet(info, id, e, t.Get(int(rec.Row), id))
+		if srcPtr != nil { // not a tag; a column was written
+			t.BumpChange()
+		}
 		return
 	}
 	w.migrate(e, id, 0, srcPtr)

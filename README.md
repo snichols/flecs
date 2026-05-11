@@ -135,6 +135,7 @@ within a table.
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
+| Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 
 ---
@@ -155,7 +156,7 @@ within a table.
 | NOT / Optional query terms | ✅ (`With`, `Without`, `Maybe`) | ✅ |
 | OR query terms | ✅ (`Or`, `TermOr`, `FieldMaybe` on Or-group IDs) | ✅ |
 | Up/Down traversal in queries | ❌ deferred | ✅ |
-| Change detection | ❌ deferred | ✅ |
+| Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
 | Multi-threading | ❌ deferred | ✅ |
 | REST API / JSON / meta addons | ❌ deferred | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |

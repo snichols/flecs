@@ -483,3 +483,120 @@ func TestEdgeCountBothMaps(t *testing.T) {
 		t.Fatalf("EdgeCount: got %d, want 2", n)
 	}
 }
+
+// ── Change counter ────────────────────────────────────────────────────────────
+
+// ── ColumnBasePtr ─────────────────────────────────────────────────────────────
+
+func TestColumnBasePtr(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+
+	e := flecs.MakeEntity(1, 0)
+	row := tbl.Append(e)
+	p := Position{X: 3, Y: 4}
+	tbl.Set(row, posID, unsafe.Pointer(&p))
+
+	base, elemType, n := tbl.ColumnBasePtr(posID)
+	if base == nil {
+		t.Fatal("ColumnBasePtr: base pointer should not be nil")
+	}
+	if elemType != reflect.TypeFor[Position]() {
+		t.Fatalf("ColumnBasePtr elemType: got %v, want Position", elemType)
+	}
+	if n != 1 {
+		t.Fatalf("ColumnBasePtr n: got %d, want 1", n)
+	}
+	got := *(*Position)(base)
+	if got != p {
+		t.Fatalf("ColumnBasePtr value: got %+v, want %+v", got, p)
+	}
+}
+
+func TestColumnBasePtrTag(t *testing.T) {
+	tbl := table.New([]flecs.ID{markerID}, []*component.TypeInfo{markerInfo()})
+	tbl.Append(flecs.MakeEntity(1, 0))
+
+	base, elemType, n := tbl.ColumnBasePtr(markerID)
+	if base != nil || elemType != nil || n != 0 {
+		t.Fatalf("ColumnBasePtr on tag: want (nil,nil,0), got (%v,%v,%d)", base, elemType, n)
+	}
+}
+
+// ── ColumnReflectSlice ────────────────────────────────────────────────────────
+
+func TestColumnReflectSlice(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	e := flecs.MakeEntity(1, 0)
+	row := tbl.Append(e)
+	p := Position{X: 9, Y: 10}
+	tbl.Set(row, posID, unsafe.Pointer(&p))
+
+	rv := tbl.ColumnReflectSlice(posID)
+	if !rv.IsValid() {
+		t.Fatal("ColumnReflectSlice: expected valid reflect.Value")
+	}
+	if rv.Len() != 1 {
+		t.Fatalf("ColumnReflectSlice Len: got %d, want 1", rv.Len())
+	}
+	got := rv.Index(0).Interface().(Position)
+	if got != p {
+		t.Fatalf("ColumnReflectSlice value: got %+v, want %+v", got, p)
+	}
+}
+
+func TestColumnReflectSliceTag(t *testing.T) {
+	tbl := table.New([]flecs.ID{markerID}, []*component.TypeInfo{markerInfo()})
+	tbl.Append(flecs.MakeEntity(1, 0))
+
+	rv := tbl.ColumnReflectSlice(markerID)
+	if rv.IsValid() {
+		t.Fatal("ColumnReflectSlice on tag: expected invalid reflect.Value")
+	}
+}
+
+// ── Change counter ────────────────────────────────────────────────────────────
+
+func TestChangeCountInitialZero(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	if got := tbl.ChangeCount(); got != 0 {
+		t.Fatalf("fresh table: ChangeCount want 0, got %d", got)
+	}
+}
+
+func TestChangeCountAfterAppend(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	tbl.Append(flecs.MakeEntity(1, 0))
+	if got := tbl.ChangeCount(); got != 1 {
+		t.Fatalf("after Append: ChangeCount want 1, got %d", got)
+	}
+	tbl.Append(flecs.MakeEntity(2, 0))
+	if got := tbl.ChangeCount(); got != 2 {
+		t.Fatalf("after 2nd Append: ChangeCount want 2, got %d", got)
+	}
+}
+
+func TestChangeCountAfterRemoveSwap(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	tbl.Append(flecs.MakeEntity(1, 0))
+	tbl.Append(flecs.MakeEntity(2, 0))
+	before := tbl.ChangeCount()
+	tbl.RemoveSwap(0)
+	if got := tbl.ChangeCount(); got != before+1 {
+		t.Fatalf("after RemoveSwap: ChangeCount want %d, got %d", before+1, got)
+	}
+}
+
+func TestBumpChange(t *testing.T) {
+	tbl := table.New([]flecs.ID{posID}, []*component.TypeInfo{posInfo()})
+	tbl.Append(flecs.MakeEntity(1, 0))
+	before := tbl.ChangeCount()
+	tbl.BumpChange()
+	if got := tbl.ChangeCount(); got != before+1 {
+		t.Fatalf("after BumpChange: ChangeCount want %d, got %d", before+1, got)
+	}
+	tbl.BumpChange()
+	tbl.BumpChange()
+	if got := tbl.ChangeCount(); got != before+3 {
+		t.Fatalf("after 3 BumpChange: ChangeCount want %d, got %d", before+3, got)
+	}
+}

@@ -146,6 +146,7 @@ func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	if t != nil && t.HasComponent(pairID) {
 		t.Set(int(rec.Row), pairID, unsafe.Pointer(&v))
 		w.fireOnSet(pairInfo, pairID, e, t.Get(int(rec.Row), pairID))
+		t.BumpChange() // pair data column write
 		return
 	}
 	w.migrate(e, pairID, 0, unsafe.Pointer(&v))

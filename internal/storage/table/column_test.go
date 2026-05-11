@@ -126,6 +126,44 @@ func TestColumnRemoveSwapOnly(t *testing.T) {
 	}
 }
 
+func TestBaseUnsafeNilColumn(t *testing.T) {
+	var c *Column
+	ptr, typ := c.BaseUnsafe()
+	if ptr != nil || typ != nil {
+		t.Fatalf("nil Column.BaseUnsafe: want (nil, nil), got (%v, %v)", ptr, typ)
+	}
+}
+
+func TestBaseUnsafeEmpty(t *testing.T) {
+	c := newColumn(reflect.TypeFor[colPos](), unsafe.Sizeof(colPos{}))
+	ptr, typ := c.BaseUnsafe()
+	if ptr != nil {
+		t.Fatal("empty column BaseUnsafe: ptr should be nil")
+	}
+	if typ != reflect.TypeFor[colPos]() {
+		t.Fatalf("empty column BaseUnsafe: typ want colPos, got %v", typ)
+	}
+}
+
+func TestBaseUnsafeNonEmpty(t *testing.T) {
+	c := newColumn(reflect.TypeFor[colPos](), unsafe.Sizeof(colPos{}))
+	c.appendZero()
+	val := colPos{X: 42, Y: 7}
+	c.Set(0, unsafe.Pointer(&val))
+
+	ptr, typ := c.BaseUnsafe()
+	if ptr == nil {
+		t.Fatal("non-empty column BaseUnsafe: ptr should not be nil")
+	}
+	if typ != reflect.TypeFor[colPos]() {
+		t.Fatalf("BaseUnsafe typ want colPos, got %v", typ)
+	}
+	got := *(*colPos)(ptr)
+	if got != val {
+		t.Fatalf("BaseUnsafe value: got %+v, want %+v", got, val)
+	}
+}
+
 func TestColumnStaleSlotZeroedAfterRemove(t *testing.T) {
 	// Confirms that a slot beyond len is zeroed after removeSwap and stays zero
 	// when reused by appendZero (important for GC pointer tracing).
