@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.14.0 — 2026-05-11 — Coalescing Deferred Command Queue
+
+Port of C flecs' tagged-union command queue and two-pass entity coalescer.
+Replaces the old `[]func(*World)` closure slice with typed `cmd` structs and a
+bump arena (`cmdArena`), eliminating all per-op heap allocations on the deferred
+path. A per-entity intrusive linked list lets a single `batchForEntity` pass fold
+every Add/Set/Remove for one entity into ONE archetype migration, matching C
+flecs `flecs_cmd_batch_for_entity` semantics.
+
+### Changed
+
+- **`cmd` tagged-union struct** — `cmdKind` discriminant (`cmdAddID`, `cmdRemoveID`,
+  `cmdSetByID`, `cmdSetPair`, `cmdDelete`, `cmdModified`, `cmdSkip`) replaces opaque
+  `func(*World)` closures. 32-byte struct vs C's 56-byte `ecs_cmd_t` (Go omits
+  union-tag overhead and the stage pointer).
+- **`cmdArena` bump allocator** — 1 KiB reusable pages with oversized-payload
+  fallback (bit 31 flag). Mirrors `ecs_stack_t`. Pages are reused across
+  DeferBegin/DeferEnd pairs via `sync.Pool`; zero heap allocation in steady state.
+- **Per-entity intrusive list + sign-flipped head encoding** — mirrors
+  `flecs_cmd_new_batched` in `src/commands.c`. `nextForEntity < 0` identifies the
+  head of a multi-cmd chain; the coalescer iterates the chain without a separate
+  index structure.
+- **`cmdQueue.batchForEntity`** — two-pass coalescer:
+  - Pass 1: walks the chain, simulates the net component set (Add/Remove),
+    rewrites processed cmds to `cmdSkip`, and calls `commitBatch` for ONE migration.
+  - Pass 2: rewrites remaining `cmdSetByID`/`cmdSetPair` to `cmdModified` so that
+    `dispatch` fires `OnSet` at the original submission position (FIFO hook order).
+- **`sync.Pool` queue recycling** — `acquireCmdQueue`/`releaseCmdQueue` return
+  `cmdQueue` objects to a pool after flush; zero allocation per flush in steady state.
+- **Queue swap under mutex** — `DeferEnd` atomically swaps in a fresh `cmdQueue`
+  before releasing the lock, so goroutines that start new Defer scopes during flush
+  write into an independent queue.
+- **`World.commitBatch`** — new internal method performing a multi-component
+  add+remove migration that fires `OnAdd`/`OnRemove` only for genuinely changed IDs.
+
+### Performance
+
+- `BenchmarkDeferSingleSet`: **0 allocs/op**, ~112 ns/op (was 7 allocs/op).
+- `BenchmarkSetExistingComponent`: 0 allocs/op, ~57 ns/op — no regression.
+- `BenchmarkDeferBatchedAdds`: **~15× speedup** vs v0.13.0 closure baseline
+  (7,200 ns/op vs 111,897 ns/op; 0 allocs/op vs 108 allocs/op). 100 deferred
+  AddID calls on one entity produce ONE archetype migration after coalescing.
+  Achieved by replacing per-call map/sort allocations in `batchForEntity` with
+  reusable sorted-slice scratch buffers (`cmdQueue.scratch1/2/3`) and a
+  sort-merge diff algorithm. `sigKeyLookup` uses `unsafe.String` for a
+  zero-allocation table lookup in `commitBatch`'s common path.
+
+### Tests
+
+- `TestDeferCoalescesAddsToOneMigration` — 3 Add cmds → 1 migration, 3 OnAdd events.
+- `TestDeferCoalescesRemoveAfterAdd` — Add+Remove net-zero produces no migration.
+- `TestDeferSetValuePreservedAfterCoalesce` — Set value survives coalesce.
+- `TestDeferHooksFireAtSubmissionPosition` — OnSet fires with per-call value in FIFO order.
+- `TestDeferDeleteCoalescedWithAdd` — Delete wins over preceding Add; entity is gone.
+- `TestDeferSetPairCoalesced` — pair data coalesced and written correctly.
+- `TestDeferArenaMultiPage` — oversized payloads, multi-page allocation.
+- `TestDeferSetZeroSizeTag` / `TestDeferSetZeroSizeTagCoalesced` — zero-size tags.
+- `TestDeferArenaOversized` — payload > 1 KiB page uses oversized fallback.
+- `TestDeferOriginalTestsStillPass` — regression guard for pre-existing defer tests.
+- `TestDeferRemoveNonExistent` — deferred RemoveID for absent component is a no-op.
+- `TestDeferCoalesceToEmpty` — entity losing all components coalesces to empty sig.
+- All pass under `-race -count=5`; coverage ≥ 95.1%.
+
 ## v0.13.0 — 2026-05-11 — Within-System Multi-Threaded Dispatch
 
 Port of C flecs' `multi_threaded` system flag. When a system calls

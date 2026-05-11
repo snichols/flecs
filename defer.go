@@ -52,12 +52,15 @@ func (w *World) DeferEnd() {
 		w.deferMu.Unlock()
 		return
 	}
-	queue := w.deferred
-	w.deferred = nil
+	// Swap out the current queue while holding the mutex so that any goroutine
+	// that starts a new DeferBegin/DeferEnd scope during the flush writes into a
+	// fresh queue and does not race on the one being iterated. Recycle the old
+	// queue via sync.Pool after flush to avoid per-flush heap allocation.
+	q := w.deferred
+	w.deferred = acquireCmdQueue()
 	w.deferMu.Unlock()
-	for _, fn := range queue {
-		fn(w)
-	}
+	q.flush(w)
+	releaseCmdQueue(q)
 }
 
 // Defer wraps fn in DeferBegin/DeferEnd. Even if fn panics, DeferEnd is
