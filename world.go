@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
@@ -46,6 +47,7 @@ type World struct {
 	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
 	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
@@ -268,7 +270,7 @@ func (w *World) deleteOne(e ID) bool {
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		if !w.index.IsAlive(e) {
 			w.deferMu.Unlock()
 			return false
@@ -359,7 +361,7 @@ func RegisterComponent[T any](w *World) ID {
 // CURRENT state, not the deferred future state.
 func Set[T any](w *World, e ID, v T) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setImmediate[T](w, e, captured)
@@ -440,7 +442,7 @@ func Owns[T any](w *World, e ID) bool {
 // currently present on e (at queue time).
 func Remove[T any](w *World, e ID) bool {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		info, ok := component.LookupByType[T](w.registry)
 		if !ok || info.Component == 0 {
 			w.deferMu.Unlock()

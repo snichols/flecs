@@ -127,6 +127,35 @@
 //	    })
 //	})
 //
+// # Concurrency model
+//
+// Outside [World.Progress], the world is single-threaded by convention. For
+// concurrent read access from multiple goroutines, wrap the read window in
+// [World.Readonly]:
+//
+//	w.Readonly(func() {
+//	    var wg sync.WaitGroup
+//	    for range numWorkers {
+//	        wg.Add(1)
+//	        go func() {
+//	            defer wg.Done()
+//	            flecs.Each1[Position](w, func(e flecs.ID, p *Position) { ... })
+//	        }()
+//	    }
+//	    wg.Wait()
+//	}) // deferred writes (if any) are applied here
+//
+// While the window is open, any goroutine that calls a mutator (Set, Remove,
+// Delete, AddID, RemoveID, SetPair, SetByID) has its operation transparently
+// enqueued in the deferred-command queue rather than applied immediately.
+// On [World.ReadonlyEnd] (or when the [World.Readonly] wrapper returns), all
+// enqueued operations are flushed on the calling goroutine.
+//
+// Readers take no locks — the readonly flag guarantees nothing mutates world
+// state during the window, so all ECS tables are safe to read concurrently.
+// This avoids the Each+Defer+Delete deadlock that a naive RWMutex approach
+// would produce.
+//
 // # Dynamic Value Access
 //
 // [World.GetByID] and [World.SetByID] provide runtime-dynamic access when only

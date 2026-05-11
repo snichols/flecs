@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — Readonly Concurrency Window
+
+Faithful Go port of the C flecs readonly concurrency model (`ecs_readonly_begin` /
+`ecs_readonly_end`). No mutex on world state; concurrency is enforced by an
+atomic flag plus deferred-command discipline. No breaking changes.
+
+### Added
+
+- **`(*World).ReadonlyBegin()`** — opens a readonly window. Atomically routes all
+  subsequent structural mutations (Set, Remove, Delete, AddID, RemoveID, SetPair,
+  SetByID) through the deferred-command queue so that concurrent readers see a
+  stable snapshot of world state.
+- **`(*World).ReadonlyEnd()`** — closes the window and flushes all deferred
+  mutations on the calling goroutine.
+- **`(*World).Readonly(fn func())`** — convenience wrapper around
+  `ReadonlyBegin`/`ReadonlyEnd` with a deferred `ReadonlyEnd` for panic-safety.
+- **`readonly atomic.Bool` field on `*World`** — the flag checked by every
+  mutator. One extra `atomic.Bool.Load()` per mutator on the non-deferred path
+  (≈1 ns; within 2% of v0.10.0 on `BenchmarkSetExistingComponent`).
+
+### Changed
+
+- **All mutators** (`Delete`, `Set`, `Remove`, `AddID`, `RemoveID`, `SetPair`,
+  `SetByID`) — the defer-check condition `w.deferDepth > 0` is extended to
+  `w.deferDepth > 0 || w.readonly.Load()`, evaluated under `deferMu`.
+- **REST GET handlers** (`/stats`, `/components`, `/components/{id}`,
+  `/entities`, `/entities/{id}`, `/snapshot GET`) — bodies wrapped in
+  `w.Readonly(...)` so concurrent read requests get a consistent snapshot.
+
+### Documentation
+
+- `doc.go`: new "Concurrency model" section explaining the readonly window
+  pattern and when to use it.
+- `README.md`: "Concurrency model" paragraph in the core-concepts section.
+
+---
+
 ## v0.10.0 — 2026-05-11 — Parallel System Dispatch
 
 Opt-in parallel system dispatch within a phase. Systems flagged as

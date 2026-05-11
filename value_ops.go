@@ -156,7 +156,7 @@ func getViaIsAByID(w *World, e ID, id ID, info *component.TypeInfo, seen map[ID]
 // addressable for the unsafe column write.
 func (w *World) SetByID(e ID, id ID, v any) {
 	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	if w.deferDepth > 0 || w.readonly.Load() {
 		captured := v
 		w.deferred = append(w.deferred, func(w *World) {
 			setByIDImmediate(w, e, id, captured)

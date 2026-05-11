@@ -102,21 +102,26 @@ func writeError(rw http.ResponseWriter, status int, msg string) {
 
 func restStats(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		writeJSON(rw, http.StatusOK, w.Stats())
+		var stats Stats
+		w.Readonly(func() { stats = w.Stats() })
+		writeJSON(rw, http.StatusOK, stats)
 	}
 }
 
 func restComponents(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		ids := w.Components()
-		out := make([]componentInfoResponse, 0, len(ids))
-		for _, id := range ids {
-			info, ok := w.ComponentInfo(id)
-			if !ok {
-				continue
+		var out []componentInfoResponse
+		w.Readonly(func() {
+			ids := w.Components()
+			out = make([]componentInfoResponse, 0, len(ids))
+			for _, id := range ids {
+				info, ok := w.ComponentInfo(id)
+				if !ok {
+					continue
+				}
+				out = append(out, toComponentInfoResponse(info))
 			}
-			out = append(out, toComponentInfoResponse(info))
-		}
+		})
 		writeJSON(rw, http.StatusOK, out)
 	}
 }
@@ -128,8 +133,10 @@ func restComponentByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
-		info, ok := w.ComponentInfo(id)
-		if !ok {
+		var info ComponentInfo
+		var found bool
+		w.Readonly(func() { info, found = w.ComponentInfo(id) })
+		if !found {
 			writeError(rw, http.StatusNotFound, "component not found")
 			return
 		}
@@ -148,17 +155,20 @@ func restEntities(w *World) http.HandlerFunc {
 			}
 			limit = n
 		}
-		out := make([]entityListItem, 0, limit)
-		w.EachEntity(func(e ID) bool {
-			if len(out) >= limit {
-				return false
-			}
-			item := entityListItem{ID: strconv.FormatUint(uint64(e), 10)}
-			if name, ok := w.GetName(e); ok {
-				item.Name = name
-			}
-			out = append(out, item)
-			return true
+		var out []entityListItem
+		w.Readonly(func() {
+			out = make([]entityListItem, 0, limit)
+			w.EachEntity(func(e ID) bool {
+				if len(out) >= limit {
+					return false
+				}
+				item := entityListItem{ID: strconv.FormatUint(uint64(e), 10)}
+				if name, ok := w.GetName(e); ok {
+					item.Name = name
+				}
+				out = append(out, item)
+				return true
+			})
 		})
 		writeJSON(rw, http.StatusOK, out)
 	}
@@ -171,40 +181,48 @@ func restEntityByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
-		if !w.IsAlive(id) {
-			writeError(rw, http.StatusNotFound, "entity not found")
-			return
-		}
-		resp := entityDetailResponse{
-			ID:         strconv.FormatUint(uint64(id), 10),
-			Components: []componentInfoResponse{},
-		}
-		if name, nameOK := w.GetName(id); nameOK {
-			resp.Name = name
-		}
-		if parent, parentOK := w.ParentOf(id); parentOK {
-			resp.Parent = strconv.FormatUint(uint64(parent), 10)
-		}
-		w.EachPrefab(id, func(prefab ID) bool {
-			resp.Prefabs = append(resp.Prefabs, strconv.FormatUint(uint64(prefab), 10))
-			return true
-		})
-		childOfIdx := w.ChildOf().Index()
-		isAIdx := w.IsA().Index()
-		for _, cid := range w.EntityComponents(id) {
-			if cid.IsPair() {
-				firstIdx := cid.First().Index()
-				if firstIdx == childOfIdx || firstIdx == isAIdx {
+		var resp entityDetailResponse
+		var alive bool
+		w.Readonly(func() {
+			if !w.IsAlive(id) {
+				return
+			}
+			alive = true
+			resp = entityDetailResponse{
+				ID:         strconv.FormatUint(uint64(id), 10),
+				Components: []componentInfoResponse{},
+			}
+			if name, nameOK := w.GetName(id); nameOK {
+				resp.Name = name
+			}
+			if parent, parentOK := w.ParentOf(id); parentOK {
+				resp.Parent = strconv.FormatUint(uint64(parent), 10)
+			}
+			w.EachPrefab(id, func(prefab ID) bool {
+				resp.Prefabs = append(resp.Prefabs, strconv.FormatUint(uint64(prefab), 10))
+				return true
+			})
+			childOfIdx := w.ChildOf().Index()
+			isAIdx := w.IsA().Index()
+			for _, cid := range w.EntityComponents(id) {
+				if cid.IsPair() {
+					firstIdx := cid.First().Index()
+					if firstIdx == childOfIdx || firstIdx == isAIdx {
+						continue
+					}
+					resp.Pairs = append(resp.Pairs, strconv.FormatUint(uint64(cid), 10))
 					continue
 				}
-				resp.Pairs = append(resp.Pairs, strconv.FormatUint(uint64(cid), 10))
-				continue
+				info, infoOK := w.ComponentInfo(cid)
+				if !infoOK {
+					continue
+				}
+				resp.Components = append(resp.Components, toComponentInfoResponse(info))
 			}
-			info, infoOK := w.ComponentInfo(cid)
-			if !infoOK {
-				continue
-			}
-			resp.Components = append(resp.Components, toComponentInfoResponse(info))
+		})
+		if !alive {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
 		}
 		writeJSON(rw, http.StatusOK, resp)
 	}
@@ -212,9 +230,11 @@ func restEntityByID(w *World) http.HandlerFunc {
 
 func restSnapshotGet(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		data, err := w.MarshalJSON()
-		if err != nil {
-			writeError(rw, http.StatusInternalServerError, err.Error())
+		var data []byte
+		var marshalErr error
+		w.Readonly(func() { data, marshalErr = w.MarshalJSON() })
+		if marshalErr != nil {
+			writeError(rw, http.StatusInternalServerError, marshalErr.Error())
 			return
 		}
 		rw.Header().Set("Content-Type", "application/json")
