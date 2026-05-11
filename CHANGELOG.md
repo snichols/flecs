@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1 (unreleased)
+## v0.1.0 — 2026-05-10
 
 Initial Go port of [flecs](https://github.com/SanderMertens/flecs). No breaking
 changes from prior versions (this is the first public release).
@@ -29,3 +29,16 @@ changes from prior versions (this is the first public release).
   accumulator; `Time`, `FrameCount`.
 - Zero third-party dependencies (pure stdlib).
 - >97% test coverage on the root package.
+
+### Performance
+
+- `Field[T]` zero-alloc fast path via `unsafe.Slice` over typed column memory.
+- `unsafe.Slice` typed-slice view in queries; no `reflect.Value.Interface()` boxing.
+- Observer dispatch with no per-fire snapshot allocation (deferred-removal at the node).
+- Lazy `seen` map allocation in `Get[T]`/`Has[T]` IsA fallback; zero alloc on the
+  common no-IsA path.
+- Archetype migration zero-alloc on edge-cache hits (`migrate()` defers signature
+  allocation until cache miss).
+- Column logical-length tracking via internal counter; no `reflect.Value.Slice`
+  allocation on `Append`/`RemoveSwap` hot paths.
+- Benchmark baseline + before/after measurements captured in [BENCH.md](BENCH.md).
