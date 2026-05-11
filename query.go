@@ -103,7 +103,7 @@ type Query struct {
 // The provided ids are copied and sorted; the caller's slice is not retained.
 func NewQuery(w *World, ids ...ID) *Query {
 	if w != nil {
-		w.checkExclusiveAccessRead()
+		w.checkExclusiveAccessWrite()
 	}
 	if w == nil {
 		panic("flecs: NewQuery: world must not be nil")
@@ -149,7 +149,7 @@ func NewQuery(w *World, ids ...ID) *Query {
 // last (by ID). The caller's slice is not retained.
 func NewQueryFromTerms(w *World, terms ...Term) *Query {
 	if w != nil {
-		w.checkExclusiveAccessRead()
+		w.checkExclusiveAccessWrite()
 	}
 	if w == nil {
 		panic("flecs: NewQueryFromTerms: world must not be nil")

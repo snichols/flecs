@@ -129,3 +129,78 @@ func TestExclusiveAccessNestedBeginPanics(t *testing.T) {
 		t.Fatal("expected second ExclusiveAccessBegin to panic, but it did not")
 	}
 }
+
+// TestExclusiveAccessProgressFromOtherGoroutinePanics verifies that calling
+// Progress from a goroutine other than the owner panics.
+func TestExclusiveAccessProgressFromOtherGoroutinePanics(t *testing.T) {
+	w := flecs.New()
+
+	w.ExclusiveAccessBegin("owner")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	panicked := false
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		w.Progress(0.016)
+	}()
+	wg.Wait()
+
+	w.ExclusiveAccessEnd(false)
+
+	if !panicked {
+		t.Fatal("expected Progress from non-owner goroutine to panic, but none occurred")
+	}
+}
+
+// TestExclusiveAccessReadEntryPointsRespectOwnership verifies that IsAlive,
+// Count, and SystemCount panic from a non-owner goroutine while owned, and
+// succeed after End.
+func TestExclusiveAccessReadEntryPointsRespectOwnership(t *testing.T) {
+	w := flecs.New()
+	e := w.NewEntity()
+
+	mustPanicFromGoroutine := func(name string, fn func()) {
+		t.Helper()
+		var wg sync.WaitGroup
+		wg.Add(1)
+		panicked := false
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+				}
+			}()
+			fn()
+		}()
+		wg.Wait()
+		if !panicked {
+			t.Fatalf("%s: expected panic from non-owner goroutine, but none occurred", name)
+		}
+	}
+
+	w.ExclusiveAccessBegin("owner")
+
+	mustPanicFromGoroutine("IsAlive", func() { w.IsAlive(e) })
+	mustPanicFromGoroutine("Count", func() { w.Count() })
+	mustPanicFromGoroutine("SystemCount", func() { w.SystemCount() })
+
+	w.ExclusiveAccessEnd(false)
+
+	// After End, same calls from any goroutine must succeed.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = w.IsAlive(e)
+		_ = w.Count()
+		_ = w.SystemCount()
+	}()
+	wg.Wait()
+}

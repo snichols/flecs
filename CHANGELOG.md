@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Exclusive Access Checking (debug build)
+## Unreleased — v0.12.0 — Exclusive Access Checking (debug build)
 
 Faithful port of the C flecs `FLECS_EXCLUSIVE_ACCESS` machinery. A debug-only
 safety net that catches "another goroutine touched the world while you owned it"
@@ -27,6 +27,21 @@ builds (compile-time constant false eliminates all checks).
   One `atomic.Load` per call; dead-coded away in release builds.
 - **CI job `test-exclusive-access`** — runs `go test -tags flecs_exclusive_access
   -race -count=10 ./...` so the debug build never bitrotS.
+- **`Progress` and `RegisterComponent` / `NewSystem*` / `NewQuery*` / `NewCachedQuery*`**
+  now Write-checked: any of these called from a non-owner goroutine during
+  exclusive access panics with `ErrExclusiveAccessViolation`.
+- **`IsAlive` / `Count` / `SystemCount*` / `TablesFor` / `EachTableFor`**
+  now Read-checked: panics when called from a non-owner goroutine while the
+  world is exclusively owned.
+- **CI job `lint-exclusive-access`** — runs golangci-lint with
+  `--build-tags flecs_exclusive_access` so both default and debug builds are
+  lint-clean in CI.
+
+### Notes
+
+- `goid()` uses `runtime.Stack` parsing rather than `//go:linkname` to
+  `runtime.getg()`. Simpler, no `unsafe`, no fragile linkname. Costs ~µs per
+  mutator in debug builds only; release builds are unaffected.
 
 ## v0.11.0 — 2026-05-11 — Readonly Concurrency Window
 
