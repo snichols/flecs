@@ -17,6 +17,7 @@ package table
 
 import (
 	"reflect"
+	"runtime"
 	"sort"
 	"unsafe"
 
@@ -198,6 +199,29 @@ func (t *Table) CacheAddEdge(id ids.ID, dst *Table) {
 	t.addEdges[id] = dst
 }
 
+// ColumnBasePtr returns the base pointer of column id's backing array, the
+// element's reflect.Type, and the current row count.
+// Returns (nil, nil, 0) for tag columns (Size==0).
+//
+// The pointer is invalidated by any subsequent Append (may grow the column) or
+// RemoveSwap (may reorder rows). Do not retain it across those operations.
+//
+// Panics if id is not in the table's signature.
+func (t *Table) ColumnBasePtr(id ids.ID) (unsafe.Pointer, reflect.Type, int) {
+	idx, ok := t.colIndex[id]
+	if !ok {
+		panic("table: ColumnBasePtr: id not in signature")
+	}
+	col := t.columns[idx]
+	if col == nil {
+		return nil, nil, 0 // tag
+	}
+	n := len(t.entities)
+	base, elemType := col.BaseUnsafe()
+	runtime.KeepAlive(col)
+	return base, elemType, n
+}
+
 // ColumnReflectSlice returns the backing slice for the column of id, sliced to
 // the current row count. The returned reflect.Value has kind Slice and element
 // type equal to the registered Go type for that component.
@@ -207,6 +231,8 @@ func (t *Table) CacheAddEdge(id ids.ID, dst *Table) {
 //
 // The value is invalidated by any subsequent Append (may grow the column) or
 // RemoveSwap (may reorder rows). Do not cache across those operations.
+//
+// Deprecated: use ColumnBasePtr for zero-alloc access. Retained for one cycle.
 //
 // Panics if id is not in the table's signature.
 func (t *Table) ColumnReflectSlice(id ids.ID) reflect.Value {

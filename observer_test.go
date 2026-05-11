@@ -107,10 +107,11 @@ func TestObserveUnsubscribeIdempotent(t *testing.T) {
 	}
 }
 
-// ── Unsubscribe during dispatch: deferred removal ────────────────────────────
+// ── Unsubscribe during dispatch: immediate removal ───────────────────────────
 //
-// A fires, A's callback calls obs2.Unsubscribe(). Deferred-removal contract:
-// A fires; B (obs2) still fires for this event; B does NOT fire on the next Set.
+// A fires, A's callback calls obs2.Unsubscribe(). Immediate-removal semantics:
+// B is not yet visited when removed=true is set, so B is skipped in this
+// dispatch and all future dispatches.
 
 func TestObserveUnsubscribeDuringDispatch(t *testing.T) {
 	w := flecs.New()
@@ -126,14 +127,16 @@ func TestObserveUnsubscribeDuringDispatch(t *testing.T) {
 	})
 
 	e := w.NewEntity()
-	flecs.Set[Position](w, e, Position{1, 2}) // A fires, calls obs2.Unsubscribe(); B still fires
+	// A fires first; its callback marks B as removed before B is visited.
+	// B is therefore skipped in this dispatch.
+	flecs.Set[Position](w, e, Position{1, 2})
 
-	if len(order) != 2 || order[0] != "A" || order[1] != "B" {
-		t.Fatalf("first Set: want [A B], got %v", order)
+	if len(order) != 1 || order[0] != "A" {
+		t.Fatalf("first Set: want [A], got %v", order)
 	}
 
 	order = order[:0]
-	flecs.Set[Position](w, e, Position{3, 4}) // B must NOT fire (removed)
+	flecs.Set[Position](w, e, Position{3, 4}) // B still not fires
 
 	if len(order) != 1 || order[0] != "A" {
 		t.Fatalf("second Set: want [A], got %v", order)

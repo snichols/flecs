@@ -95,8 +95,8 @@ func HasID(w *World, e ID, id ID) bool {
 	if rec.Table != nil && rec.Table.HasComponent(id) {
 		return true
 	}
-	seen := map[ID]struct{}{e: {}}
-	return hasViaIsA(w, e, id, seen)
+	// seen is allocated lazily inside hasViaIsA when an IsA pair is found.
+	return hasViaIsA(w, e, id, nil)
 }
 
 // OwnsID reports whether entity e locally owns the component or tag identified

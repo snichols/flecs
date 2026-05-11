@@ -51,9 +51,12 @@ type Observer struct {
 
 // Unsubscribe removes all subscriptions held by this observer. Idempotent:
 // safe to call multiple times. After Unsubscribe returns, this observer will
-// not fire again. If Unsubscribe is called from within a callback during an
-// active dispatch, the removal is deferred: all observers that were active
-// at the start of that dispatch still fire for the current event.
+// not fire again.
+//
+// If Unsubscribe is called from within a callback during an active dispatch,
+// the removal takes effect immediately: observers not yet visited in the
+// current dispatch iteration are skipped. Observers that have already fired
+// in the current event are unaffected (they have already been called).
 func (o *Observer) Unsubscribe() {
 	for _, n := range o.nodes {
 		n.removed = true
@@ -130,26 +133,20 @@ func (w *World) addObserverNode(id ID, event EventKind, callback func(e ID, ptr 
 }
 
 // dispatchObservers fires all active observers for (id, event) in registration
-// order. The active set is captured at the start of dispatch: observers that
-// call Unsubscribe during a callback are marked removed but still fire for
-// the current event (deferred-removal contract).
+// order. Observers with removed=true are skipped. An observer that calls
+// Unsubscribe during its callback takes effect immediately: not-yet-visited
+// observers in the same dispatch are skipped; already-fired observers are
+// unaffected.
 func (w *World) dispatchObservers(id ID, event EventKind, e ID, ptr unsafe.Pointer) {
 	if w.observers == nil {
 		return
 	}
 	key := observerKey{id: id, event: event}
 	nodes := w.observers[key]
-	if len(nodes) == 0 {
-		return
-	}
-	// Snapshot active nodes before any callback can modify the removed flags.
-	active := make([]*observerNode, 0, len(nodes))
 	for _, n := range nodes {
-		if !n.removed {
-			active = append(active, n)
+		if n.removed {
+			continue
 		}
-	}
-	for _, n := range active {
 		n.callback(e, ptr)
 	}
 }
