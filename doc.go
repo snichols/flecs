@@ -271,5 +271,29 @@
 //	    fmt.Printf("  %s: %d tables, %d entities\n", c.Name, c.TableCount, c.EntityCount)
 //	}
 //
+// # REST API
+//
+// [NewRESTHandler] returns an [http.Handler] that exposes world inspection and
+// snapshot endpoints over HTTP. Wire it into your own [http.Server]:
+//
+//	w := flecs.New()
+//	// ... populate world
+//
+//	server := &http.Server{Addr: ":8080", Handler: flecs.NewRESTHandler(w)}
+//	go server.ListenAndServe()
+//
+//	// GET  /stats              → world stats JSON
+//	// GET  /components         → all registered component infos
+//	// GET  /components/{id}    → single component info by uint64 ID
+//	// GET  /entities           → alive entities; optional ?limit=N (default 1000, max 10000)
+//	// GET  /entities/{id}      → entity detail (name, components, parent, prefabs, pairs)
+//	// GET  /snapshot           → full world MarshalJSON output
+//	// PUT  /snapshot           → load a snapshot into the world (replaces state; not transactional)
+//
+// Concurrency: all GET endpoints treat the world as read-only; they must not
+// run while the world is being mutated. PUT /snapshot mutates world state and
+// must not run concurrently with any other world operation. Add your own mutex
+// if multiple goroutines share the world.
+//
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs

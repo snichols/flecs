@@ -37,7 +37,7 @@ func (w *World) EachChild(parent ID, fn func(child ID) bool) {
 // Returns (0, false) if e is not alive or has no ChildOf relationship.
 func (w *World) ParentOf(e ID) (ID, bool) {
 	rec := w.index.Get(e)
-	if rec == nil {
+	if rec == nil || rec.Table == nil {
 		return 0, false
 	}
 	return firstPairTarget(rec.Table.Type(), w.childOfID.Index())

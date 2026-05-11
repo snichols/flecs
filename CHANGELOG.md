@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Minimal read-only REST API addon — exposes world inspection and snapshot
+save/load over HTTP so external tools can introspect a running flecs world.
+No breaking changes.
+
+### Added
+
+- **`NewRESTHandler(w *World) http.Handler`** — returns a configured
+  `*http.ServeMux` wired to the given world. Users provide their own
+  `*http.Server`. Routes:
+  - `GET /stats` — world stats JSON (`Stats`)
+  - `GET /components` — all registered component infos
+  - `GET /components/{id}` — single component by uint64 ID (404 if not registered)
+  - `GET /entities` — alive entity list; optional `?limit=N` (default 1000, max 10000; 400 if out of range)
+  - `GET /entities/{id}` — entity detail: name, components, parent, prefabs, pairs (404 if dead)
+  - `GET /snapshot` — full `World.MarshalJSON()` output
+  - `PUT /snapshot` — load a snapshot into the world; 204 on success, 400 on parse error. **Warning**: replaces world state; not transactional.
+- Routing via stdlib `http.ServeMux` with Go 1.22+ path patterns (`r.PathValue`). No external router dependency.
+- Bug fix: `getViaIsA`, `hasViaIsA`, `PrefabOf`, `EachPrefab`, and `ParentOf` now return the zero value / false instead of panicking when called on entities whose archetype record has a nil table (component entities registered via `RegisterComponent`).
+
+---
+
 ## v0.7.0 — 2026-05-11
 
 Change detection on cached queries for delta-style systems. No breaking

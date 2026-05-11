@@ -137,6 +137,7 @@ within a table.
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
+| REST API | `NewRESTHandler(w)` — read-only HTTP inspection + snapshot save/load (`GET /stats`, `/components`, `/entities`, `/snapshot`; `PUT /snapshot`) |
 
 ---
 
@@ -158,7 +159,7 @@ within a table.
 | Up/Down traversal in queries | ❌ deferred | ✅ |
 | Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
 | Multi-threading | ❌ deferred | ✅ |
-| REST API / JSON / meta addons | ❌ deferred | ✅ |
+| REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |
 
 See [ROADMAP.md](ROADMAP.md) for the full list of deferred work.
