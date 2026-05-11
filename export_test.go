@@ -44,3 +44,10 @@ func EachTableForCount(w *World, componentID ID, stopAfter int) int {
 func CachedQuerySliceLen(w *World) int {
 	return len(w.cachedQueries)
 }
+
+// SystemSliceLen returns the length of the world's internal systems slice,
+// including entries that have been marked removed but not yet compacted.
+// For tests only: used to verify amortized compaction behaviour.
+func SystemSliceLen(w *World) int {
+	return len(w.systems)
+}
