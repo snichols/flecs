@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-10)
+
+Phase 8.4 complete: investigated and fixed the Add/Remove asymmetry in migrate(). Root cause: (1) newSig was always allocated before the edge-cache check — moved cache lookup first, saving 1 alloc per cache-hit migration. (2) reflect.Value.Slice() in Column.appendZero() and removeSwap() allocated a heap object per call — added n int to Column so logical length is tracked without calling Slice(), eliminating all per-call allocations in the hot path. Result: BenchmarkSwapComponent 289ns/4allocs → 168ns/0allocs (-42%/-4allocs); BenchmarkAddOneComponent_CacheHit 215ns/2allocs → 144ns/0allocs (-33%/-2allocs); BenchmarkRemoveOneComponent 161ns/2allocs → 87ns/0allocs (-46%/-2allocs). All tests pass, coverage 97%, no regressions. BENCH.md updated with Phase 8.4 investigation findings and before/after numbers.
+
