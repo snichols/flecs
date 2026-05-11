@@ -51,6 +51,7 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 	if w == nil {
 		panic("flecs: NewSystem: world must not be nil")
 	}
+	w.checkExclusiveAccessWrite()
 	if q == nil {
 		panic("flecs: NewSystem: query must not be nil")
 	}
@@ -91,6 +92,7 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	if w == nil {
 		panic("flecs: NewSystemInPhase: world must not be nil")
 	}
+	w.checkExclusiveAccessWrite()
 	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
 		panic(fmt.Sprintf("flecs: NewSystemInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
 	}
@@ -227,6 +229,7 @@ func (w *World) Progress(dt float32) {
 	if dt < 0 {
 		panic("flecs: Progress: dt must be >= 0")
 	}
+	w.checkExclusiveAccessWrite()
 	w.inProgress = true
 	defer func() { w.inProgress = false }()
 	w.frameCount++
@@ -366,6 +369,7 @@ func (w *World) Progress(dt float32) {
 
 // SystemCount returns the number of currently registered (non-closed) systems.
 func (w *World) SystemCount() int {
+	w.checkExclusiveAccessRead()
 	n := 0
 	for _, s := range w.systems {
 		if !s.removed {

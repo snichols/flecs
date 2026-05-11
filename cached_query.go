@@ -88,7 +88,7 @@ type CachedQuery struct {
 // (amortized compaction). This mirrors the observer-deferred-removal pattern.
 func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 	if w != nil {
-		w.checkExclusiveAccessRead()
+		w.checkExclusiveAccessWrite()
 	}
 	if w == nil {
 		panic("flecs: NewCachedQuery: world must not be nil")
@@ -127,7 +127,7 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 // argument.
 func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	if w != nil {
-		w.checkExclusiveAccessRead()
+		w.checkExclusiveAccessWrite()
 	}
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")

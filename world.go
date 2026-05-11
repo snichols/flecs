@@ -326,16 +326,23 @@ func deleteImmediate(w *World, e ID) bool {
 }
 
 // IsAlive reports whether e is currently alive.
-func (w *World) IsAlive(e ID) bool { return w.index.IsAlive(e) }
+func (w *World) IsAlive(e ID) bool {
+	w.checkExclusiveAccessRead()
+	return w.index.IsAlive(e)
+}
 
 // Count returns the number of currently alive entities (including component entities).
-func (w *World) Count() int { return w.index.Count() }
+func (w *World) Count() int {
+	w.checkExclusiveAccessRead()
+	return w.index.Count()
+}
 
 // RegisterComponent registers T as a component-entity in w and returns its ID.
 // Idempotent: if T is already registered with a component ID, returns that ID.
 // The component itself is an entity, mirroring the flecs convention that
 // components are first-class entities.
 func RegisterComponent[T any](w *World) ID {
+	w.checkExclusiveAccessWrite()
 	info, ok := component.LookupByType[T](w.registry)
 	if ok && info.Component != 0 {
 		return info.Component
@@ -634,6 +641,7 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 // componentID, in registration order. Returns an empty (non-nil) slice when no
 // tables are registered for componentID.
 func (w *World) TablesFor(componentID ID) []*table.Table {
+	w.checkExclusiveAccessRead()
 	return w.compIndex.TablesFor(componentID)
 }
 
@@ -641,6 +649,7 @@ func (w *World) TablesFor(componentID ID) []*table.Table {
 // registration order. fn returns false to stop iteration early. No allocation
 // is performed; this is the hot path for Phase 3 query iteration.
 func (w *World) EachTableFor(componentID ID, fn func(*table.Table) bool) {
+	w.checkExclusiveAccessRead()
 	w.compIndex.Each(componentID, fn)
 }
 

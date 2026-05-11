@@ -97,6 +97,7 @@ func (w *World) Stats() Stats {
 // given pipeline phase. Panics if phase is not one of the built-in phases
 // (PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate).
 func (w *World) SystemCountInPhase(phase ID) int {
+	w.checkExclusiveAccessRead()
 	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
 		panic(fmt.Sprintf("flecs: SystemCountInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
 	}
