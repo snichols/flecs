@@ -15,6 +15,10 @@ package flecs
 //
 // Iteration order: dense within each archetype table; across tables, undefined.
 func Each1[A any](w *World, fn func(e ID, a *A)) {
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.RLock()
+		defer w.rwmu.RUnlock()
+	}
 	var ids [1]ID
 	ids[0] = RegisterComponent[A](w)
 	q := NewQuery(w, ids[:]...)
@@ -32,6 +36,10 @@ func Each1[A any](w *World, fn func(e ID, a *A)) {
 // Auto-registration: unregistered types are registered before the query runs.
 // See Each1 for full semantics on pointer lifetime and concurrent modification.
 func Each2[A, B any](w *World, fn func(e ID, a *A, b *B)) {
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.RLock()
+		defer w.rwmu.RUnlock()
+	}
 	var ids [2]ID
 	ids[0] = RegisterComponent[A](w)
 	ids[1] = RegisterComponent[B](w)
@@ -51,6 +59,10 @@ func Each2[A, B any](w *World, fn func(e ID, a *A, b *B)) {
 // Auto-registration: unregistered types are registered before the query runs.
 // See Each1 for full semantics on pointer lifetime and concurrent modification.
 func Each3[A, B, C any](w *World, fn func(e ID, a *A, b *B, c *C)) {
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.RLock()
+		defer w.rwmu.RUnlock()
+	}
 	var ids [3]ID
 	ids[0] = RegisterComponent[A](w)
 	ids[1] = RegisterComponent[B](w)
@@ -74,6 +86,10 @@ func Each3[A, B, C any](w *World, fn func(e ID, a *A, b *B, c *C)) {
 //
 // Users needing more than four components should fall back to NewQuery / Iter / Field.
 func Each4[A, B, C, D any](w *World, fn func(e ID, a *A, b *B, c *C, d *D)) {
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.RLock()
+		defer w.rwmu.RUnlock()
+	}
 	var ids [4]ID
 	ids[0] = RegisterComponent[A](w)
 	ids[1] = RegisterComponent[B](w)

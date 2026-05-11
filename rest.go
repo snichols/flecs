@@ -102,12 +102,16 @@ func writeError(rw http.ResponseWriter, status int, msg string) {
 
 func restStats(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
+		w.RLock()
+		defer w.RUnlock()
 		writeJSON(rw, http.StatusOK, w.Stats())
 	}
 }
 
 func restComponents(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
+		w.RLock()
+		defer w.RUnlock()
 		ids := w.Components()
 		out := make([]componentInfoResponse, 0, len(ids))
 		for _, id := range ids {
@@ -128,6 +132,8 @@ func restComponentByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
+		w.RLock()
+		defer w.RUnlock()
 		info, ok := w.ComponentInfo(id)
 		if !ok {
 			writeError(rw, http.StatusNotFound, "component not found")
@@ -148,6 +154,8 @@ func restEntities(w *World) http.HandlerFunc {
 			}
 			limit = n
 		}
+		w.RLock()
+		defer w.RUnlock()
 		out := make([]entityListItem, 0, limit)
 		w.EachEntity(func(e ID) bool {
 			if len(out) >= limit {
@@ -171,6 +179,8 @@ func restEntityByID(w *World) http.HandlerFunc {
 			writeError(rw, http.StatusBadRequest, "invalid id")
 			return
 		}
+		w.RLock()
+		defer w.RUnlock()
 		if !w.IsAlive(id) {
 			writeError(rw, http.StatusNotFound, "entity not found")
 			return

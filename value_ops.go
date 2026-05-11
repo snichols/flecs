@@ -165,6 +165,10 @@ func (w *World) SetByID(e ID, id ID, v any) {
 		return
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	setByIDImmediate(w, e, id, v)
 }
 

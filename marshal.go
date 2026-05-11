@@ -98,6 +98,8 @@ func (m *marshaler) visit(e ID) error {
 //
 // Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
+	w.rwmu.RLock()
+	defer w.rwmu.RUnlock()
 	skip := map[ID]struct{}{
 		w.ChildOf():       {},
 		w.IsA():           {},
@@ -285,6 +287,8 @@ func (w *World) MarshalJSON() ([]byte, error) {
 //   - Unregistered component → descriptive error.
 //   - Type mismatch → wrapped json error.
 func (w *World) UnmarshalJSON(data []byte) error {
+	w.rwmu.Lock()
+	defer w.rwmu.Unlock()
 	var jw jsonWorld
 	if err := json.Unmarshal(data, &jw); err != nil {
 		return fmt.Errorf("flecs: unmarshal failed: %w", err)

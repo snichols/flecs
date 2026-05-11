@@ -55,6 +55,14 @@ func (w *World) DeferEnd() {
 	queue := w.deferred
 	w.deferred = nil
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush && len(queue) > 0 {
+		w.rwmu.Lock()
+		w.inFlush = true
+		defer func() {
+			w.inFlush = false
+			w.rwmu.Unlock()
+		}()
+	}
 	for _, fn := range queue {
 		fn(w)
 	}

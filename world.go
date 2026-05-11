@@ -29,7 +29,15 @@ import (
 // (8 bytes per uint64 ID, host byte-order) for use as a map key. This encoding
 // is stable within a single process but not across processes or machines.
 //
-// *World is NOT goroutine-safe; external synchronization is required.
+// Concurrency model: multiple goroutines may call Each1/Each2/Each3/Each4, Iter,
+// MarshalJSON, and other read-only methods concurrently. Mutators (Set, Remove,
+// Delete, AddID, RemoveID, SetPair, SetByID) may be called from any goroutine;
+// they acquire a write lock on the immediate path. Use RLock/RUnlock to wrap
+// multi-call read sections, and Lock/Unlock to wrap multi-call write sections.
+// Within a Defer block, mutations are queued under a separate mutex and do NOT
+// touch the rwmu; the flush acquires the write lock once for the entire batch.
+// During World.Progress (inProgress == true), all rwmu acquisition is skipped:
+// Progress owns the world exclusively for the frame duration.
 type World struct {
 	index            *entityindex.Index
 	registry         *component.Registry
@@ -46,12 +54,14 @@ type World struct {
 	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	rwmu             sync.RWMutex                    // guards world state for concurrent readers / exclusive writers
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"
 	deferred         []func(w *World)                // queue of buffered operations; flushed when deferDepth reaches 0
 	workerCount      int                             // number of persistent goroutines in the worker pool; 0 = serial
 	workerCh         chan func()                     // job channel; nil when workerCount == 0
 	inProgress       bool                            // true while Progress is executing
+	inFlush          bool                            // true while DeferEnd holds rwmu.Lock() and is flushing the queue
 	time             float32                         // total accumulated simulation time
 	frameCount       uint64                          // number of Progress calls
 	fixedTimestep    float32                         // fixed step size; 0 means disabled
@@ -280,6 +290,10 @@ func (w *World) Delete(e ID) bool {
 		return true
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	return deleteImmediate(w, e)
 }
 
@@ -368,6 +382,10 @@ func Set[T any](w *World, e ID, v T) {
 		return
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	setImmediate[T](w, e, v)
 }
 
@@ -458,6 +476,10 @@ func Remove[T any](w *World, e ID) bool {
 		return true
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	return removeImmediate[T](w, e)
 }
 
@@ -687,6 +709,24 @@ func (w *World) SetLogger(l *slog.Logger) { w.logger = l }
 
 // Logger returns the current logger, or nil if none is installed.
 func (w *World) Logger() *slog.Logger { return w.logger }
+
+// RLock acquires a shared read lock on the world, allowing multiple goroutines
+// to read concurrently. RLock blocks until no writer holds the lock.
+// Must be paired with RUnlock. For advanced callers composing multi-call read
+// sections; each.go helpers (Each1/2/3/4) manage this automatically.
+func (w *World) RLock() { w.rwmu.RLock() }
+
+// RUnlock releases a shared read lock acquired by RLock.
+func (w *World) RUnlock() { w.rwmu.RUnlock() }
+
+// Lock acquires an exclusive write lock on the world, blocking until all
+// readers and other writers release. Must be paired with Unlock. For advanced
+// callers composing multi-call write sections; individual mutators (Set, Delete,
+// etc.) manage this automatically on their immediate path.
+func (w *World) Lock() { w.rwmu.Lock() }
+
+// Unlock releases an exclusive write lock acquired by Lock.
+func (w *World) Unlock() { w.rwmu.Unlock() }
 
 // formatSig returns a space-separated string of decimal component IDs for use
 // as the "signature" attribute on "table created" log records.

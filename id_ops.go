@@ -41,6 +41,10 @@ func AddID(w *World, e ID, e2 ID) bool {
 		return true
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	return addIDImmediate(w, e, e2)
 }
 
@@ -78,6 +82,10 @@ func RemoveID(w *World, e ID, id ID) bool {
 		return true
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	return removeIDImmediate(w, e, id)
 }
 
@@ -144,6 +152,10 @@ func SetPair[T any](w *World, e ID, rel ID, tgt ID, v T) {
 		return
 	}
 	w.deferMu.Unlock()
+	if !w.inProgress && !w.inFlush {
+		w.rwmu.Lock()
+		defer w.rwmu.Unlock()
+	}
 	setPairImmediate[T](w, e, rel, tgt, v)
 }
 
