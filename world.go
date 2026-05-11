@@ -47,8 +47,8 @@ type World struct {
 	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
 	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
-	exclusiveAccess  atomic.Uint64                   // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
-	exclusiveThread  string                          // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
+	exclusiveAccess  atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread  string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	readonly         atomic.Bool                     // when true, mutators enqueue instead of mutate
 	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
 	deferDepth       int                             // nesting counter; 0 means "apply immediately"

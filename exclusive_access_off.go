@@ -2,4 +2,4 @@
 
 package flecs
 
-const flecsExclusiveAccess = false
+const flecsExclusiveAccess = false //nolint:unused
