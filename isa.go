@@ -14,7 +14,7 @@ func (w *World) IsA() ID { return w.isAID }
 // Returns (0, false) if e is not alive or has no IsA relationship.
 func PrefabOf(w *World, e ID) (ID, bool) {
 	rec := w.index.Get(e)
-	if rec == nil {
+	if rec == nil || rec.Table == nil {
 		return 0, false
 	}
 	return firstPairTarget(rec.Table.Type(), w.isAID.Index())
@@ -29,7 +29,7 @@ func PrefabOf(w *World, e ID) (ID, bool) {
 // recursively on each yielded prefab.
 func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
 	rec := w.index.Get(e)
-	if rec == nil {
+	if rec == nil || rec.Table == nil {
 		return
 	}
 	eachPairTarget(rec.Table.Type(), w.isAID.Index(), fn)
@@ -44,7 +44,7 @@ func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
 func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	var zero T
 	rec := w.index.Get(e)
-	if rec == nil {
+	if rec == nil || rec.Table == nil {
 		return zero, false
 	}
 	isAIdx := w.isAID.Index()
@@ -85,7 +85,7 @@ func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 // is encountered, with e pre-inserted. Dead prefabs are skipped.
 func hasViaIsA(w *World, e ID, cid ID, seen map[ID]struct{}) bool {
 	rec := w.index.Get(e)
-	if rec == nil {
+	if rec == nil || rec.Table == nil {
 		return false
 	}
 	isAIdx := w.isAID.Index()
