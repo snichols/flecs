@@ -204,6 +204,7 @@ func (q *Query) Iter() *QueryIter {
 	candidates := q.w.TablesFor(seedID)
 	return &QueryIter{
 		q:          q,
+		world:      q.w,
 		terms:      q.terms,
 		orGroups:   q.orGroups,
 		candidates: candidates,
@@ -229,6 +230,7 @@ func (q *Query) Each(fn func(*QueryIter)) {
 // iterator is active produces undefined behaviour.
 type QueryIter struct {
 	q          *Query         // nil for CachedQuery-derived iters; use terms for term access
+	world      *World         // backing world; set by Iter constructors; used by Reader()/Writer()
 	terms      []Term         // full term list (And + Not + Or + Optional), set by Iter constructors
 	orGroups   [][]ID         // OR-groups mirrored from Query/CachedQuery for matchesTable
 	candidates []*table.Table // seed-table snapshot (uncached) or cache reference (cached)
@@ -364,6 +366,15 @@ func (it *QueryIter) Entities() []ID {
 // Query returns the Query that produced this iterator. Returns nil for iters
 // derived from a CachedQuery.
 func (it *QueryIter) Query() *Query { return it.q }
+
+// Reader returns a *Reader capability backed by the iterator's world.
+// Valid for the duration of the enclosing Read or Write scope.
+func (it *QueryIter) Reader() *Reader { return &it.world.readCapability }
+
+// Writer returns a *Writer capability backed by the iterator's world.
+// Valid for the duration of the enclosing Write scope.
+// Phase 12.1 will bind this to a per-worker stage instead.
+func (it *QueryIter) Writer() *Writer { return &it.world.writeCapability }
 
 // clippedCopy returns a shallow copy of it restricted to worker workerIdx of
 // workerTotal. Each copy independently iterates the same table list but sees

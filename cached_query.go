@@ -199,6 +199,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		return &QueryIter{pos: -1}
 	}
 	return &QueryIter{
+		world:      cq.w,
 		terms:      cq.terms,
 		orGroups:   cq.orGroups,
 		candidates: cq.tables,
