@@ -581,6 +581,21 @@ q := flecs.NewQueryFromTerms(w,
 
 ---
 
+## Transitive Pair Matching
+
+When a relationship is marked **Transitive** (via `flecs.SetTransitive(w, relID)`), a pair term `With(MakePair(R, C))` also matches entities that hold `(R, B)` where `B` (or any entity reachable from `B` via further `R` pairs) holds `(R, C)`. This is the query-engine generalisation of the `IsA` chain-walking already done by `Get`/`Has`.
+
+```go
+// LocatedIn: Manhattan LocatedIn NewYork, NewYork LocatedIn USA.
+// Query for (LocatedIn, USA) matches both.
+flecs.SetTransitive(w, locatedIn)
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(locatedIn, usa)))
+```
+
+The walk is lazy (query time only), cycle-safe, and bounded at 64 hops. For full documentation and a worked example see [ComponentTraits.md § Transitive](ComponentTraits.md#transitive) and [Relationships.md § Transitive](Relationships.md#transitive).
+
+---
+
 ## Change Detection
 
 `(*CachedQuery).Changed()` reports whether any matching table was mutated since the last call. It returns `true` on the first call (initial state is "all changed"), and thereafter returns `true` only when:

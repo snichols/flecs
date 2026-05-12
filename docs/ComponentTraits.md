@@ -513,19 +513,50 @@ w.Read(func(fr *flecs.Reader) {
 
 ### Transitive
 
-**What it does:** A transitive relationship allows queries to follow a chain automatically. If `(R, B)` is on entity `A` and `(R, C)` is on entity `B`, then a query for `(R, C)` will also match `A`. The built-in `IsA` already behaves transitively for `Get`/`Has`; `Transitive` generalises this to arbitrary custom relationships and to the query engine.
+**Shipped in v0.37.0.**
 
-**What the C API looks like:**
+**What it does:** A transitive relationship allows queries to follow a chain automatically at query time. If `(R, B)` is on entity `A` and `(R, C)` is on entity `B`, then a query for `(R, C)` also matches `A`. Formally: `aRb ∧ bRc ⇒ aRc`. The built-in `IsA` already behaves transitively for `Get`/`Has`; `Transitive` generalises this to arbitrary custom relationships and to the full query engine.
 
-```c
-// C — not available in Go flecs
-ecs_add_id(world, LocatedIn, EcsTransitive);
-// Now (LocatedIn, USA) matches Manhattan even though only NewYork has it directly.
+**Go API:**
+
+- `flecs.SetTransitive(w, relID)` — marks a relationship as transitive; equivalent to the bare-tag form.
+- `flecs.IsTransitive(w, relID) bool` — reports whether a relationship is transitive.
+- `w.Transitive() ID` — the built-in Transitive trait entity (index 20). The bare-tag form `fw.AddID(relID, w.Transitive())` is equivalent to `SetTransitive(w, relID)`.
+
+**LocatedIn example:**
+
+```go
+w := flecs.New()
+var locatedIn, manhattan, newYork, usa flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    locatedIn = fw.NewEntity()
+    manhattan  = fw.NewEntity()
+    newYork    = fw.NewEntity()
+    usa        = fw.NewEntity()
+})
+flecs.SetTransitive(w, locatedIn)
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(manhattan, flecs.MakePair(locatedIn, newYork))
+    fw.AddID(newYork,   flecs.MakePair(locatedIn, usa))
+})
+
+// Query for (LocatedIn, USA) matches both manhattan (transitively) and newYork (directly).
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(locatedIn, usa)))
+q.Each(func(it *flecs.QueryIter) {
+    for _, e := range it.Entities() {
+        _ = e // manhattan and newYork
+    }
+})
 ```
 
-**Workaround:** For `IsA`, transitivity already works via `Get`/`Has` chain walking. For custom relationships, there is no query-engine equivalent — application code must perform manual traversal (e.g. using `TargetUp` / `GetUp[T]` helpers with a custom relationship).
+**Implementation notes:**
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-143-relationships-port): *Transitive relationship trait*.
+- **Lazy evaluation:** chaining happens at query time only; no pairs are written eagerly. This avoids O(n²) writes for long chains. Compare to [Symmetric](#symmetric) which mirrors eagerly at write time.
+- **Cycle detection:** the walk uses a visited set; cyclic chains terminate cleanly.
+- **Depth limit:** bounded at 64 hops; chains deeper than the limit are silently truncated without panicking.
+- **Cached query staleness:** `CachedQuery` pre-evaluates transitive chains at construction and on new-table creation. It does NOT re-evaluate on pair mutation; staleness is accepted and documented.
+- **Transitive does not imply Reflexive:** `(R, self)` is not auto-matched by transitive chains. Reflexive is a separate unported trait.
+- **Wildcard interaction:** wildcard query terms will compose with Transitive when Wildcard is ported.
 
 ---
 
@@ -611,7 +642,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Symmetric** | `EcsSymmetric` | ✅ shipped (v0.36.0) | `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)`; `w.Symmetric()` bare-tag form; mirror fires on add and remove; loop-guard via `HasComponent` idempotence; composes with `Exclusive` |
 | **Target** | `EcsTarget` | ⏳ planned | No usage-as-target constraint |
 | **Trait** | `EcsTrait` | ⏳ planned | No first-class trait marker |
-| **Transitive** | `EcsTransitive` | ⏳ planned | No query-time transitive chain traversal for custom relationships |
+| **Transitive** | `EcsTransitive` | ✅ shipped (v0.37.0) | `SetTransitive(w, relID)` / `IsTransitive(w, relID)`; `w.Transitive()` bare-tag form; lazy walk at query time with cycle detection and depth limit; cached query re-evaluates on table-create |
 | **Traversable** | `EcsTraversable` | ⏳ planned | Any entity can be used for traversal; no formal enforcement |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
 | **With** | `EcsWith` | ⏳ planned | No automatic co-addition; use `OnAdd` hook as workaround |

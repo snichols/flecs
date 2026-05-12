@@ -368,7 +368,17 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		switch term.Kind {
 		case TermAnd:
 			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
-				return
+				// Transitive pair matching: if (R, C) is the term and R is
+				// flagged transitive, walk the (R, *) chains on this table.
+				// Cached queries re-evaluate on table creation; pair-mutation
+				// staleness is accepted and documented (see type comment).
+				if term.ID.IsPair() && cq.w.transitivePolicies[ID(term.ID.First().Index())] {
+					if !transitiveTableMatches(cq.w, t, term.ID) {
+						return
+					}
+				} else {
+					return
+				}
 			}
 		case TermNot:
 			if t.HasComponent(term.ID) {

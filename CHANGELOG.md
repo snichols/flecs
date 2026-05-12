@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.37.0 — 2026-05-12 — Phase 15.5: Transitive relationship trait
+
+### Added
+
+- **`SetTransitive(w, relID)`** — marks a relationship as transitive: when evaluating a query term `(R, C)`, entities that hold `(R, B)` are also matched if `B` (or any entity reachable from `B` via further `R` chains) holds `(R, C)`. Formally: `aRb ∧ bRc ⇒ aRc`.
+- **`IsTransitive(w, relID) bool`** — reports whether a relationship is marked transitive.
+- **`w.Transitive() ID`** — returns the built-in Transitive trait entity (index 20). The bare-tag form `fw.AddID(relID, w.Transitive())` is equivalent to `SetTransitive(w, relID)`.
+- **Lazy walk at query time:** chaining walks the `(R, *)` graph only when a query term is evaluated. No pairs are written eagerly; avoids O(n²) writes for long chains. Compare to Symmetric (v0.36.0) which mirrors eagerly at write time.
+- **Cycle detection:** a visited set prevents infinite loops on cyclic pair graphs; both `NewQueryFromTerms` and `NewCachedQueryFromTerms` are safe.
+- **Depth limit:** bounded at 64 hops (`maxTraversalDepth`); chains deeper than the limit are silently truncated — no panic occurs.
+- **Cached query staleness model:** `CachedQuery` pre-evaluates transitive chains at construction and on new-table creation. It does NOT re-evaluate on pair mutation. Staleness is documented; pair-mutation invalidation is a future enhancement.
+- **`transitive.go`** — new file parallel to `symmetric.go`, `exclusive.go`, and `cantoggle.go`.
+- **`transitive_test.go`** — 10 test cases: default no-chain, simple chain, longer chain, branching chain, cycle safety, cache interaction, depth limit, `IsTransitive` round-trip, Transitive+Symmetric composition, cycle-dead guard. Plus `BenchmarkTransitiveQuery_ChainLen10`.
+
+### Documentation
+
+- `docs/ComponentTraits.md` — Transitive section rewritten with shipped Go API and worked `LocatedIn` example; roadmap row updated to `✅ shipped (v0.37.0)`.
+- `docs/Relationships.md` — "Not yet ported" callouts at IsA transitivity section and Transitive section replaced with shipped API documentation and a `LocatedIn` worked example.
+- `docs/Queries.md` — new *Transitive Pair Matching* section with brief usage example and forward-links.
+- `docs/README.md` — Transitive entries in the feature-gap list updated to shipped status.
+- `ROADMAP.md` — Phase 15.5 marked shipped; built-in entity count note updated to 20; user entities now start at index 21.
+
+### Migration Guide
+
+- Built-in entity count increases from 19 to 20. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to include `Transitive` (20).
+- `World.Transitive()` is now a valid built-in entity accessor. If you had user entities starting at index 20, they now start at index 21.
+
+### Non-goals (explicitly out of scope for v0.37.0)
+
+- No Reflexive trait (`EcsReflexive`) — separate future phase.
+- No eager transitive expansion at write time — intentionally lazy.
+- No automatic re-evaluation of cached queries on pair-mutation — accept staleness.
+- No Wildcard query terms — will compose with Transitive when Wildcard lands.
+- No general Traversable trait — C auto-adds `(EcsTransitive, EcsWith, EcsTraversable)` at bootstrap; Go has no Traversable yet.
+
 ## v0.36.0 — 2026-05-12 — Phase 15.4: Symmetric relationship trait
 
 ### Added

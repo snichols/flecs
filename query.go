@@ -318,11 +318,16 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
 	// Prefer a TraverseSelf TermAnd seed (fewest tables in the component index).
+	// Skip transitive pair terms: TablesFor() returns only direct-match tables,
+	// missing tables that transitively reach the pair's target via (R, *) chains.
 	seedIdx := -1
 	minCount := 0
 	for i, term := range q.terms {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
+		}
+		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
+			continue // transitive pairs need all-tables scan; skip as seed
 		}
 		c := q.w.compIndex.Count(term.ID)
 		if seedIdx == -1 || c < minCount {
@@ -447,7 +452,16 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 			switch term.Traverse {
 			case TraverseSelf, TraverseExplicitSelf:
 				if !t.HasComponent(term.ID) {
-					return false
+					// Transitive pair matching: if (R, C) is the term and R is
+					// flagged transitive, walk the (R, *) chains on this table
+					// to see whether any path reaches C.
+					if term.ID.IsPair() && it.world.transitivePolicies[ID(term.ID.First().Index())] {
+						if !transitiveTableMatches(it.world, t, term.ID) {
+							return false
+						}
+					} else {
+						return false
+					}
 				}
 			case TraverseUp:
 				src, ok := findUpSource(it.world, t, term.ID, term.Trav)

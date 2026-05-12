@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.36)
+## Shipped (through v0.37)
 
 The following features are available in the current release:
 
@@ -38,7 +38,8 @@ The following features are available in the current release:
 - **Configurable OnInstantiate policies** _(v0.33.0)_ — `Override` (eager copy at IsA-add time), `DontInherit` (suppresses IsA chain walk and query auto-promotion), and `Inherit` (explicit default). `SetInstantiatePolicy` / `GetInstantiatePolicy` public API. Pair-add form (`AddID(cid, MakePair(w.OnInstantiate(), w.Override()))`) is first-class. Multi-level IsA chains handled transitively. DontInherit takes precedence over `SetInheritable[T]`.
 - **Exclusive relationship trait** _(v0.34.0)_ — `SetExclusive(w, relID)` / `IsExclusive(w, relID)` / `w.Exclusive()`. Adding a second target for an exclusive relationship replaces the first (OnRemove + OnAdd fire correctly). Built-in relationships `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` are bootstrapped exclusive. `IsA` is not exclusive. Built-in entity count: 17.
 - **CanToggle component trait** _(v0.35.0)_ — `SetCanToggle(w, componentID)` / `IsCanToggle` / `w.CanToggle()`. `EnableID` / `DisableID` / `IsEnabledID` + typed `Enable[T]` / `Disable[T]` / `IsEnabled[T]` generics. Per-row bitset storage on `table.Table`; lazy allocation on first `DisableRow`. `Each1`/`Each2`/`Each3`/`Each4` skip disabled rows automatically. Disabled state survives archetype migration. Built-in entity count: 18.
-- **Symmetric relationship trait** _(v0.36.0)_ — `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)` / `w.Symmetric()`. Adding `(R, B)` to `A` automatically mirrors `(R, A)` to `B`; removal is mirrored too. Loop guard via `HasComponent` idempotence; self-pairs handled naturally. Composes with Exclusive: each side's exclusivity is enforced independently when both traits are active. Built-in entity count: 19; user entities now start at index 20.
+- **Symmetric relationship trait** _(v0.36.0)_ — `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)` / `w.Symmetric()`. Adding `(R, B)` to `A` automatically mirrors `(R, A)` to `B`; removal is mirrored too. Loop guard via `HasComponent` idempotence; self-pairs handled naturally. Composes with Exclusive: each side's exclusivity is enforced independently when both traits are active. Built-in entity count: 19.
+- **Transitive relationship trait** _(v0.37.0)_ — `SetTransitive(w, relID)` / `IsTransitive(w, relID)` / `w.Transitive()`. Query terms for `(R, C)` walk the `(R, *)` chain lazily at query time; cycle-safe, depth-bounded (64 hops). Cached queries pre-evaluate at construction and on table-create; pair-mutation staleness accepted. Composes with Symmetric: both traits can be active on the same relationship. Built-in entity count: 20; user entities now start at index 21.
 
 ## Documentation
 
