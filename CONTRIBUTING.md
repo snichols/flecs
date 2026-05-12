@@ -55,6 +55,31 @@ implementation details and their APIs may change without notice.
 - Exported symbols require godoc beginning with the symbol's name.
 - Aim for coverage ≥ 90% on any file you touch.
 
+## Documentation
+
+Every change that affects user-visible behavior must update the relevant docs
+in the same PR. Code and docs land together; never separately. The reviewer
+will check this.
+
+What to update, by change type:
+
+| Change | Update |
+|---|---|
+| New / changed / removed public API | godoc on the symbol; `doc.go` package overview if the change is conceptual; `README.md` if it appears in the headline example |
+| New behavior (e.g. a new query modifier, a new system flag) | `docs/` page for that subsystem (e.g. `docs/Queries.md` for query work); add an example if non-obvious |
+| Breaking change | `CHANGELOG.md` Migration Guide section; `docs/` pages that referenced the old API |
+| Performance pass | `BENCH.md` baseline numbers; mention in `CHANGELOG.md` if user-observable |
+| New phase / feature | `ROADMAP.md` (move from Future Work → Shipped); `CHANGELOG.md` entry |
+
+The `docs/` directory is the authoritative narrative reference, organized
+roughly parallel to C flecs's docs/. If you add a feature whose concept isn't
+yet covered there, add a short section to the relevant existing page rather
+than creating a new file unless the topic is genuinely large.
+
+godoc is the authoritative reference for individual symbols. `doc.go`
+introduces the package as a whole and links to `docs/`. The two are meant
+to be read together; don't duplicate content between them.
+
 ## Automated PRs
 
 This repository uses the `snichols/queued` workflow for autonomous pull requests.
