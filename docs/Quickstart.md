@@ -407,6 +407,8 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
+See [PrefabsManual.md](PrefabsManual.md) for the full prefab reference: `SetInheritable`, copy-on-write semantics, prefab variants, traversal helpers, and OnInstantiate traits.
+
 ---
 
 ## Systems

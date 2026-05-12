@@ -18,7 +18,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [Queries.md](Queries.md) | ✅ landed | 14.2 |
 | [Relationships.md](Relationships.md) | ✅ landed | 14.3 |
 | [HierarchiesManual.md](HierarchiesManual.md) | ✅ landed | 14.4 |
-| [PrefabsManual.md](PrefabsManual.md) | pending | 14.5 |
+| [PrefabsManual.md](PrefabsManual.md) | ✅ landed | 14.5 |
 | [Systems.md](Systems.md) | pending | 14.6 |
 | [ObserversManual.md](ObserversManual.md) | pending | 14.7 |
 | [ComponentTraits.md](ComponentTraits.md) | pending | 14.8 |
@@ -128,3 +128,10 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 - **`OrderedChildren` trait** — add this trait to a parent entity to guarantee that `EachChild` iterates children in creation order regardless of component mutations that would otherwise move children between archetype tables. not yet ported in Go flecs.
 - **`Parent` hierarchy storage** — a second, non-fragmenting storage for small structured hierarchies where children of multiple parents share the same archetype table. Reduces table fragmentation and memory footprint for prefab-heavy workloads. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.5 (PrefabsManual port)
+
+- **Prefab tag** (`EcsPrefab`) — a built-in tag that excludes prefab entities from ordinary queries by default. In Go flecs, prefab entities participate in queries like any other entity. not yet ported in Go flecs.
+- **Auto-override on instantiation** (`OnInstantiate, Override`) — automatically copies a component from the prefab into each new instance at `(IsA, prefab)` add time. `w.Override()` exposes the entity ID but the behavior is not implemented. not yet ported in Go flecs.
+- **Prefab hierarchies** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab replicates the entire child subtree onto the instance. not yet ported in Go flecs.
+- **Prefab slots** (`SlotOf`) — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1) without a name lookup. not yet ported in Go flecs.
