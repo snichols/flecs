@@ -1,0 +1,18 @@
+{
+  "issue": 115,
+  "retries": 1,
+  "last_error": {
+    "class": "infrastructure_failure",
+    "detail": "PR creation failed: gh pr create: aborted: you must first push the current branch to a remote, or use the --head flag\n",
+    "stage": "publish",
+    "timestamp": "2026-05-12T08:20:45-05:00"
+  },
+  "error_history": [
+    {
+      "class": "infrastructure_failure",
+      "detail": "PR creation failed: gh pr create: aborted: you must first push the current branch to a remote, or use the --head flag\n",
+      "stage": "publish",
+      "timestamp": "2026-05-12T08:20:45-05:00"
+    }
+  ]
+}
