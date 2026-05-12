@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Phase 14.11: Manual doc port (upcoming v0.30.0)
+
+### Added
+
+- **`docs/Manual.md`** — full Go-idiomatic port of the upstream C flecs Manual, adapted as a condensed cross-link hub. Leads with a one-paragraph summary of Go flecs and a concept-map table pointing into all per-topic manuals. Original content covers: world lifecycle (`New`, `Read`/`Write`, `Progress`, `FrameCount`, `Time`, `IsAlive`), Go API design conventions (naming, idempotence, panic-based error handling, Go packages as module system), deferred-operation semantics, concurrency model (Reader/Writer scopes from Phase 10.x, ExclusiveAccess goroutine-pinning from Phase 12.x, parallel and multi-threaded dispatch), performance characteristics summary, and a C-to-Go feature mapping table. Aggressively cross-links all ten per-topic manuals and BENCH.md.
+- **`docs/manual_examples_test.go`** — 6 test functions (`TestManual_*`) verifying every code block in the manual: world lifecycle with system progress, world-state accessors (FrameCount / Time / IsAlive), read-scope inspection, ExclusiveAccess begin/end, worker-count configuration with parallel system, and idempotent component add. Run with `go test ./docs/...`.
+- **`docs/README.md`** — Manual row updated to `✅ landed / 14.11`.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.11 row updated to `✅ shipped (v0.30.0)`.
+- All 11 per-topic docs updated to cross-link back to `Manual.md` in their See Also / Where Next sections.
+
 ## v0.29.0 — 2026-05-12 — Phase 14.10: DesignWithFlecs doc port
 
 ### Added

@@ -311,3 +311,13 @@ The following upstream C features are not yet implemented in Go flecs:
 - **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a default ChildOf parent so that newly created entities automatically become children of the current scope without an explicit `AddID` call. Not yet ported in Go flecs.
 
 - **`Parent` hierarchy storage** — C flecs provides a second, non-fragmenting storage for small structured hierarchies where children of multiple parents can share the same archetype table. Not yet ported in Go flecs; all Go flecs hierarchies use the ChildOf (fragmenting archetype) storage.
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction to ChildOf hierarchies.
+- [Relationships.md](Relationships.md) — the `ChildOf` and `IsA` built-in relationships in full detail.
+- [PrefabsManual.md](PrefabsManual.md) — `IsA` prototype inheritance; prefabs and hierarchies compose.
+- [Queries.md](Queries.md) — `Cascade` and `Up` traversal terms for querying into hierarchies.
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.

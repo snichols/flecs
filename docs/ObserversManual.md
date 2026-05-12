@@ -468,3 +468,12 @@ C flecs observers can match a component on a specific entity (not `$this`). Not 
 | `EventOnAdd` | Event fired on first component add |
 | `EventOnSet` | Event fired on every component set |
 | `EventOnRemove` | Event fired before component remove |
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction to observers and hooks.
+- [EntitiesComponents.md](EntitiesComponents.md) — `OnAdd` / `OnSet` / `OnRemove` hooks on component registration.
+- [Systems.md](Systems.md) — per-frame systems as a complement to reactive observers.
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.

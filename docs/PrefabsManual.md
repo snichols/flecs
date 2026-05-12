@@ -304,3 +304,13 @@ The following C flecs prefab features have no equivalent in the current Go port:
 - **DontInherit trait behavior** — `(OnInstantiate, DontInherit)` opts a component out of inheritance. not yet ported in Go flecs. Since Go flecs inheritance is opt-in (`SetInheritable[T]`), simply not calling `SetInheritable[T]` is the equivalent.
 - **Prefab hierarchies** — in C flecs, instantiating a prefab that has `(ChildOf, prefab)` children copies the entire subtree to the instance. Go flecs does not replicate children on IsA instantiation. not yet ported in Go flecs.
 - **Prefab slots** — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1). not yet ported in Go flecs.
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction to `IsA` prefab inheritance.
+- [Relationships.md](Relationships.md) — `IsA` as a relationship; pair encoding; traversal.
+- [HierarchiesManual.md](HierarchiesManual.md) — `ChildOf` hierarchies; prefabs and child trees compose.
+- [ComponentTraits.md](ComponentTraits.md) — `SetInheritable[T]`; which components are inherited by instances.
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.

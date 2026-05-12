@@ -8,6 +8,7 @@ See also:
 - [Quickstart](Quickstart.md) — hands-on walkthrough; the REST handler is introduced there first
 - [Systems](Systems.md) — `World.Stats()` is the data source for `GET /stats`
 - [ComponentTraits](ComponentTraits.md) — `GET /components` returns trait information alongside each component
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map
 
 ---
 

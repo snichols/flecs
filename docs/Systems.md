@@ -327,3 +327,12 @@ The following features from the upstream C flecs systems API are not yet availab
 **`RunWorker` / explicit thread dispatch** — C provides `ecs_run_worker` for manual entity-range partitioning. Not yet ported in Go flecs.
 
 **Pipeline introspection** — C lets applications iterate over the ordered system list in a pipeline. Not yet ported in Go flecs.
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction to systems and `Progress`.
+- [Queries.md](Queries.md) — cached queries that power systems; iteration and change detection.
+- [ObserversManual.md](ObserversManual.md) — event-driven reactions as a complement to per-frame systems.
+- [Manual](Manual.md) — top-level reference hub covering the concurrency model, ExclusiveAccess, and parallel dispatch in depth.

@@ -52,7 +52,7 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 | 14.8 | `ComponentTraits.md` | ✅ shipped (v0.27.0) |
 | 14.9 | `FlecsRemoteApi.md` | ✅ shipped (v0.28.0) |
 | 14.10 | `DesignWithFlecs.md` | ✅ shipped (v0.29.0) |
-| 14.11 | `Manual.md` | pending |
+| 14.11 | `Manual.md` | ✅ shipped (v0.30.0) |
 | 14.12 | `FAQ.md` | pending |
 
 **Process rule (operator directive, Phase 14.0+):** every phase from 14.0 onward must include an explicit "update docs accordingly" deliverable. The design agent must add it to each phase brief; the review agent must verify it.

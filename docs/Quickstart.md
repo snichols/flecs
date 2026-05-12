@@ -519,5 +519,5 @@ The existing `example_*_test.go` files in the repo root are the authoritative ru
 | Component Traits | [ComponentTraits.md](ComponentTraits.md) | pending Phase 14.8 |
 | REST API | [FlecsRemoteApi.md](FlecsRemoteApi.md) | ✅ landed / 14.9 |
 | Design with flecs | [DesignWithFlecs.md](DesignWithFlecs.md) | pending Phase 14.10 |
-| Reference Manual | [Manual.md](Manual.md) | pending Phase 14.11 |
+| Reference Manual | [Manual.md](Manual.md) | ✅ landed / 14.11 |
 | FAQ | [FAQ.md](FAQ.md) | pending Phase 14.12 |

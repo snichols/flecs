@@ -566,3 +566,13 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Traversable** | `EcsTraversable` | ⏳ planned | Any entity can be used for traversal; no formal enforcement |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
 | **With** | `EcsWith` | ⏳ planned | No automatic co-addition; use `OnAdd` hook as workaround |
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction to components and inheritance.
+- [EntitiesComponents.md](EntitiesComponents.md) — `RegisterComponent`, hooks, and the component API.
+- [Relationships.md](Relationships.md) — trait semantics interact with the pair / relationship model.
+- [PrefabsManual.md](PrefabsManual.md) — `SetInheritable[T]` is the primary currently-implemented trait.
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.
