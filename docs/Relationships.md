@@ -652,6 +652,57 @@ Query whether a relationship is reflexive with `flecs.IsReflexive(w, relID)`.
 
 **IsA is reflexive after bootstrap:** any entity `a` satisfies `HasID(a, MakePair(IsA, a))` without storing a pair. Existing tests that expected this to return `false` should be updated if they relied on the pre-v0.39.0 behavior.
 
+### Acyclic
+
+**Shipped in v0.41.0.** Marking a relationship Acyclic prevents cycles from being stored. When `(e, R, target)` is added, the engine walks the `R` chain upward from `target`; if `e` is reachable, the add panics immediately with a clear message identifying the entity, relationship, and target. `ChildOf` is bootstrapped acyclic — mutual parent/child cycles are rejected at write time, closing a correctness gap that could cause `EachChild` to recurse infinitely.
+
+Self-pairs `(e, R, e)` are **allowed**; Acyclic does not reject them. For a self-pair to be implicitly true without storage, combine with [Reflexive](#reflexive).
+
+Use `flecs.SetAcyclic(w, relID)` to mark a relationship as acyclic, or the equivalent bare-tag form `fw.AddID(relID, w.Acyclic())`:
+
+```go
+w := flecs.New()
+var parentOf, a, b, c flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    parentOf = fw.NewEntity()
+    a = fw.NewEntity()
+    b = fw.NewEntity()
+    c = fw.NewEntity()
+})
+
+flecs.SetAcyclic(w, parentOf) // or: fw.AddID(parentOf, w.Acyclic())
+
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(a, flecs.MakePair(parentOf, b)) // a → b
+    fw.AddID(b, flecs.MakePair(parentOf, c)) // b → c
+    // fw.AddID(c, flecs.MakePair(parentOf, a)) // would panic: c → b → a → c is a cycle
+})
+
+// Check the flag:
+flecs.IsAcyclic(w, parentOf) // → true
+```
+
+The built-in `ChildOf` is bootstrapped acyclic. The following example panics at the second add:
+
+```go
+w := flecs.New()
+var parent, child flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    parent = fw.NewEntity()
+    child  = fw.NewEntity()
+    fw.AddID(child, flecs.MakePair(w.ChildOf(), parent))  // ok: child → parent
+    // fw.AddID(parent, flecs.MakePair(w.ChildOf(), child)) // panics: would create a cycle
+})
+```
+
+**Enforcement covers both immediate and deferred writes** — the check fires whether the add is inside a `w.Write` callback or batched via a deferred command queue.
+
+**Deliberate divergence from C flecs:** C flecs guards cycles at lookup/traversal time (via `ECS_MAX_RECURSION` and per-function depth caps). The Go port enforces at `AddID` time so that `EachChild` and similar recursors never encounter an infinite chain. Documented in CHANGELOG v0.41.0.
+
+**Composition with Transitive:** Acyclic (write-time) and Transitive (query-time) compose cleanly — preventing storage of a cycle does not interact with transitive chain walking at query time.
+
+Query whether a relationship is acyclic with `flecs.IsAcyclic(w, relID)`.
+
 ### Traversable
 
 > **Not yet ported in Go flecs.**
