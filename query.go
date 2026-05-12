@@ -190,6 +190,11 @@ func applyInheritablePromotion(w *World, term *Term) {
 	if !ok || !info.Inheritable {
 		return
 	}
+	// DontInherit overrides Inheritable: suppress Up traversal even when Inheritable is true.
+	// C flecs precedence: DontInherit > Inherit (validator.c:829, entity.c:2595).
+	if w.instantiatePolicies[term.ID]&policyOnInstantiateDontInherit != 0 {
+		return
+	}
 	term.Traverse = TraverseSelfUp
 	term.Trav = w.isAID
 }

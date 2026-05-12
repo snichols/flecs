@@ -35,6 +35,7 @@ The following features are available in the current release:
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
 - **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
 - **Configurable cleanup policies** _(v0.32.0)_ — `OnDelete` and `OnDeleteTarget` trait relationships with `RemoveAction`, `DeleteAction`, and `PanicAction`. `SetCleanupPolicy` / `GetCleanupPolicy` public API. Pair-add path (`AddID(relID, MakePair(w.OnDeleteTarget(), w.DeleteAction()))`) is first-class. `ChildOf` cascade-delete is now driven by the general mechanism (`(ChildOf, OnDeleteTarget, DeleteAction)` bootstrap). `IsA` has no default policy — opt-in recipe documented in `docs/PrefabsManual.md`.
+- **Configurable OnInstantiate policies** _(v0.33.0)_ — `Override` (eager copy at IsA-add time), `DontInherit` (suppresses IsA chain walk and query auto-promotion), and `Inherit` (explicit default). `SetInstantiatePolicy` / `GetInstantiatePolicy` public API. Pair-add form (`AddID(cid, MakePair(w.OnInstantiate(), w.Override()))`) is first-class. Multi-level IsA chains handled transitively. DontInherit takes precedence over `SetInheritable[T]`.
 
 ## Documentation
 

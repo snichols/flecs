@@ -352,3 +352,59 @@ func TestPrefabs_GetUp(t *testing.T) {
 		}
 	})
 }
+
+// TestPrefabs_OverridePolicy verifies the Override code block from PrefabsManual.md §Override.
+func TestPrefabs_OverridePolicy(t *testing.T) {
+	type Position struct{ X, Y float32 }
+
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	flecs.SetInstantiatePolicy(w, posID, w.Override())
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 10, Y: 20})
+
+		inst = fw.NewEntity()
+		fw.AddID(inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		p, ok := flecs.Get[Position](r, inst)
+		if !ok {
+			t.Fatal("inst: expected Position after Override copy")
+		}
+		if p.X != 10 || p.Y != 20 {
+			t.Fatalf("inst: expected {10,20}, got {%v,%v}", p.X, p.Y)
+		}
+		if !flecs.Owns[Position](r, inst) {
+			t.Fatal("inst: should own Position locally (Override policy)")
+		}
+	})
+}
+
+// TestPrefabs_DontInheritPolicy verifies the DontInherit code block from PrefabsManual.md §DontInherit.
+func TestPrefabs_DontInheritPolicy(t *testing.T) {
+	type Secret struct{ Code int }
+
+	w := flecs.New()
+	secretID := flecs.RegisterComponent[Secret](w)
+	flecs.SetInstantiatePolicy(w, secretID, w.DontInherit())
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Secret{Code: 42})
+
+		inst = fw.NewEntity()
+		fw.AddID(inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		has := flecs.Has[Secret](r, inst)
+		if has {
+			t.Fatal("inst: Has[Secret] should return false (DontInherit policy)")
+		}
+	})
+}

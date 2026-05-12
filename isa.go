@@ -65,6 +65,10 @@ func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
 // before recursion. Dead prefabs are skipped.
 func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	var zero T
+	// DontInherit takes precedence over Inheritable: do not walk the IsA chain.
+	if w.instantiatePolicies[cid]&policyOnInstantiateDontInherit != 0 {
+		return zero, false
+	}
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return zero, false
@@ -106,6 +110,10 @@ func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 // seen may be nil on entry; it is allocated lazily the first time an IsA pair
 // is encountered, with e pre-inserted. Dead prefabs are skipped.
 func hasViaIsA(w *World, e ID, cid ID, seen map[ID]struct{}) bool {
+	// DontInherit takes precedence over Inheritable: do not walk the IsA chain.
+	if w.instantiatePolicies[cid]&policyOnInstantiateDontInherit != 0 {
+		return false
+	}
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
 		return false

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.33.0 — 2026-05-12 — Phase 15.1: OnInstantiate Override / DontInherit policies
+
+### Added
+
+- **`SetInstantiatePolicy(w, componentID, action)`** — register the OnInstantiate behavior for a component entity. `action` is one of `w.Override()`, `w.Inherit()`, or `w.DontInherit()`. The three actions are mutually exclusive; calling Set replaces any prior policy.
+- **`GetInstantiatePolicy(w, componentID) (ID, bool)`** — read back a registered policy. Returns `(actionID, true)` if an explicit policy has been set; `(0, false)` for the implicit default.
+- **Override behavior**: when `(IsA, prefab)` is added to an entity, every component on the prefab (or its IsA chain) that has `policyOnInstantiateOverride` is eagerly copied into the instance's own local slot. Mutations to the instance copy are isolated from the prefab and sibling instances. If the instance already owns the component before the IsA-add, the copy is skipped (user value wins).
+- **DontInherit behavior**: `Get`/`Has` no longer walk the IsA chain for a component with `policyOnInstantiateDontInherit`. Query auto-promotion to `Self|Up(IsA)` is suppressed even when `SetInheritable[T]` was called (DontInherit takes precedence).
+- **Pair-add form first-class**: `fw.AddID(cid, MakePair(w.OnInstantiate(), w.Override()))` produces identical state to `SetInstantiatePolicy(w, cid, w.Override())`. Both are tested via `GetInstantiatePolicy` round-trip.
+- **`instantiate_policies_test.go`** — 13 test cases covering: Override eager copy, DontInherit suppresses Get/Has, DontInherit overrides Inheritable in query, mixed policies (Inherit/Override/DontInherit on same prefab), Override removal restores IsA path, Set/Get round-trip for all three actions, pair-add equivalence, multi-level IsA chain Override propagation, default behavior unchanged, GetInstantiatePolicy no-policy case, unknown-action panic, pre-set value wins over Override copy, and Inherit pair-add form.
+
+### Documentation
+
+- `docs/PrefabsManual.md` — replaced the two "Not yet ported" callouts for Override and DontInherit (lines 280–294) with shipped-in-v0.33.0 content and working code examples. Removed the corresponding stale bullets from the "Not yet ported" section.
+- `docs/ComponentTraits.md` — updated the roadmap table (OnInstantiate/Inherit/Override/DontInherit rows to `✅ shipped (v0.33.0)`); revised the prose at lines 43 and 155–158.
+- `docs/README.md` — removed the stale "OnInstantiate / Override / DontInherit traits" and "Auto-override on instantiation" feature-gap entries.
+- `ROADMAP.md` — moved the OnInstantiate full-behavior item to the Shipped section.
+
+### Non-goals (explicitly out of scope for v0.33.0)
+
+- No change to `SetInheritable[T]` / `TypeInfo.Inheritable`; the two systems coexist.
+- No recursive prefab-children copying (`flecs_instantiate_children`); child-entity replication remains a documented gap.
+- No partial-flush rollback on panic mid-Override-copy.
+
+---
+
 ## v0.32.0 — 2026-05-12 — Phase 15.0: Configurable cleanup policies
 
 ### Added

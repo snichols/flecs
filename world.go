@@ -65,7 +65,8 @@ type World struct {
 	removeActionID     ID                              // built-in Remove cleanup action entity (index 14)
 	deleteActionID     ID                              // built-in Delete cleanup action entity (index 15)
 	panicActionID      ID                              // built-in Panic cleanup action entity (index 16; first user entity at index 17)
-	cleanupPolicies    map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
+	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
+	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusiveAccess    atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread    string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages             []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
