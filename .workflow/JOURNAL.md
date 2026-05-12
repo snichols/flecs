@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-12)
+
+Phase 14.12 complete: ported docs/FAQ.md from upstream C flecs as a full Go-idiomatic Q&amp;A covering ECS fundamentals, Go-specific design decisions (generics, panic vs error, Reader/Writer concurrency, goroutine safety, no module system, slog logger), performance pitfalls (query lifecycle, multi-invocation, memory), component semantics (AddID vs Set, entity ID recycling), hierarchy path lookup, deferred mutations in systems, change detection via observers, and REST handler notes. Added 6 Go-specific Q&amp;As not in the upstream. Created docs/faq_examples_test.go with 6 TestFAQ_* functions (all passing under go test ./... -race -count=1 and go vet). Updated docs/README.md (FAQ → landed/14.12), ROADMAP.md (14.12 → shipped v0.31.0, added Documentation port complete note), CHANGELOG.md (Unreleased Phase 14.12 entry with celebratory note completing 14.0–14.12 across v0.19.0–v0.31.0).
+
