@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 13.1: Inheritable components
+## v0.18.0 — 2026-05-12 — Phase 13.1: Inheritable components
 
 Auto-`Self|Up(IsA)` promotion for components marked with `SetInheritable`.
 `Each1`/`Each2`/`NewQuery` and friends now match entities that *inherit* a
@@ -30,11 +30,12 @@ on every query term. Port of C flecs `validator.c:766-770`.
   was resolved via an ancestor (Up path), the same prefab component pointer is
   passed for every entity in the matched table (C flecs option (a); documented
   as a foot-gun in each function's godoc).
-- **13 new tests** in `inheritance_test.go` covering: Each1 match, value from
+- **20 new tests** in `inheritance_test.go` covering: Each1 match, value from
   prefab, local override, unmarked stays exclusive, explicit Self override, Each2
-  mixed, NewQueryFromTerms FieldShared, cached query rematch, TermNot not
-  promoted, SetInheritable panic for unregistered ID/type, explicit Up,
-  built-in trait entity distinctness.
+  mixed, Each3/Each4 all-inherited and mixed-inherited-local variants, inherited
+  tag component, first-local-rest-inherited, NewQueryFromTerms FieldShared,
+  cached query rematch, TermNot not promoted, SetInheritable panic for
+  unregistered ID/type, explicit Up, built-in trait entity distinctness.
 - **2 new benchmarks** in `bench_test.go`:
   - `BenchmarkInheritableEach1_NoInheritors` — inheritable component, no IsA
     pairs (baseline; should be within noise of `BenchmarkEach1`).
