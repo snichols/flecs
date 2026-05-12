@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Phase 14.12: FAQ doc port (upcoming v0.31.0)
+
+This phase completes the docs-port project. Phases 14.0–14.12 spanned 13 releases (v0.19.0–v0.31.0) and ported every relevant upstream C flecs document to Go idioms, verified with compile-tested code blocks throughout.
+
+### Added
+
+- **`docs/FAQ.md`** — full Go-idiomatic port of the upstream C flecs FAQ. Keeps the Q&A format; every C-specific answer is replaced with its Go equivalent. Adds Go-specific entries: why generics over `interface{}`, why panic over error returns, how the Reader/Writer model compares to `sync.RWMutex`, goroutine safety, why there is no module system, and why `log/slog` is the logger. Covers performance pitfalls (query creation in loops), the entity ID recycling large-number behaviour, `AddID` vs `Set` semantics, hierarchy path lookup, deferred mutations inside systems, and change detection via observers. Cross-links [Manual](docs/Manual.md), [Quickstart](docs/Quickstart.md), [Relationships](docs/Relationships.md), [FlecsRemoteApi](docs/FlecsRemoteApi.md), and [docs/README.md](docs/README.md).
+- **`docs/faq_examples_test.go`** — 6 test functions (`TestFAQ_*`) verifying every code-bearing answer in the FAQ: cached-query build-once pattern, entity ID recycling and generation bits, AddID vs Set tag/value semantics, full-path vs LookupChild hierarchy lookup, deferred mutations from inside a system via `it.Writer()`, and OnSet observer change detection. Run with `go test ./docs/...`.
+- **`docs/README.md`** — FAQ row updated to `✅ landed / 14.12`.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.12 row updated to `✅ shipped (v0.31.0)`; "Documentation port complete (v0.31.0)" note added above the phase table.
+
 ## v0.30.0 — 2026-05-12 — Phase 14.11: Manual doc port
 
 ### Added

@@ -25,7 +25,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [FlecsRemoteApi.md](FlecsRemoteApi.md) | ✅ landed / 14.9 | 14.9 |
 | [DesignWithFlecs.md](DesignWithFlecs.md) | ✅ landed / 14.10 | 14.10 |
 | [Manual.md](Manual.md) | ✅ landed / 14.11 | 14.11 |
-| [FAQ.md](FAQ.md) | pending | 14.12 |
+| [FAQ.md](FAQ.md) | ✅ landed / 14.12 | 14.12 |
 
 ---
 
