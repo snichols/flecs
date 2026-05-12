@@ -153,6 +153,11 @@ cq.Each(func(it *flecs.QueryIter) {
 uncached and cached queries. `IsFieldSelf` and `FieldShared[T]` disambiguate
 local vs. inherited values at iteration time.
 
+Marking a component **inheritable** via `SetInheritable[T](w)` causes all
+`Each1`/`Each2`/`NewQuery` terms for that component to auto-promote to
+`Self|Up(IsA)` — inheritor entities are visible without explicit traversal
+modifiers. Non-inheritable components (the default) are unaffected.
+
 ### Pipelines
 
 `Progress(dt)` runs all registered systems in four built-in phases:
@@ -211,6 +216,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Traversal query terms | `With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)`; `IsFieldSelf`, `FieldShared[T]` |
+| Inheritable components | `SetInheritable[T](w)` / `w.SetInheritable(cid)` — auto-promotes query terms to `Self\|Up(IsA)` so inheritor entities are matched without explicit traversal |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
 | Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |

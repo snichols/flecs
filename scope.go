@@ -473,21 +473,65 @@ func PrefabOf(r *Reader, e ID) (ID, bool) {
 
 // ── Each free functions on Reader ─────────────────────────────────────────────
 
+// upPtr resolves a component pointer for id in the current iterator table.
+// When the term was matched via an ancestor (upSources[id] != 0), it returns a
+// pointer into the ancestor's component slot — the same pointer for every row in
+// this table (C flecs semantics: all inheritors share the prefab's slot; mutating
+// through the pointer affects the prefab and all entities that inherit from it).
+// When self-matched (upSources[id] == 0 or no up-sources), returns nil so the
+// caller falls back to a per-row Field[T] slice.
+func upPtr[T any](w *World, it *QueryIter, id ID) *T {
+	src := it.upSources[id]
+	if src == 0 {
+		return nil
+	}
+	rec := w.index.Get(src)
+	if rec == nil || rec.Table == nil {
+		return nil
+	}
+	ptr := rec.Table.Get(int(rec.Row), id)
+	if ptr == nil {
+		// Tag component: no data backing store. Return pointer to a zero value
+		// so the callback receives a valid (if meaningless) pointer, consistent
+		// with how Field[T] handles local tags (returns a zero-value slice).
+		var zero T
+		return &zero
+	}
+	return (*T)(ptr)
+}
+
 // Each1 calls fn once for every entity that has component A.
+//
+// If A is marked inheritable via [SetInheritable], the query is automatically
+// promoted to Self|Up(IsA): entities that own A locally AND entities that
+// inherit A from a prefab via IsA are both matched. When the term is resolved
+// via an ancestor (Up path), the same prefab pointer is passed for every entity
+// in the matched table — mutating through the pointer affects the prefab and all
+// entities that inherit from it.
 func Each1[A any](r *Reader, fn func(e ID, a *A)) {
 	var ids [1]ID
 	ids[0] = RegisterComponent[A](r.world)
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		colA := Field[A](it, ids[0])
-		for i, e := range it.Entities() {
-			fn(e, &colA[i])
+		if aShared := upPtr[A](r.world, it, ids[0]); aShared != nil {
+			for _, e := range it.Entities() {
+				fn(e, aShared)
+			}
+		} else {
+			colA := Field[A](it, ids[0])
+			for i, e := range it.Entities() {
+				fn(e, &colA[i])
+			}
 		}
 	}
 }
 
 // Each2 calls fn once for every entity that has all of components A and B.
+//
+// If any component is marked inheritable, its query term is auto-promoted to
+// Self|Up(IsA). For each matched table, components resolved via an ancestor
+// yield the same prefab pointer for every row (see [Each1] doc for details).
 func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 	var ids [2]ID
 	ids[0] = RegisterComponent[A](r.world)
@@ -495,15 +539,43 @@ func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		colA := Field[A](it, ids[0])
-		colB := Field[B](it, ids[1])
+		aShared := upPtr[A](r.world, it, ids[0])
+		bShared := upPtr[B](r.world, it, ids[1])
+		if aShared == nil && bShared == nil {
+			colA := Field[A](it, ids[0])
+			colB := Field[B](it, ids[1])
+			for i, e := range it.Entities() {
+				fn(e, &colA[i], &colB[i])
+			}
+			continue
+		}
+		var colA []A
+		if aShared == nil {
+			colA = Field[A](it, ids[0])
+		}
+		var colB []B
+		if bShared == nil {
+			colB = Field[B](it, ids[1])
+		}
 		for i, e := range it.Entities() {
-			fn(e, &colA[i], &colB[i])
+			a := aShared
+			if a == nil {
+				a = &colA[i]
+			}
+			b := bShared
+			if b == nil {
+				b = &colB[i]
+			}
+			fn(e, a, b)
 		}
 	}
 }
 
 // Each3 calls fn once for every entity that has all of components A, B, and C.
+//
+// If any component is marked inheritable, its query term is auto-promoted to
+// Self|Up(IsA). For each matched table, components resolved via an ancestor
+// yield the same prefab pointer for every row (see [Each1] doc for details).
 func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 	var ids [3]ID
 	ids[0] = RegisterComponent[A](r.world)
@@ -512,16 +584,53 @@ func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		colA := Field[A](it, ids[0])
-		colB := Field[B](it, ids[1])
-		colC := Field[C](it, ids[2])
+		aShared := upPtr[A](r.world, it, ids[0])
+		bShared := upPtr[B](r.world, it, ids[1])
+		cShared := upPtr[C](r.world, it, ids[2])
+		if aShared == nil && bShared == nil && cShared == nil {
+			colA := Field[A](it, ids[0])
+			colB := Field[B](it, ids[1])
+			colC := Field[C](it, ids[2])
+			for i, e := range it.Entities() {
+				fn(e, &colA[i], &colB[i], &colC[i])
+			}
+			continue
+		}
+		var colA []A
+		if aShared == nil {
+			colA = Field[A](it, ids[0])
+		}
+		var colB []B
+		if bShared == nil {
+			colB = Field[B](it, ids[1])
+		}
+		var colC []C
+		if cShared == nil {
+			colC = Field[C](it, ids[2])
+		}
 		for i, e := range it.Entities() {
-			fn(e, &colA[i], &colB[i], &colC[i])
+			a := aShared
+			if a == nil {
+				a = &colA[i]
+			}
+			b := bShared
+			if b == nil {
+				b = &colB[i]
+			}
+			c := cShared
+			if c == nil {
+				c = &colC[i]
+			}
+			fn(e, a, b, c)
 		}
 	}
 }
 
 // Each4 calls fn once for every entity that has all of components A, B, C, and D.
+//
+// If any component is marked inheritable, its query term is auto-promoted to
+// Self|Up(IsA). For each matched table, components resolved via an ancestor
+// yield the same prefab pointer for every row (see [Each1] doc for details).
 func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
 	var ids [4]ID
 	ids[0] = RegisterComponent[A](r.world)
@@ -531,12 +640,54 @@ func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		colA := Field[A](it, ids[0])
-		colB := Field[B](it, ids[1])
-		colC := Field[C](it, ids[2])
-		colD := Field[D](it, ids[3])
+		aShared := upPtr[A](r.world, it, ids[0])
+		bShared := upPtr[B](r.world, it, ids[1])
+		cShared := upPtr[C](r.world, it, ids[2])
+		dShared := upPtr[D](r.world, it, ids[3])
+		if aShared == nil && bShared == nil && cShared == nil && dShared == nil {
+			colA := Field[A](it, ids[0])
+			colB := Field[B](it, ids[1])
+			colC := Field[C](it, ids[2])
+			colD := Field[D](it, ids[3])
+			for i, e := range it.Entities() {
+				fn(e, &colA[i], &colB[i], &colC[i], &colD[i])
+			}
+			continue
+		}
+		var colA []A
+		if aShared == nil {
+			colA = Field[A](it, ids[0])
+		}
+		var colB []B
+		if bShared == nil {
+			colB = Field[B](it, ids[1])
+		}
+		var colC []C
+		if cShared == nil {
+			colC = Field[C](it, ids[2])
+		}
+		var colD []D
+		if dShared == nil {
+			colD = Field[D](it, ids[3])
+		}
 		for i, e := range it.Entities() {
-			fn(e, &colA[i], &colB[i], &colC[i], &colD[i])
+			a := aShared
+			if a == nil {
+				a = &colA[i]
+			}
+			b := bShared
+			if b == nil {
+				b = &colB[i]
+			}
+			c := cShared
+			if c == nil {
+				c = &colC[i]
+			}
+			d := dShared
+			if d == nil {
+				d = &colD[i]
+			}
+			fn(e, a, b, c, d)
 		}
 	}
 }

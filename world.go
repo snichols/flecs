@@ -2,6 +2,7 @@ package flecs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -54,7 +55,11 @@ type World struct {
 	preUpdateID        ID                              // built-in PreUpdate phase entity (index 4)
 	onUpdateID         ID                              // built-in OnUpdate phase entity (index 5)
 	postUpdateID       ID                              // built-in PostUpdate phase entity (index 6)
-	onFixedUpdateID    ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	onFixedUpdateID    ID                              // built-in OnFixedUpdate phase entity (index 7)
+	onInstantiateID    ID                              // built-in OnInstantiate relationship entity (index 8)
+	inheritID          ID                              // built-in Inherit trait entity (index 9)
+	overrideID         ID                              // built-in Override trait entity (index 10)
+	dontInheritID      ID                              // built-in DontInherit trait entity (index 11; first user entity at index 12)
 	exclusiveAccess    atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread    string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages             []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -81,7 +86,11 @@ type World struct {
 //   - Index 5: OnUpdate built-in pipeline phase entity
 //   - Index 6: PostUpdate built-in pipeline phase entity
 //   - Index 7: OnFixedUpdate built-in pipeline phase entity
-//   - Index 8+: user entities (NewEntity)
+//   - Index 8: OnInstantiate built-in relationship entity
+//   - Index 9: Inherit built-in trait entity
+//   - Index 10: Override built-in trait entity
+//   - Index 11: DontInherit built-in trait entity
+//   - Index 12+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -133,6 +142,30 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(onFixedUpdate))
 	w.onFixedUpdateID = onFixedUpdate
+	// Allocate the built-in OnInstantiate relationship entity (gets index 8).
+	onInstantiate := w.index.Alloc()
+	rec = w.index.Get(onInstantiate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(onInstantiate))
+	w.onInstantiateID = onInstantiate
+	// Allocate the built-in Inherit trait entity (gets index 9).
+	inherit := w.index.Alloc()
+	rec = w.index.Get(inherit)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(inherit))
+	w.inheritID = inherit
+	// Allocate the built-in Override trait entity (gets index 10).
+	override := w.index.Alloc()
+	rec = w.index.Get(override)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(override))
+	w.overrideID = override
+	// Allocate the built-in DontInherit trait entity (gets index 11).
+	dontInherit := w.index.Alloc()
+	rec = w.index.Get(dontInherit)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(dontInherit))
+	w.dontInheritID = dontInherit
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}
@@ -389,6 +422,39 @@ func RegisterComponent[T any](w *World) ID {
 			slog.Uint64("size", uint64(info.Size)))
 	}
 	return id
+}
+
+// SetInheritable marks the component associated with cid as inheritable. Any
+// subsequent query term involving cid will default to Self|Up traversal via
+// IsA, so the term matches both entities that own cid locally and entities that
+// inherit cid from a prefab via IsA. Terms that explicitly set traversal via
+// Self(), Up(), SelfUp(), or Cascade() are unaffected.
+//
+// Must be called BEFORE any query referencing cid is constructed; calling it
+// after a query is built produces undefined query-match behavior (the query
+// uses whichever traversal was set at construction time).
+//
+// Panics if cid is not a registered component.
+func (w *World) SetInheritable(cid ID) {
+	info, ok := w.registry.LookupByID(cid)
+	if !ok {
+		panic(fmt.Sprintf("flecs: SetInheritable: component id %d is not registered", cid))
+	}
+	info.Inheritable = true
+}
+
+// SetInheritable marks the component type T as inheritable. T must have been
+// registered with RegisterComponent first; panics otherwise.
+//
+// Equivalent to w.SetInheritable(RegisterComponent[T](w)) but verifies that T
+// was already registered (the registration is not forced here to avoid
+// accidentally creating component entities out of order).
+func SetInheritable[T any](w *World) {
+	info, ok := component.LookupByType[T](w.registry)
+	if !ok || info.Component == 0 {
+		panic(fmt.Sprintf("flecs: SetInheritable[%T]: component not registered; call RegisterComponent[T] first", *new(T)))
+	}
+	info.Inheritable = true
 }
 
 // setOnWorld writes value v as component T on entity e.

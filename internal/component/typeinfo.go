@@ -58,4 +58,8 @@ type TypeInfo struct {
 	// Component is the entity ID assigned to this type when it is registered
 	// as a component-entity by the World. Zero means not yet associated.
 	Component ids.ID
+	// Inheritable marks the component as eligible for automatic Self|Up(IsA)
+	// promotion in queries. Set via World.SetInheritable or SetInheritable[T].
+	// Default false: components are matched locally only unless the user opts in.
+	Inheritable bool
 }

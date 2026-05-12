@@ -39,6 +39,14 @@ const (
 	// matched tables are iterated in ascending depth order in the Trav hierarchy
 	// (root-first). Only valid in NewCachedQueryFromTerms; NewQueryFromTerms panics.
 	TraverseCascade TraverseFlags = 3
+
+	// TraverseExplicitSelf is an internal sentinel returned by Term.Self().
+	// At query-match time it behaves identically to TraverseSelf (local-only
+	// match). Its purpose is to let the auto-promotion logic in the validator
+	// distinguish "user explicitly asked for Self" from "default zero value".
+	// When a term carries TraverseExplicitSelf, the validator does NOT promote it
+	// to SelfUp even when the underlying component is inheritable.
+	TraverseExplicitSelf TraverseFlags = 4
 )
 
 // TermKind enumerates how a query term participates in matching.
@@ -114,9 +122,15 @@ func Maybe(id ID) Term { return Term{ID: id, Kind: TermOptional} }
 // Use FieldMaybe — not Field — to access Or-group columns per entity.
 func Or(id ID) Term { return Term{ID: id, Kind: TermOr} }
 
-// Self returns a copy of the term with TraverseSelf semantics. This is the
-// default and is provided for readability and symmetry with Up/SelfUp/Cascade.
-func (t Term) Self() Term { t.Traverse = TraverseSelf; t.Trav = 0; return t }
+// Self returns a copy of the term with explicit TraverseSelf semantics.
+// This is the default traversal mode; calling Self() is provided for
+// readability and symmetry with Up/SelfUp/Cascade.
+//
+// When a component is marked inheritable via SetInheritable[T], query
+// construction normally auto-promotes terms to SelfUp(IsA). Calling Self()
+// explicitly suppresses that auto-promotion: the term will match only entities
+// that own the component locally, regardless of inheritable status.
+func (t Term) Self() Term { t.Traverse = TraverseExplicitSelf; t.Trav = 0; return t }
 
 // Up returns a copy of the term with TraverseUp semantics: matched tables must
 // have entities whose nearest ancestor via rel owns the component (the entity's
@@ -154,6 +168,32 @@ type Query struct {
 	orGroups [][]ID // each inner slice is one OR-group; tables must match all groups
 }
 
+// applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
+// the term's component was marked inheritable via SetInheritable and the term
+// has not already had its traversal set explicitly. Mirror of C flecs
+// validator.c:766-770.
+//
+// Promotion rules:
+//   - Only TermAnd and TermOptional are eligible (TermNot is never promoted:
+//     "table does not contain this id" does not interact with Up traversal).
+//   - Only terms whose Traverse is the default zero (TraverseSelf) are promoted;
+//     terms where the user called .Self(), .Up(), .SelfUp(), or .Cascade() keep
+//     their explicit setting.
+func applyInheritablePromotion(w *World, term *Term) {
+	if term.Kind != TermAnd && term.Kind != TermOptional {
+		return
+	}
+	if term.Traverse != TraverseSelf {
+		return // user already set traversal explicitly
+	}
+	info, ok := w.registry.LookupByID(term.ID)
+	if !ok || !info.Inheritable {
+		return
+	}
+	term.Traverse = TraverseSelfUp
+	term.Trav = w.isAID
+}
+
 // NewQuery constructs a query over w for the given component IDs (all TermAnd).
 //
 // Panics if w is nil or no IDs are provided. Zero-term queries (match all
@@ -179,6 +219,7 @@ func NewQuery(w *World, ids ...ID) *Query {
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
 		terms[i] = Term{ID: id, Kind: TermAnd}
+		applyInheritablePromotion(w, &terms[i])
 	}
 	return &Query{w: w, terms: terms, andIDs: cp}
 }
@@ -221,7 +262,7 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 			panic("flecs: NewQueryFromTerms: cascade requires a cached query; use NewCachedQueryFromTerms")
 		}
 	}
-	cp, andIDs, orGroups := validateAndSortTerms("flecs: NewQueryFromTerms", terms)
+	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups}
 }
 
@@ -399,7 +440,7 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 		switch term.Kind {
 		case TermAnd:
 			switch term.Traverse {
-			case TraverseSelf:
+			case TraverseSelf, TraverseExplicitSelf:
 				if !t.HasComponent(term.ID) {
 					return false
 				}
@@ -558,7 +599,7 @@ func Field[T any](it *QueryIter, id ID) []T {
 	if !tbl.HasComponent(id) {
 		// Check if this is a traversal term matched via an ancestor (Up path).
 		for _, term := range it.terms {
-			if term.ID == id && term.Traverse != TraverseSelf {
+			if term.ID == id && term.Traverse != TraverseSelf && term.Traverse != TraverseExplicitSelf {
 				panic(fmt.Sprintf("flecs: Field[%s]: id %d was matched via Up (component lives on an ancestor); use FieldShared[T] to read the inherited value",
 					reflect.TypeFor[T](), id))
 			}
@@ -645,7 +686,7 @@ func IsFieldSelf(it *QueryIter, id ID) bool {
 		if term.ID != id {
 			continue
 		}
-		if term.Traverse == TraverseSelf {
+		if term.Traverse == TraverseSelf || term.Traverse == TraverseExplicitSelf {
 			return true
 		}
 		// upSources[id] == 0 means self-matched; non-zero means ancestor entity.
@@ -670,7 +711,7 @@ func FieldShared[T any](it *QueryIter, id ID) (T, bool) {
 		if term.ID != id {
 			continue
 		}
-		if term.Traverse == TraverseSelf {
+		if term.Traverse == TraverseSelf || term.Traverse == TraverseExplicitSelf {
 			panic(fmt.Sprintf("flecs: FieldShared[%s]: id %d uses TraverseSelf semantics; use Field[T] for locally-owned components",
 				reflect.TypeFor[T](), id))
 		}
@@ -707,9 +748,10 @@ func FieldShared[T any](it *QueryIter, id ID) (T, bool) {
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
 // builds OR-groups by scanning consecutive TermOr entries, copies and sorts terms
 // (And first by ID, Not second by ID, Or-groups third preserving adjacency, Optional
-// last by ID), and returns the sorted terms, pre-extracted And-term IDs, and OR-groups.
+// last by ID), applies inheritable auto-promotion (see applyInheritablePromotion),
+// and returns the sorted terms, pre-extracted And-term IDs, and OR-groups.
 // Panics with messages prefixed by caller on invalid input.
-func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID, [][]ID) {
+func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, [][]ID) {
 	if len(terms) == 0 {
 		panic(caller + ": at least one term is required")
 	}
@@ -803,7 +845,15 @@ func validateAndSortTerms(caller string, terms []Term) ([]Term, []ID, [][]ID) {
 	cp = append(cp, orTerms...)
 	cp = append(cp, optTerms...)
 
-	// Extract And-term IDs (already sorted).
+	// Apply inheritable auto-promotion: any And/Optional term whose component was
+	// marked inheritable and whose traversal is still the default zero gets
+	// promoted to SelfUp(IsA). Terms with explicit traversal (Self/Up/SelfUp/
+	// Cascade) are unaffected. Mirror of C flecs validator.c:766-770.
+	for i := range cp {
+		applyInheritablePromotion(w, &cp[i])
+	}
+
+	// Extract And-term IDs (already sorted). Reflect possible promotion changes.
 	andIDs := make([]ID, len(andTerms))
 	for i, t := range andTerms {
 		andIDs[i] = t.ID
