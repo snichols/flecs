@@ -480,27 +480,34 @@ w.Read(func(r *flecs.Reader) {
 
 ### Symmetric
 
-**What it does:** When a symmetric relationship `(R, Y)` is added to entity `X`, the relationship `(R, X)` is automatically added to entity `Y`. Removal is mirrored the same way. Useful for bidirectional relationships such as `AlliesWith`, `MarriedTo`, or `TradingWith`.
-
-**What the C API looks like:**
-
-```c
-// C — not available in Go flecs
-ecs_entity_t MarriedTo = ecs_new_w_id(world, EcsSymmetric);
-ecs_add_pair(world, Bob, MarriedTo, Alice); // also adds (MarriedTo, Bob) to Alice
-```
-
-**Workaround:** Add both sides of the pair manually:
+**Shipped in v0.36.0.** When a symmetric relationship `(R, B)` is added to entity `A`, the relationship `(R, A)` is automatically added to entity `B`. Removal is mirrored the same way. Useful for bidirectional relationships such as `AlliesWith`, `MarriedTo`, or `TradingWith`.
 
 ```go
-// Go workaround
+w := flecs.New()
+marriedTo := flecs.RegisterComponent[struct{}](w) // or use fw.NewEntity()
+flecs.SetSymmetric(w, marriedTo)
+
+var bob, alice flecs.ID
 w.Write(func(fw *flecs.Writer) {
+    bob = fw.NewEntity()
+    alice = fw.NewEntity()
     fw.AddID(bob, flecs.MakePair(marriedTo, alice))
-    fw.AddID(alice, flecs.MakePair(marriedTo, bob))
+    // alice now automatically has (marriedTo, bob)
+})
+
+w.Read(func(fr *flecs.Reader) {
+    _ = fr.HasID(alice, flecs.MakePair(marriedTo, bob)) // true — mirrored automatically
 })
 ```
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-143-relationships-port): *Symmetric relationship trait*.
+**API:**
+- `flecs.SetSymmetric(w, relID)` — marks a relationship as symmetric.
+- `flecs.IsSymmetric(w, relID) bool` — reports whether a relationship is symmetric.
+- `w.Symmetric() ID` — the built-in Symmetric trait entity (index 19). The bare-tag form `fw.AddID(relID, w.Symmetric())` is equivalent to `SetSymmetric(w, relID)`.
+
+**Loop guard:** the mirror is idempotent — adding `(R, B)` to `A` mirrors `(R, A)` to `B`, which would try to mirror back, but `A` already has `(R, B)`, so recursion terminates in one extra hop with no observable side effects.
+
+**Interaction with Exclusive:** when `R` is both symmetric and exclusive, replacing `(R, X)` with `(R, B)` on `A` also mirrors `(R, A)` to `B`; if `B` held a conflicting exclusive target, the exclusive constraint replaces it as well.
 
 ---
 
@@ -601,7 +608,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Relationship** | `EcsRelationship` | ⏳ planned | No usage-as-relationship constraint |
 | **Singleton** | `EcsSingleton` | ⏳ planned | No first-class singleton component; workaround via dedicated entity |
 | **Sparse** | `EcsSparse` | ⏳ planned | All components use archetype SoA storage |
-| **Symmetric** | `EcsSymmetric` | ⏳ planned | No automatic bidirectional pair mirroring |
+| **Symmetric** | `EcsSymmetric` | ✅ shipped (v0.36.0) | `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)`; `w.Symmetric()` bare-tag form; mirror fires on add and remove; loop-guard via `HasComponent` idempotence; composes with `Exclusive` |
 | **Target** | `EcsTarget` | ⏳ planned | No usage-as-target constraint |
 | **Trait** | `EcsTrait` | ⏳ planned | No first-class trait marker |
 | **Transitive** | `EcsTransitive` | ⏳ planned | No query-time transitive chain traversal for custom relationships |

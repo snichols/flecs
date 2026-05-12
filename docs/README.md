@@ -78,7 +78,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Units addon** — not ported.
 - **Query groups** — not ported.
 - **Transitive relationships** (`EcsTransitive`, `Trav` flag) — not ported.
-- **Symmetric relationships** (`EcsSymmetric`) — not ported.
+- **Symmetric relationships** (`EcsSymmetric`) — **shipped in v0.36.0** via `SetSymmetric` / `IsSymmetric` / `w.Symmetric()`. Adding `(R, B)` to `A` automatically mirrors `(R, A)` to `B`; removal is mirrored too. See the [Symmetric section in ComponentTraits.md](ComponentTraits.md#symmetric).
 - **Exclusive relationships** (`EcsExclusive`) — **shipped in v0.34.0** via `SetExclusive` / `IsExclusive` / `w.Exclusive()`. `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive.
 - **Union relationships** (`EcsUnion`) — not ported.
 - **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — not ported.
@@ -116,7 +116,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.3 (Relationships port)
 
 - **Exclusive relationship trait** (`EcsExclusive`) — **shipped in v0.34.0**. `SetExclusive(w, relID)` / `IsExclusive(w, relID)` / `w.Exclusive()`. Built-in relationships `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` are exclusive by default. `IsA` is not exclusive.
-- **Symmetric relationship trait** (`EcsSymmetric`) — makes a relationship bidirectional: adding `(R, Y)` to entity `X` automatically adds `(R, X)` to entity `Y`. not yet ported in Go flecs.
+- **Symmetric relationship trait** (`EcsSymmetric`) — **shipped in v0.36.0**. `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)` / `w.Symmetric()`. Adding `(R, B)` to `A` automatically mirrors `(R, A)` to `B`; removal is mirrored too. See [ComponentTraits.md § Symmetric](ComponentTraits.md#symmetric).
 - **Transitive relationship trait** (`EcsTransitive`) — enables transitive query matching for custom relationships (if `A R B` and `B R C`, queries for `(R, C)` also match `A`). The built-in `IsA` already walks its chain in `Get`/`Has`; general transitivity for custom relationships requires this unported trait. not yet ported in Go flecs.
 - **Traversable relationship trait** (`EcsTraversable`) — formally marks a relationship as safe to traverse in queries; controls which relationships the query engine may follow when evaluating `Up`/`SelfUp`/`Cascade` terms. In Go flecs any entity can be used as a traversal relationship without explicit registration; the formal trait and its safety enforcement are not ported. not yet ported in Go flecs.
 - **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget`) — **shipped in v0.32.0**. `SetCleanupPolicy` / `GetCleanupPolicy` with `DeleteAction`, `RemoveAction`, and `PanicAction`. `ChildOf` is bootstrapped with `(OnDeleteTarget, DeleteAction)`. See [Relationships.md § Cleanup policies](Relationships.md).
