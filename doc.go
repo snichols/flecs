@@ -215,7 +215,7 @@
 // when the scope exits. This makes it safe to mutate the world during iteration:
 //
 //	w.Write(func(fw *flecs.Writer) {
-//	    flecs.Each1[Position](fw.AsReader(), func(e flecs.ID, p *Position) {
+//	    flecs.Each1[Position](fw, func(e flecs.ID, p *Position) {
 //	        if p.X < 0 { fw.Delete(e) } // queued, not immediate
 //	    })
 //	})

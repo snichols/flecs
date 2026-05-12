@@ -143,7 +143,7 @@ Every hook and observer callback receives a `*flecs.Writer` as its first argumen
 ```go
 flecs.OnAdd[Position](w, func(fw *flecs.Writer, e flecs.ID, v Position) {
     // Safe to read from within the callback.
-    if _, ok := flecs.Get[Position](fw.AsReader(), e); ok {
+    if _, ok := flecs.Get[Position](fw, e); ok {
         fmt.Println("Position is present")
     }
     _ = fw.IsAlive(e) // also safe

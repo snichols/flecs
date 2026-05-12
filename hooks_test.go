@@ -372,7 +372,7 @@ func TestOnSetReadOnlyReentrancy(t *testing.T) {
 		flecs.Set[Velocity](fw, e, Velocity{5, 6})
 	})
 	flecs.OnSet[Position](w, func(fw *flecs.Writer, eid flecs.ID, _ Position) {
-		gotVel, _ = flecs.Get[Velocity](fw.AsReader(), eid)
+		gotVel, _ = flecs.Get[Velocity](fw, eid)
 	})
 	w.Write(func(fw *flecs.Writer) {
 		flecs.Set[Position](fw, e, Position{1, 2})

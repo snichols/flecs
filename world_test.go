@@ -276,7 +276,7 @@ func TestGetOnUnregisteredTypeReturnsFalse(t *testing.T) {
 	w.Write(func(fw *flecs.Writer) {
 		e := fw.NewEntity()
 		// Velocity was never registered.
-		_, ok := flecs.Get[Velocity](fw.AsReader(), e)
+		_, ok := flecs.Get[Velocity](fw, e)
 		if ok {
 			t.Fatal("Get on unregistered type should return false")
 		}

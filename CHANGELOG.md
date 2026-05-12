@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.40.0 — 2026-05-12 — Phase 15.8: scope interface — Writer ⊇ Reader at free-function boundaries
+
+### Added
+
+- **Unexported `scope` interface** — defined in `scope.go`. Both `*Reader` and `*Writer` satisfy `scope` via a single unexported `scopeWorld() *World` method. Users never name the interface; they pass `*Reader` or `*Writer` as before.
+
+### Changed
+
+- **All read free-functions now accept `scope` instead of `*Reader`** — `Get[T]`, `GetRef[T]`, `Has[T]`, `Owns[T]`, `GetPair[T]`, `GetPairRef[T]`, `HasID`, `OwnsID`, `Each1`, `Each2`, `Each3`, `Each4`, `GetUp[T]`, `HasUp`, `TargetUp`, `PrefabOf` (all in `scope.go`), plus `IsEnabledID` and `IsEnabled[T]` in `cantoggle.go`. Callers that passed `*Reader` continue to compile unchanged; callers inside a `Write` scope may now pass `fw` directly.
+
+### Breaking changes
+
+- **`(*Writer).AsReader()` removed** — previously provided a `*Reader` downgrade for passing to read free-functions from inside a `Write` scope. No longer needed: pass the `*Writer` directly. Follow the mechanical recipe: `fw.AsReader()` → `fw`. Pre-1.0; no migration-guide complexity.
+
+### Non-goals (explicitly out of scope for v0.40.0)
+
+- No change to `*Reader` / `*Writer` struct shape or scope semantics.
+- No new public types or methods beyond the interface (which is unexported).
+- No change to `*QueryIter` — it is its own kind of scope accessed via `it.Reader()` / `it.Writer()`.
+
+---
+
 ## v0.39.0 — 2026-05-12 — Phase 15.7: Reflexive relationship trait
 
 ### Added

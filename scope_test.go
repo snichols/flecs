@@ -901,7 +901,7 @@ func TestImmediateSetPairPath(t *testing.T) {
 	// setPairImmediate: existing pair → in-place update
 	flecs.SetPair[immPairVal](fw, e, rel, tgt, immPairVal{N: 2})
 
-	v, ok := flecs.GetPair[immPairVal](fw.AsReader(), e, rel, tgt)
+	v, ok := flecs.GetPair[immPairVal](fw, e, rel, tgt)
 	if !ok || v.N != 2 {
 		t.Fatalf("want immPairVal{2}, got %v ok=%v", v, ok)
 	}

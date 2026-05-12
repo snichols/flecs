@@ -44,7 +44,7 @@ func main() {
 
     // Iterate every entity that has both Position and Velocity.
     w.Write(func(fw *flecs.Writer) {
-        flecs.Each2[Position, Velocity](fw.AsReader(), func(id flecs.ID, p *Position, v *Velocity) {
+        flecs.Each2[Position, Velocity](fw, func(id flecs.ID, p *Position, v *Velocity) {
             p.X += v.DX
             p.Y += v.DY
         })

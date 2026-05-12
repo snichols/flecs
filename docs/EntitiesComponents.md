@@ -407,7 +407,7 @@ w.Write(func(fw *flecs.Writer) {
     flecs.DisableID(fw, e, posID)          // bit-flip, no table migration
     // flecs.Disable[Position](fw, e)      // typed variant
 
-    flecs.IsEnabledID(fw.AsReader(), e, posID) // → false
+    flecs.IsEnabledID(fw, e, posID) // → false
     fw.HasID(e, posID)                     // → true (still on entity)
 
     flecs.EnableID(fw, e, posID)           // restore

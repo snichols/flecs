@@ -227,7 +227,7 @@ func TestIsACycleGetSelfDoesNotLoop(t *testing.T) {
 		// e is its own prefab — deliberate self-cycle.
 		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), e))
 
-		_, ok := flecs.Get[Position](fw.AsReader(), e)
+		_, ok := flecs.Get[Position](fw, e)
 		if ok {
 			t.Fatal("Get[Position] on self-cycle entity must return false (Position not set)")
 		}
@@ -243,7 +243,7 @@ func TestIsACycleHasSelfDoesNotLoop(t *testing.T) {
 		e := fw.NewEntity()
 		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), e))
 
-		if flecs.Has[Position](fw.AsReader(), e) {
+		if flecs.Has[Position](fw, e) {
 			t.Fatal("Has[Position] on self-cycle entity must return false (Position not set)")
 		}
 	})
@@ -259,21 +259,19 @@ func TestIsATwoEntityCycleTerminates(t *testing.T) {
 		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
 		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), A))
 
-		r := fw.AsReader()
-
 		// Neither has Position; both Get and Has must terminate and return false.
-		_, ok := flecs.Get[Position](r, A)
+		_, ok := flecs.Get[Position](fw, A)
 		if ok {
 			t.Fatal("Get[Position] on A in two-entity cycle must return false")
 		}
-		_, ok = flecs.Get[Position](r, B)
+		_, ok = flecs.Get[Position](fw, B)
 		if ok {
 			t.Fatal("Get[Position] on B in two-entity cycle must return false")
 		}
-		if flecs.Has[Position](r, A) {
+		if flecs.Has[Position](fw, A) {
 			t.Fatal("Has[Position] on A in two-entity cycle must return false")
 		}
-		if flecs.Has[Position](r, B) {
+		if flecs.Has[Position](fw, B) {
 			t.Fatal("Has[Position] on B in two-entity cycle must return false")
 		}
 	})
@@ -306,7 +304,7 @@ func TestPrefabOfNoIsA(t *testing.T) {
 	w.Write(func(fw *flecs.Writer) {
 		e := fw.NewEntity()
 
-		got, ok := flecs.PrefabOf(fw.AsReader(), e)
+		got, ok := flecs.PrefabOf(fw, e)
 		if ok {
 			t.Fatal("PrefabOf should return false for entity with no IsA pair")
 		}

@@ -256,7 +256,7 @@ func TestDeferWrappedIteration(t *testing.T) {
 
 	var deleted []flecs.ID
 	w.Write(func(fw *flecs.Writer) {
-		flecs.Each1[DPos](fw.AsReader(), func(e flecs.ID, p *DPos) {
+		flecs.Each1[DPos](fw, func(e flecs.ID, p *DPos) {
 			if p.X < 0 {
 				fw.Delete(e)
 				deleted = append(deleted, e)
