@@ -14,7 +14,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 
 | File | Status | Phase |
 |---|---|---|
-| [EntitiesComponents.md](EntitiesComponents.md) | pending | 14.1 |
+| [EntitiesComponents.md](EntitiesComponents.md) | ✅ landed | 14.1 |
 | [Queries.md](Queries.md) | pending | 14.2 |
 | [Relationships.md](Relationships.md) | pending | 14.3 |
 | [HierarchiesManual.md](HierarchiesManual.md) | pending | 14.4 |
@@ -90,3 +90,15 @@ Features described in the C docs that the Go port does not currently implement:
 - **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only.
 
 These are listed for operator prioritization; no follow-up issues were filed in Phase 14.0.
+
+### Additional gaps discovered in Phase 14.1 (EntitiesComponents port)
+
+- **`Clear(e)`** — remove all components from an entity without deleting it; more efficient than removing one by one. not yet ported in Go flecs.
+- **`MakeAlive(id)`** — claim a specific entity ID (e.g. for networked ID synchronisation). not yet ported in Go flecs.
+- **`SetVersion(versionedID)`** — override the generation counter on an entity. not yet ported in Go flecs.
+- **Entity ID ranges** (`range_new` / `range_set`) — constrain which IDs `NewEntity` issues; enables per-owner ID partitioning. not yet ported in Go flecs.
+- **Entity disabling** (`Enable` / `Disable`) — exclude entities from queries temporarily via a `Disabled` tag without deleting them. not yet ported in Go flecs.
+- **`on_replace` hook** — receives both the previous and new component value when a component is overwritten via `Set`. not yet ported in Go flecs.
+- **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
+- **Cleanup policies / component-delete cascade** — when a component entity is deleted, automatically remove that component from all entities that have it (C default behaviour via `OnDelete` cleanup policy). not yet ported in Go flecs.
+- **`CanToggle` component trait** — per-entity component enable/disable via `ecs_enable_component`; cheaper than remove/add because it flips a bit rather than moving the entity to another archetype. not yet ported in Go flecs.

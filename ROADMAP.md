@@ -42,7 +42,7 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 | Phase | Doc | Status |
 |---|---|---|
 | 14.0 | Survey + `docs/` scaffold + `Quickstart.md` | ✅ shipped (v0.18.0) |
-| 14.1 | `EntitiesComponents.md` | pending |
+| 14.1 | `EntitiesComponents.md` | ✅ shipped (v0.19.0) |
 | 14.2 | `Queries.md` | pending |
 | 14.3 | `Relationships.md` | pending |
 | 14.4 | `HierarchiesManual.md` | pending |

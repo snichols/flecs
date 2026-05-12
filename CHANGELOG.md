@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.1: EntitiesComponents doc port
+
+### Added
+
+- **`docs/EntitiesComponents.md`** — full Go-idiomatic port of the upstream C flecs EntitiesComponents manual. Covers entity lifecycle (create, delete, liveliness, naming, hierarchical lookup), component operations (`Set`/`Get`/`Has`/`Owns`/`Remove`/`AddID`), tags (static and dynamic), component hooks (`OnAdd`/`OnSet`/`OnRemove`), components as entities (`RegisterComponent`, `ComponentInfo`), and the singleton workaround. Sections for features not yet ported carry explicit `Not yet ported in Go flecs` callouts with links to the feature-gap list.
+- **`docs/entities_components_examples_test.go`** — 16 test functions (`TestEC_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — EntitiesComponents row updated to `✅ landed / 14.1`; 9 newly discovered feature gaps appended to the feature-gap list (Clear, MakeAlive, SetVersion, entity ranges, entity disabling, on_replace hook, runtime component registration, cleanup policy cascade, CanToggle trait).
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.1 row updated to `✅ shipped (v0.19.0)`.
+
 ## v0.19.0 — 2026-05-12 — Phase 14.0: Documentation survey + Quickstart
 
 ### Added
