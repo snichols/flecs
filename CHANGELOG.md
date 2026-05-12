@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.6: Systems doc port (upcoming v0.25.0)
+## v0.25.0 — 2026-05-12 — Phase 14.6: Systems doc port
 
 ### Added
 
