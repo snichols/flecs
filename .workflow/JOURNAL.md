@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-12)
+
+Phase 14.6 complete: ported docs/Systems.md with 10 sections covering NewSystem + Each-callback, NewSystemInPhase with four built-in phases, delta_time, SetFixedTimestep accumulator loop with spiral-of-death warning, system lifecycle (Close/IsClosed), parallel dispatch (SetParallel/SetWriteSet/SetWorkerCount), deferred-mutation semantics, multi-threaded within-system row splitting (SetMultiThreaded), and World.Stats() per-phase timing. Seven not-yet-ported features documented as callouts. Added docs/systems_examples_test.go (10 TestSystems_* functions). Updated docs/README.md (landed / 14.6, 7 new gaps), ROADMAP.md (shipped v0.25.0), CHANGELOG.md (Unreleased entry), Quickstart.md and Queries.md (cross-links). All tests pass: go test ./... -race -count=1 clean, go vet clean, golangci-lint clean.
+
