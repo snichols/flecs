@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.25)
+## Shipped (through v0.26)
 
 The following features are available in the current release:
 

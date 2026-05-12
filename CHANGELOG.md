@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.7: ObserversManual doc port (upcoming v0.26.0)
+## v0.26.0 — 2026-05-12 — Phase 14.7: ObserversManual doc port
 
 ### Added
 
