@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.17.0 — 2026-05-12 — Phase 13.0: Query-term traversal modifiers
+
+Inline traversal in `NewQueryFromTerms` / `NewCachedQueryFromTerms`. Terms can
+now express "match this entity OR any ancestor through relationship `rel`."
+Faithful port of C flecs's `EcsSelf` / `EcsUp` / `EcsCascade` term traversal
+flags (`/work/agents/claude/projects/SanderMertens/flecs/include/flecs.h`
+lines 736-833).
+
+### Added
+
+- **`Term` traversal modifiers** (chained on the term builder):
+  - `.Self()` — match only the entity itself (the existing default; named for symmetry).
+  - `.Up(rel ID)` — match if any ancestor via `rel` has the component; the entity itself need not have it.
+  - `.SelfUp(rel ID)` — match if the entity has the component locally OR any ancestor via `rel` does. Local takes precedence.
+  - `.Cascade(rel ID)` — same as `Up` but the cached query iterates tables in breadth-first depth order (roots first). Cached queries only.
+- **`TraverseFlags` type** — internal bitfield carried on `Term`. Values: `TraverseSelf`, `TraverseUp`, `TraverseCascade` (combinable). Exposed for advanced custom term construction.
+- **`IsFieldSelf(it, termIdx) bool`** — true if the term was matched via Self (local), false if matched via Up/SelfUp from an ancestor. Mirror of C's `ecs_field_is_self`.
+- **`FieldShared[T](it, termIdx) (T, bool)`** — returns the single shared ancestor value for an Up-matched term. Returns `(zero, false)` if the term was matched via Self. Mirror of C's `ecs_field_src` + `ecs_get`.
+- **Cascade ordering for cached queries** — `tableRelDepth(table, rel) int` computes depth from a root; `sortByCascadeDepth` orders the cache's table list at construction. New matching tables (from `notifyTableCreated`) re-sort on insertion.
+- **`BenchmarkQueryUpTraversal`** — establishes the cost of the up-walk relative to flat queries.
+- **15 new tests** in `query_terms_test.go` covering matches-via-prefab, matches-via-ChildOf, SelfUp-prefers-self, dead-ancestor safety, cycle safety, cascade depth ordering, cascade-rejected-for-uncached, cached-query up-match, new-table-triggers-rematch, FieldShared/Field panic boundaries.
+
+### Changed
+
+- **`Field[T]` panics when called on an Up-matched term.** The panic message redirects to `FieldShared[T]`. This is a runtime check to catch the common mistake of treating a shared inherited value as a per-row column. Self-matched terms behave exactly as before.
+- **`NewQueryFromTerms` panics on `Cascade`.** Cascade is cached-only (matches C's behavior in `src/query/api.c:246`). The panic message points to `NewCachedQueryFromTerms`.
+- **`QueryIter` carries traversal state.** Per-table `upSources map[ID]ID` records which ancestor provides each Up-matched component. Adds ~128 B per iter and ~10% on `BenchmarkQueryIterField_10k`; flat queries with no traversal terms unaffected on the matcher hot path.
+
+### Not ported (deliberate)
+
+- **`EcsTrav`** (transitive query) — advanced; not in our roadmap.
+- **`EcsDesc`** (descending sort) — niche.
+- **Down-cache observers** — runtime mutation of prefab components doesn't invalidate cached queries that matched via Up. Document the limitation; refile if a real use case appears.
+- **Auto-`Self|Up` for inheritable components** (C `validator.c:766-770`) — would change the default semantics of `Each1`/`Each2`/`NewQuery[T]`. We keep inheritance strictly opt-in via the term builder to preserve current behavior.
+
+### Performance
+
+- Existing benches (`BenchmarkEach1`, `BenchmarkCachedQueryEach2_10k`, `BenchmarkSetExistingComponent`) within noise of v0.16.0.
+- `BenchmarkQueryIterField_10k`: ~+10% time, +128 B/op due to per-iter `upSources` bookkeeping. Allocations unchanged (still 2 allocs/op). Acceptable; this is the cost of carrying traversal state on every iter.
+- Coverage: 95.1% on main package.
+
 ## v0.16.0 — 2026-05-12 — Phase 12.1: Per-stage command queues
 
 Lock-free deferred mutations for multi-threaded systems. Each worker goroutine
