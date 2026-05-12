@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-12)
+
+Phase 14.9 complete: ported docs/FlecsRemoteApi.md from upstream C flecs. Full Go-idiomatic manual covering all 7 implemented endpoints (GET /stats, GET /components, GET /components/{id}, GET /entities, GET /entities/{id}, GET /snapshot, PUT /snapshot) with verified JSON shapes, curl+Go client examples, goroutine-safety notes (world.Read/world.Write integration), and a complete unimplemented-endpoints callout table covering 17 C REST endpoints. Created docs/rest_examples_test.go with 8 TestRest_* functions (all passing under go test ./... -race -count=1 and go vet). Updated docs/README.md (FlecsRemoteApi row → landed/14.9, 6 new gaps appended), ROADMAP.md (14.9 → shipped v0.28.0), CHANGELOG.md (Unreleased entry for v0.28.0), Quickstart.md (REST row status updated). All mechanical acceptance criteria satisfied.
+
