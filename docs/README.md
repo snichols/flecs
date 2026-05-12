@@ -82,7 +82,6 @@ Features described in the C docs that the Go port does not currently implement:
 - **Exclusive relationships** (`EcsExclusive`) — not ported.
 - **Union relationships** (`EcsUnion`) — not ported.
 - **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — not ported.
-- **OnInstantiate / Override / DontInherit traits** (full behavior) — IDs exist; behavior not fully ported.
 - **World snapshots** (beyond JSON serialization) — not ported.
 - **Entity scoping** (`ecs_set_scope` / push-pop) — not ported.
 - **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — achievable via `RegisterComponent` + entity ID; no dedicated API.
@@ -132,7 +131,6 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.5 (PrefabsManual port)
 
 - **Prefab tag** (`EcsPrefab`) — a built-in tag that excludes prefab entities from ordinary queries by default. In Go flecs, prefab entities participate in queries like any other entity. not yet ported in Go flecs.
-- **Auto-override on instantiation** (`OnInstantiate, Override`) — automatically copies a component from the prefab into each new instance at `(IsA, prefab)` add time. `w.Override()` exposes the entity ID but the behavior is not implemented. not yet ported in Go flecs.
 - **Prefab hierarchies** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab replicates the entire child subtree onto the instance. not yet ported in Go flecs.
 - **Prefab slots** (`SlotOf`) — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1) without a name lookup. not yet ported in Go flecs.
 

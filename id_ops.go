@@ -61,9 +61,70 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 			}
 			applyCleanupPolicy(w, e, trait, action)
 		}
+		// When a (OnInstantiate, action) pair is added to a component entity,
+		// translate it into a per-component policy flag. Mirrors C bootstrap.c:311-317
+		// flecs_register_on_instantiate observer pattern.
+		if firstIdx == w.onInstantiateID.Index() {
+			applyInstantiatePolicy(w, e, id.Second())
+		}
 	}
 	w.migrate(e, id, 0, nil)
+	// Override copy hook: after adding (IsA, prefab) to an entity, walk the prefab's
+	// component chain and eagerly copy any Override-marked components into the instance.
+	if id.IsPair() && id.First().Index() == w.isAID.Index() {
+		prefab := id.Second()
+		if w.index.IsAlive(prefab) {
+			overrideCopyForInstance(w, e, prefab, nil)
+		}
+	}
 	return true
+}
+
+// overrideCopyForInstance walks the IsA chain starting at prefab and copies
+// Override-marked components into instance if instance does not already own them.
+// seen is allocated lazily and prevents infinite cycles.
+func overrideCopyForInstance(w *World, instance, prefab ID, seen map[ID]struct{}) {
+	if !w.index.IsAlive(prefab) {
+		return
+	}
+	if seen == nil {
+		seen = map[ID]struct{}{instance: {}}
+	}
+	if _, ok := seen[prefab]; ok {
+		return
+	}
+	seen[prefab] = struct{}{}
+
+	prefabRec := w.index.Get(prefab)
+	if prefabRec == nil || prefabRec.Table == nil {
+		return
+	}
+
+	isAIdx := w.isAID.Index()
+	for _, cid := range prefabRec.Table.Type() {
+		if cid.IsPair() {
+			if uint32(cid.First()) == isAIdx {
+				overrideCopyForInstance(w, instance, cid.Second(), seen)
+			}
+			continue
+		}
+		if w.instantiatePolicies[cid]&policyOnInstantiateOverride == 0 {
+			continue
+		}
+		instanceRec := w.index.Get(instance)
+		if instanceRec == nil {
+			return
+		}
+		if instanceRec.Table != nil && instanceRec.Table.HasComponent(cid) {
+			continue // already owned locally (pre-set or copied from an earlier sub-prefab)
+		}
+		ptr := prefabRec.Table.Get(int(prefabRec.Row), cid)
+		info, ok := w.registry.LookupByID(cid)
+		if !ok {
+			continue
+		}
+		setImmediateByPtr(w, instance, cid, ptr, info)
+	}
 }
 
 func removeIDImmediate(w *World, e ID, id ID) bool {

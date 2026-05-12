@@ -277,21 +277,70 @@ C flecs exposes three traits for controlling how individual components behave du
 
 `(OnInstantiate, Inherit)` marks a component as inheritable — instances can read the prefab's value through the IsA chain. The Go port implements this through `SetInheritable[T](w)`, which sets a flag on the component's type metadata. `w.Inherit()` exposes the C flecs entity ID for API symmetry, but `SetInheritable[T]` is the idiomatic Go API.
 
-### Override (not yet ported)
+### Override (shipped v0.33.0)
 
-> **Not yet ported in Go flecs.** C flecs's `(OnInstantiate, Override)` causes a component to be **automatically copied** from the prefab into each new instance at instantiation time. `w.Override()` returns the entity ID for this trait, but setting the pair has no runtime effect in Go flecs.
->
-> **Workaround:** call `flecs.Set(fw, inst, value)` explicitly after adding the `(IsA, prefab)` pair.
->
-> See the feature-gap list in [docs/README.md](README.md).
+`(OnInstantiate, Override)` causes a component to be **automatically copied** from the prefab into each new instance at `(IsA, prefab)` add time. The instance gets its own local slot so that mutations to the instance are isolated from the prefab and from sibling instances.
 
-### DontInherit (not yet ported)
+**API:**
 
-> **Not yet ported in Go flecs.** C flecs's `(OnInstantiate, DontInherit)` prevents a specific component from being inherited by instances. `w.DontInherit()` returns the entity ID, but setting the pair has no runtime effect.
->
-> **Workaround:** in Go flecs inheritance is opt-in — components are not inheritable unless `SetInheritable[T]` was called for them. Simply do not call `SetInheritable[T]` for a component to achieve the same result.
->
-> See the feature-gap list in [docs/README.md](README.md).
+```go
+type Position struct{ X, Y float32 }
+
+w := flecs.New()
+posID := flecs.RegisterComponent[Position](w)
+flecs.SetInstantiatePolicy(w, posID, w.Override())
+
+var prefab, inst flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    prefab = fw.NewEntity()
+    flecs.Set(fw, prefab, Position{X: 10, Y: 20})
+
+    inst = fw.NewEntity()
+    fw.AddID(inst, flecs.MakePair(w.IsA(), prefab))
+    // inst now owns a local copy of Position{X:10, Y:20}
+})
+```
+
+The pair-add form produces identical results:
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(posID, flecs.MakePair(w.OnInstantiate(), w.Override()))
+})
+```
+
+Multi-level chains are handled transitively: if prefab2 IsA prefab1 and prefab1 has an Override component, instantiating prefab2 copies it too. If instance already owns the component locally before the `(IsA, prefab)` add, the Override copy is skipped (user value wins).
+
+### DontInherit (shipped v0.33.0)
+
+`(OnInstantiate, DontInherit)` prevents a specific component from being visible on instances via the IsA chain. `Has[C](r, inst)` returns false and `Get[C](r, inst)` returns the zero value, even if the prefab owns C. Query auto-promotion is also suppressed: even if `SetInheritable[T]` was called for C, instances will not match a query for C through Up(IsA) traversal.
+
+**API:**
+
+```go
+type Secret struct{ Code int }
+
+w := flecs.New()
+secretID := flecs.RegisterComponent[Secret](w)
+flecs.SetInstantiatePolicy(w, secretID, w.DontInherit())
+
+var prefab, inst flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    prefab = fw.NewEntity()
+    flecs.Set(fw, prefab, Secret{Code: 42})
+
+    inst = fw.NewEntity()
+    fw.AddID(inst, flecs.MakePair(w.IsA(), prefab))
+})
+
+w.Read(func(r *flecs.Reader) {
+    // inst cannot see Secret from prefab
+    has := flecs.Has[Secret](r, inst) // false
+    _ = has
+})
+```
+
+DontInherit takes precedence over Inheritable: calling both `SetInheritable[T](w)` and `SetInstantiatePolicy(w, cid, w.DontInherit())` on the same component means DontInherit wins.
 
 ---
 
@@ -300,8 +349,6 @@ C flecs exposes three traits for controlling how individual components behave du
 The following C flecs prefab features have no equivalent in the current Go port:
 
 - **Prefab tag** — C flecs has a built-in `EcsPrefab` tag that prevents prefab entities from matching ordinary queries by default. Go flecs has no such tag; prefab entities are indistinguishable from regular entities at query time. not yet ported in Go flecs.
-- **Auto-override on instantiation** — `(OnInstantiate, Override)` causes a component to be automatically deep-copied from the prefab to each new instance at `(IsA, prefab)` add time. not yet ported in Go flecs. Workaround: call `flecs.Set(fw, inst, value)` manually after instantiation.
-- **DontInherit trait behavior** — `(OnInstantiate, DontInherit)` opts a component out of inheritance. not yet ported in Go flecs. Since Go flecs inheritance is opt-in (`SetInheritable[T]`), simply not calling `SetInheritable[T]` is the equivalent.
 - **Prefab hierarchies** — in C flecs, instantiating a prefab that has `(ChildOf, prefab)` children copies the entire subtree to the instance. Go flecs does not replicate children on IsA instantiation. not yet ported in Go flecs.
 - **Prefab slots** — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1). not yet ported in Go flecs.
 

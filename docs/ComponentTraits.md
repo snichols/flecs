@@ -40,7 +40,7 @@ In C flecs, traits are special entity IDs added to component or relationship ent
 
 The Go port exposes the same conceptual model: every registered component is itself an entity (its ID is the value returned by `RegisterComponent[T]`), and built-in trait entity IDs are accessible via `World` accessor methods (`w.OnInstantiate()`, `w.Inherit()`, `w.Override()`, `w.DontInherit()`). Adding a trait to a component entity would look like `fw.AddID(posID, traitID)` — the pair encoding is handled by `MakePair` when the trait is a pair.
 
-Currently only the **Inheritable** trait and the **OnInstantiate** family of entity IDs have behavior wired up end to end. All other traits are planned but not implemented; their sections below document what they would do and note any available workaround.
+The **Inheritable** trait and the full **OnInstantiate** family (`Inherit`, `Override`, `DontInherit`) are wired up end to end. All other traits are planned but not implemented; their sections below document what they would do and note any available workaround.
 
 ---
 
@@ -152,10 +152,9 @@ func TestComponentTraits_OnInstantiateIDsNonZero(t *testing.T) {
 
 **Current Go port status:**
 
-- `w.Inherit()` — the ID exists. Go flecs already implements query-time and `Get`/`Has`-time inheritance via `SetInheritable[T]` and the IsA chain walk. The `(OnInstantiate, Inherit)` pair ID can be stored on a component entity but does not yet change runtime behavior beyond what `SetInheritable[T]` already provides.
-- `w.Override()` / `w.DontInherit()` — the IDs exist for API symmetry. The copy-on-write override and "don't inherit" behaviors they imply at instantiation time are **not yet implemented**. See [PrefabsManual — OnInstantiate traits](PrefabsManual.md#oninstantiate-traits) for workarounds.
-
-> **Not yet ported in Go flecs:** Full `OnInstantiate` behavior (`Override` copies the component to the instance at `IsA` add time; `DontInherit` excludes the component from instances entirely). The entity IDs exist but the runtime enforcement is pending. See the [feature-gap list](README.md#feature-gap-list) entry: *Auto-override on instantiation (`OnInstantiate, Override`)*.
+- `w.Inherit()` — the ID exists. Go flecs implements query-time and `Get`/`Has`-time inheritance via `SetInheritable[T]` and the IsA chain walk. The `(OnInstantiate, Inherit)` pair form is also accepted by `AddID` / `SetInstantiatePolicy` and round-trips via `GetInstantiatePolicy`.
+- `w.Override()` _(v0.33.0)_ — eagerly copies the component from the prefab into each new instance at `(IsA, prefab)` add time. Use `SetInstantiatePolicy(w, cid, w.Override())` or the pair form `fw.AddID(cid, MakePair(w.OnInstantiate(), w.Override()))`. See [PrefabsManual — Override](PrefabsManual.md#override-shipped-v0330).
+- `w.DontInherit()` _(v0.33.0)_ — prevents a component from being visible on instances via the IsA chain (`Has`/`Get` return false/zero) and suppresses query auto-promotion even when `SetInheritable[T]` was called. Use `SetInstantiatePolicy(w, cid, w.DontInherit())`. See [PrefabsManual — DontInherit](PrefabsManual.md#dontinherit-shipped-v0330).
 
 ---
 
@@ -550,10 +549,10 @@ The table below is the canonical reference for trait-system planning. Check the 
 | Trait | C name | Go status | Notes |
 |---|---|---|---|
 | **Inheritable** | `EcsInheritable` | ✅ shipped (v0.18.0) | `SetInheritable[T](w)` / `w.SetInheritable(cid)`; auto-promotes query terms to `Self\|Up(IsA)` |
-| **OnInstantiate** | `EcsOnInstantiate` | 🟡 partial (v0.18.0) | Entity ID exists (`w.OnInstantiate()`); runtime behavior not enforced |
-| **Inherit** (target) | `EcsInherit` | 🟡 partial (v0.18.0) | Entity ID exists (`w.Inherit()`); query-time inheritance via `SetInheritable` is the current equivalent |
-| **Override** (target) | `EcsOverride` | 🟡 partial (v0.18.0) | Entity ID exists (`w.Override()`); copy-on-write override at instantiation not implemented |
-| **DontInherit** (target) | `EcsDontInherit` | 🟡 partial (v0.18.0) | Entity ID exists (`w.DontInherit()`); exclusion at instantiation not implemented |
+| **OnInstantiate** | `EcsOnInstantiate` | ✅ shipped (v0.33.0) | `SetInstantiatePolicy(w, cid, action)` / `GetInstantiatePolicy`; pair-add form first-class |
+| **Inherit** (target) | `EcsInherit` | ✅ shipped (v0.33.0) | `w.Inherit()` action for `SetInstantiatePolicy`; query-time via `SetInheritable[T]`; pair-add equivalent |
+| **Override** (target) | `EcsOverride` | ✅ shipped (v0.33.0) | Eager copy from prefab at `(IsA, prefab)` add time; multi-level chain; pre-set value wins |
+| **DontInherit** (target) | `EcsDontInherit` | ✅ shipped (v0.33.0) | Suppresses `Has`/`Get` IsA walk and query auto-promotion; takes precedence over Inheritable |
 | **Acyclic** | `EcsAcyclic` | ⏳ planned | No cycle detection for custom relationships |
 | **CanToggle** | `EcsCanToggle` | ⏳ planned | No per-entity component bitset toggle |
 | **OnDelete** | `EcsOnDelete` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDelete(), action)` / `GetCleanupPolicy`; actions: `RemoveAction`, `DeleteAction`, `PanicAction` |
