@@ -1,0 +1,92 @@
+# Go flecs Documentation
+
+Conceptual documentation for the Go flecs ECS library. Start with the [Quickstart](Quickstart.md).
+
+---
+
+## Getting Started
+
+- **[Quickstart](Quickstart.md)** ✅ — hello-world walkthrough: world, entities, components, queries, hierarchies, prefabs, systems, observers.
+
+---
+
+## Manuals (pending)
+
+| File | Status | Phase |
+|---|---|---|
+| [EntitiesComponents.md](EntitiesComponents.md) | pending | 14.1 |
+| [Queries.md](Queries.md) | pending | 14.2 |
+| [Relationships.md](Relationships.md) | pending | 14.3 |
+| [HierarchiesManual.md](HierarchiesManual.md) | pending | 14.4 |
+| [PrefabsManual.md](PrefabsManual.md) | pending | 14.5 |
+| [Systems.md](Systems.md) | pending | 14.6 |
+| [ObserversManual.md](ObserversManual.md) | pending | 14.7 |
+| [ComponentTraits.md](ComponentTraits.md) | pending | 14.8 |
+| [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending | 14.9 |
+| [DesignWithFlecs.md](DesignWithFlecs.md) | pending | 14.10 |
+| [Manual.md](Manual.md) | pending | 14.11 |
+| [FAQ.md](FAQ.md) | pending | 14.12 |
+
+---
+
+## Survey Table (Phase 14.0)
+
+Each C doc was read and classified for porting effort.
+
+| C filename | ~words | Classification | Go filename | Effort |
+|---|---|---|---|---|
+| `Quickstart.md` | 6 500 | port-adapted | `docs/Quickstart.md` | medium |
+| `EntitiesComponents.md` | 7 000 | port-adapted | `docs/EntitiesComponents.md` | large |
+| `Queries.md` | 19 000 | port-adapted | `docs/Queries.md` | large |
+| `Relationships.md` | 6 400 | port-adapted | `docs/Relationships.md` | large |
+| `HierarchiesManual.md` | 3 900 | port-adapted | `docs/HierarchiesManual.md` | medium |
+| `PrefabsManual.md` | 3 100 | port-adapted | `docs/PrefabsManual.md` | medium |
+| `Systems.md` | 6 600 | port-adapted | `docs/Systems.md` | large |
+| `ObserversManual.md` | 8 600 | port-adapted | `docs/ObserversManual.md` | large |
+| `ComponentTraits.md` | 7 400 | port-with-gaps | `docs/ComponentTraits.md` | medium |
+| `FAQ.md` | 1 500 | port-adapted | `docs/FAQ.md` | small |
+| `DesignWithFlecs.md` | 3 200 | port-as-is | `docs/DesignWithFlecs.md` | small |
+| `Manual.md` | 2 200 | port-adapted | `docs/Manual.md` | medium |
+| `FlecsRemoteApi.md` | 4 900 | port-with-gaps | `docs/FlecsRemoteApi.md` | medium |
+| `BuildingFlecs.md` | 1 800 | skip — replace with Go module section in README | — | — |
+| `MigrationGuide.md` | 2 200 | skip — C version migration, irrelevant to Go | — | — |
+| `FlecsScript.md` | 7 200 | skip — C DSL not ported to Go | — | — |
+| `FlecsScriptTutorial.md` | 4 200 | skip — C DSL not ported to Go | — | — |
+| `FlecsQueryLanguage.md` | 2 700 | skip — C DSL not ported to Go | — | — |
+| `Docs.md` | 400 | skip — becomes this file | — | — |
+
+### Classification notes
+
+- **port-as-is** — conceptual content maps cleanly; only code examples need Go syntax.
+- **port-adapted** — needs Go syntax, Go idioms, and ergonomics rewrite throughout.
+- **port-with-gaps** — describes features the Go port does not have; gaps annotated in the stub.
+- **skip** — C-specific tooling, build system, DSL, or migration content that has no Go equivalent.
+
+### Feature-gap list (candidate follow-up issues)
+
+Features described in the C docs that the Go port does not currently implement:
+
+- **Query language / DSL** (`FlecsScript`, `FlecsQueryLanguage`) — C-only scripting layer.
+- **Module system** (`ECS_MODULE` / `world.import`) — Go packages serve this role natively.
+- **Entity hooks beyond OnAdd/OnSet/OnRemove** — C has `OnDelete`, `OnTableEmpty`, `OnTableFill`.
+- **Cleanup policies** (`OnDeleteTarget`, `OnDelete(component)`, `Delete` action) — partial in Go port.
+- **Reflection / meta cursor** (`ecs_meta_cursor`, `ecs_meta_type_op`) — not ported.
+- **Sparse storage** (`EcsSparse` component trait opt-in) — not ported.
+- **World-level pre/post merge hooks** — not ported.
+- **Alerts addon** — not ported.
+- **Monitor addon** — not ported.
+- **Units addon** — not ported.
+- **Query groups** — not ported.
+- **Transitive relationships** (`EcsTransitive`, `Trav` flag) — not ported.
+- **Symmetric relationships** (`EcsSymmetric`) — not ported.
+- **Exclusive relationships** (`EcsExclusive`) — not ported.
+- **Union relationships** (`EcsUnion`) — not ported.
+- **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — not ported.
+- **OnInstantiate / Override / DontInherit traits** (full behavior) — IDs exist; behavior not fully ported.
+- **World snapshots** (beyond JSON serialization) — not ported.
+- **Entity scoping** (`ecs_set_scope` / push-pop) — not ported.
+- **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — achievable via `RegisterComponent` + entity ID; no dedicated API.
+- **Timer addon** (independent rate control per system) — partial (`timer.go` exists; full addon API pending).
+- **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only.
+
+These are listed for operator prioritization; no follow-up issues were filed in Phase 14.0.

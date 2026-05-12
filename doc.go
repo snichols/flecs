@@ -567,5 +567,13 @@
 // invoked when an owner is set, so the un-claimed path costs ~1 ns total.
 // Goroutine IDs are obtained via github.com/petermattis/goid.
 //
+// # Conceptual Documentation
+//
+// For topic-level guides with worked Go examples, see the docs/ directory:
+//
+//   - [docs/Quickstart.md] — start here; covers world, entities, components, queries,
+//     hierarchies, prefabs, systems, and observers.
+//   - [docs/README.md] — full docs index, survey table, and feature-gap list vs. upstream C.
+//
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs

@@ -10,6 +10,14 @@ zero third-party dependencies.
 
 ---
 
+## Documentation
+
+**[docs/Quickstart.md](docs/Quickstart.md)** — start here. Covers world creation, entities, components, queries, hierarchies, prefabs, systems, and observers with runnable Go examples.
+
+The full docs index (survey table, porting status, and feature-gap list vs. upstream C) is at **[docs/README.md](docs/README.md)**.
+
+---
+
 ## Quick start
 
 ```go

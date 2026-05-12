@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Phase 14.0: Documentation survey + Quickstart
+
+### Added
+
+- **`docs/` directory** — new top-level directory containing the Go flecs conceptual documentation.
+- **`docs/Quickstart.md`** — fully written Go-idiomatic walkthrough covering world creation, entities, components, named entities, tags, ergonomic iteration (`Each1`/`Each2`), queries (AND / NOT / Optional), relationships, ChildOf hierarchies, IsA prefabs, systems, and observers. All code blocks verified against v0.18.0.
+- **`docs/quickstart_examples_test.go`** — Go test file (`package docs_test`) exercising every Quickstart code pattern; run with `go test ./docs/...`.
+- **`docs/README.md`** — docs index with landing status (✅ Quickstart, pending 14.1–14.12), full survey table (19 C docs classified as port-adapted / port-with-gaps / skip), and feature-gap list vs. upstream C (17 candidate follow-up issues listed for operator prioritization; none filed in this phase).
+- **Skeleton stub files** for the remaining planned ports: `EntitiesComponents.md`, `Queries.md`, `Relationships.md`, `HierarchiesManual.md`, `PrefabsManual.md`, `Systems.md`, `ObserversManual.md`, `ComponentTraits.md`, `FlecsRemoteApi.md`, `DesignWithFlecs.md`, `Manual.md`, `FAQ.md`. Each stub has a title, one-line description, and a `<!-- TODO: port from ... (Phase 14.x) -->` marker.
+
+### Changed
+
+- **`README.md`** — added a "Documentation" section prominently linking to `docs/Quickstart.md` and `docs/README.md`.
+- **`doc.go`** — added a `# Conceptual Documentation` section pointing to `docs/` as the authoritative reference for topic-level guides.
+- **`ROADMAP.md`** — added a "Documentation" section with the 14.0–14.12 phase table and the operator-directive process rule (every phase from 14.0 onward must include an "update docs accordingly" deliverable).
+
 ## v0.18.0 — 2026-05-12 — Phase 13.1: Inheritable components
 
 Auto-`Self|Up(IsA)` promotion for components marked with `SetInheritable`.
