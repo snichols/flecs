@@ -1906,7 +1906,11 @@ func TestQuerySelfUp_CachedWithLocalAndInherited(t *testing.T) {
 	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).SelfUp(w.IsA()))
 	defer cq.Close()
 
-	results := make(map[flecs.ID]struct{ self bool; x float32 })
+	type selfResult struct {
+		self bool
+		x    float32
+	}
+	results := make(map[flecs.ID]selfResult)
 	cq.Each(func(it *flecs.QueryIter) {
 		isSelf := flecs.IsFieldSelf(it, posID)
 		for _, e := range it.Entities() {
@@ -1914,7 +1918,7 @@ func TestQuerySelfUp_CachedWithLocalAndInherited(t *testing.T) {
 				pos := flecs.Field[Position](it, posID)
 				for i, ent := range it.Entities() {
 					if ent == e {
-						results[e] = struct{ self bool; x float32 }{true, pos[i].X}
+						results[e] = selfResult{self: true, x: pos[i].X}
 					}
 				}
 			} else {
@@ -1922,7 +1926,7 @@ func TestQuerySelfUp_CachedWithLocalAndInherited(t *testing.T) {
 				if !ok {
 					t.Error("FieldShared: want (value, true) for Up match")
 				}
-				results[e] = struct{ self bool; x float32 }{false, p.X}
+				results[e] = selfResult{self: false, x: p.X}
 			}
 		}
 	})
