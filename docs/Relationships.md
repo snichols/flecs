@@ -312,7 +312,7 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
-For a component to be inherited through an IsA link, call `flecs.SetInheritable[T](w)` after registering it. See [Queries.md — Inheritable components](Queries.md#inheritable-components) for details.
+For a component to be inherited through an IsA link, call `flecs.SetInheritable[T](w)` after registering it. See [Queries.md — Inheritable components](Queries.md#inheritable-components) for details and [PrefabsManual.md](PrefabsManual.md) for the full prefab reference.
 
 #### Iterating prefabs
 

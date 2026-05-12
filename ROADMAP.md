@@ -46,7 +46,7 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 | 14.2 | `Queries.md` | ✅ shipped (v0.21.0) |
 | 14.3 | `Relationships.md` | ✅ shipped (v0.22.0) |
 | 14.4 | `HierarchiesManual.md` | ✅ shipped (v0.23.0) |
-| 14.5 | `PrefabsManual.md` | pending |
+| 14.5 | `PrefabsManual.md` | ✅ shipped (v0.24.0) |
 | 14.6 | `Systems.md` | pending |
 | 14.7 | `ObserversManual.md` | pending |
 | 14.8 | `ComponentTraits.md` | pending |

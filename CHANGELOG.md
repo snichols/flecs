@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Phase 14.5: PrefabsManual doc port (upcoming v0.24.0)
+
+### Added
+
+- **`docs/PrefabsManual.md`** — full Go-idiomatic port of the upstream C flecs PrefabsManual. Covers declaring and instantiating prefabs (`fw.NewEntity()` + `fw.AddID` with `MakePair(w.IsA(), prefab)`), value inheritance via `Get`/`Has`, query-time inheritance via `SetInheritable[T]` (cross-link to [Phase 13.1](#v0180--2026-05-12--phase-131-inheritable-components)), copy-on-write override (`Set` on instance), restoring inheritance (`Remove`), `Owns[T]` to distinguish local from inherited components, prefab variants (IsA chain between prefabs), and traversal helpers (`PrefabOf`, `EachPrefab`, `GetUp[T]` with `w.IsA()`). The `(OnInstantiate, Override)` and `(OnInstantiate, DontInherit)` trait sections carry explicit `Not yet ported in Go flecs` callouts with workarounds. Prefab tag, prefab hierarchies, and prefab slots are documented as not-yet-ported in the final section.
+- **`docs/prefabs_examples_test.go`** — 9 test functions (`TestPrefabs_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — PrefabsManual row updated to `✅ landed / 14.5`; 4 newly discovered feature gaps appended: prefab tag (`EcsPrefab`), auto-override on instantiation, prefab hierarchies, and prefab slots (`SlotOf`).
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.5 row updated to `✅ shipped (v0.24.0)`.
+- **`docs/Quickstart.md`** — added cross-link from the Prefabs section to `PrefabsManual.md`.
+- **`docs/Relationships.md`** — added cross-link from the IsA section to `PrefabsManual.md`.
+
 ## v0.23.0 — 2026-05-12 — Phase 14.4: HierarchiesManual doc port
 
 ### Added
