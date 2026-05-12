@@ -460,6 +460,8 @@ flecs.NewSystemInPhase(w, w.PreUpdate(), inputQ, func(dt float32, it *flecs.Quer
 })
 ```
 
+See [Systems.md](Systems.md) for the full systems reference: fixed timestep, parallel dispatch, multi-threaded systems, write-set tracking, system lifecycle, and per-phase stats.
+
 ---
 
 ## Observers
@@ -512,7 +514,7 @@ The existing `example_*_test.go` files in the repo root are the authoritative ru
 | Relationships | [Relationships.md](Relationships.md) | pending Phase 14.3 |
 | Hierarchies | [HierarchiesManual.md](HierarchiesManual.md) | pending Phase 14.4 |
 | Prefabs | [PrefabsManual.md](PrefabsManual.md) | pending Phase 14.5 |
-| Systems | [Systems.md](Systems.md) | pending Phase 14.6 |
+| Systems | [Systems.md](Systems.md) | ✅ landed |
 | Observers | [ObserversManual.md](ObserversManual.md) | pending Phase 14.7 |
 | Component Traits | [ComponentTraits.md](ComponentTraits.md) | pending Phase 14.8 |
 | REST API | [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending Phase 14.9 |

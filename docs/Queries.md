@@ -2,7 +2,7 @@
 
 Queries find entities that match a list of conditions. They are the core iteration mechanism in Go flecs, powering systems, observers, and direct application logic alike.
 
-See the [Quickstart](Quickstart.md) for a hands-on introduction. See [EntitiesComponents](EntitiesComponents.md) for entity and component setup. For actual benchmark numbers, see [BENCH.md](../BENCH.md).
+See the [Quickstart](Quickstart.md) for a hands-on introduction. See [EntitiesComponents](EntitiesComponents.md) for entity and component setup. For actual benchmark numbers, see [BENCH.md](../BENCH.md). Queries power systems — see [Systems.md](Systems.md) for how `NewCachedQuery` connects to `NewSystem` and `Progress`.
 
 ---
 
