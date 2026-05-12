@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-12)
+
+Phase 15.6: Wildcard and Any query-term sentinels (v0.38.0) — implemented w.Wildcard() (index 21) and w.Any() (index 22) as built-in query-term sentinels with full matcher integration. New wildcard.go with Wildcard()/Any() methods, isWildcardTerm/tableHasWildcardMatch/wildcardMatchingPairs helpers, and MatchedTarget/MatchedID/FieldByMatch[T] accessors. Extended query.go and cached_query.go for wildcard expansion (one row per concrete pair for Wildcard, one row per entity for Any). wildcard_test.go: 9 test cases + BenchmarkWildcardQuery_PairsPerEntity. All docs updated (Queries.md, Relationships.md, ComponentTraits.md, README.md, CHANGELOG.md v0.38.0, ROADMAP.md Phase 15.6 shipped). All tests pass (go test ./... -race -count=3), go vet clean, golangci-lint clean, coverage 95.0%.
+
