@@ -1,8 +1,0 @@
-## iterate iteration 1 (2026-05-12)
-
-Phase 15.0 complete: configurable cleanup policies (OnDelete/OnDeleteTarget) fully implemented. New cleanup.go with cleanupPolicyFlags, SetCleanupPolicy, GetCleanupPolicy, applyCleanupPolicy. World gains 5 new built-in entities (indices 12-16: OnDelete, OnDeleteTarget, RemoveAction, DeleteAction, PanicAction). deleteImmediate generalized from hardcoded ChildOf cascade to policy-driven loop; ChildOf bootstrapped with (OnDeleteTarget, DeleteAction). addIDImmediate hooks pair-add path. 8 test cases in cleanup_policies_test.go. Docs updated: Relationships.md, EntitiesComponents.md, HierarchiesManual.md, PrefabsManual.md, ComponentTraits.md, docs/README.md, CHANGELOG.md (v0.32.0), ROADMAP.md. go test ./... -race -count=3 clean, go vet clean, golangci-lint clean (pre-existing docs lint issue not introduced by this PR).
-
-## iterate iteration 2 (2026-05-12)
-
-Coverage gap resolved: added 4 targeted tests in cleanup_policies_test.go covering GetCleanupPolicy(OnDelete trait) and applyCleanupPolicy unknown-trait panic path. Main package coverage raised from 94.8% to 95.1%, meeting the ≥95% mechanical acceptance criterion. go test ./... -race -count=3 clean.
-
