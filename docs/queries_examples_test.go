@@ -35,9 +35,7 @@ func TestQueries_ArchetypeTable(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 2 {
@@ -65,7 +63,7 @@ func TestQueries_NewQuery_Iter(t *testing.T) {
 		flecs.Set(fw, e, Velocity{DX: 1})
 	})
 
-	q  := flecs.NewQuery(w, posID, velID)
+	q := flecs.NewQuery(w, posID, velID)
 	it := q.Iter()
 	for it.Next() {
 		pos := flecs.Field[Position](it, posID)
@@ -124,11 +122,11 @@ func TestQueries_NewCachedQuery_Iter(t *testing.T) {
 func TestQueries_NewQueryFromTerms(t *testing.T) {
 	type Position struct{ X, Y float32 }
 	type Velocity struct{ DX, DY float32 }
-	type Mass     struct{ Value float32 }
+	type Mass struct{ Value float32 }
 
 	w := flecs.New()
-	posID  := flecs.RegisterComponent[Position](w)
-	velID  := flecs.RegisterComponent[Velocity](w)
+	posID := flecs.RegisterComponent[Position](w)
+	velID := flecs.RegisterComponent[Velocity](w)
 	massID := flecs.RegisterComponent[Mass](w)
 
 	var withMass, noMass flecs.ID
@@ -152,9 +150,7 @@ func TestQueries_NewQueryFromTerms(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != noMass {
@@ -189,9 +185,7 @@ func TestQueries_With_And(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != both {
@@ -226,9 +220,7 @@ func TestQueries_Without_Not(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != noVel {
@@ -268,7 +260,7 @@ func TestQueries_Maybe_Optional(t *testing.T) {
 	tablesWithVel, tablesWithout := 0, 0
 	it := q.Iter()
 	for it.Next() {
-		pos        := flecs.Field[Position](it, posID)
+		pos := flecs.Field[Position](it, posID)
 		vel, hasVel := flecs.FieldMaybe[Velocity](it, velID)
 		for i := range it.Entities() {
 			if hasVel {
@@ -291,13 +283,13 @@ func TestQueries_Maybe_Optional(t *testing.T) {
 // TestQueries_Or_Terms verifies the Or operator and FieldMaybe-for-Or snippet from Queries.md.
 func TestQueries_Or_Terms(t *testing.T) {
 	type Position struct{ X, Y float32 }
-	type Speed    struct{ Value float32 }
+	type Speed struct{ Value float32 }
 	type Velocity struct{ DX, DY float32 }
 
 	w := flecs.New()
-	posID   := flecs.RegisterComponent[Position](w)
+	posID := flecs.RegisterComponent[Position](w)
 	speedID := flecs.RegisterComponent[Speed](w)
-	velID   := flecs.RegisterComponent[Velocity](w)
+	velID := flecs.RegisterComponent[Velocity](w)
 
 	var hasSpeed, hasVel flecs.ID
 	w.Write(func(fw *flecs.Writer) {
@@ -321,7 +313,7 @@ func TestQueries_Or_Terms(t *testing.T) {
 	it := q.Iter()
 	for it.Next() {
 		speedCol, hasSpeedField := flecs.FieldMaybe[Speed](it, speedID)
-		velCol,   hasVelField   := flecs.FieldMaybe[Velocity](it, velID)
+		velCol, hasVelField := flecs.FieldMaybe[Velocity](it, velID)
 		for i := range it.Entities() {
 			if hasSpeedField {
 				_ = speedCol[i].Value
@@ -400,7 +392,7 @@ func TestQueries_Field_Access(t *testing.T) {
 		flecs.Set(fw, e, Velocity{DX: 3, DY: 4})
 	})
 
-	q  := flecs.NewQuery(w, posID, velID)
+	q := flecs.NewQuery(w, posID, velID)
 	it := q.Iter()
 	for it.Next() {
 		pos := flecs.Field[Position](it, posID)
@@ -505,22 +497,20 @@ func TestQueries_Pairs_In_Query(t *testing.T) {
 
 	var rel, alice, bob, carol flecs.ID
 	w.Write(func(fw *flecs.Writer) {
-		rel   = fw.NewEntity()
+		rel = fw.NewEntity()
 		alice = fw.NewEntity()
-		bob   = fw.NewEntity()
+		bob = fw.NewEntity()
 		carol = fw.NewEntity()
 		fw.AddID(alice, flecs.MakePair(rel, bob))   // alice Likes bob
 		fw.AddID(carol, flecs.MakePair(rel, alice)) // carol Likes alice
 	})
 
 	pairID := flecs.MakePair(rel, bob)
-	q  := flecs.NewQueryFromTerms(w, flecs.With(pairID))
+	q := flecs.NewQueryFromTerms(w, flecs.With(pairID))
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != alice {
@@ -545,7 +535,7 @@ func TestQueries_Traversal_Up(t *testing.T) {
 	})
 
 	// Match entities whose parent (via ChildOf) owns Mass.
-	q  := flecs.NewQueryFromTerms(w, flecs.With(massID).Up(w.ChildOf()))
+	q := flecs.NewQueryFromTerms(w, flecs.With(massID).Up(w.ChildOf()))
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
@@ -556,9 +546,7 @@ func TestQueries_Traversal_Up(t *testing.T) {
 		if inherited.Value != 100 {
 			t.Errorf("inherited Mass.Value = %v, want 100", inherited.Value)
 		}
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != child {
@@ -629,9 +617,7 @@ func TestQueries_Traversal_Cascade(t *testing.T) {
 	)
 	var order []flecs.ID
 	cq.Each(func(it *flecs.QueryIter) {
-		for _, e := range it.Entities() {
-			order = append(order, e)
-		}
+		order = append(order, it.Entities()...)
 	})
 
 	if len(order) != 2 {
@@ -668,13 +654,11 @@ func TestQueries_CustomTraversalRelationship(t *testing.T) {
 		fw.AddID(item, flecs.MakePair(containedBy, container))
 	})
 
-	q  := flecs.NewQueryFromTerms(w, flecs.With(massID).Up(containedBy))
+	q := flecs.NewQueryFromTerms(w, flecs.With(massID).Up(containedBy))
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	if len(matched) != 1 || matched[0] != item {
@@ -704,9 +688,7 @@ func TestQueries_Inheritable(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	foundPrefab, foundInst := false, false
@@ -751,9 +733,7 @@ func TestQueries_InheritableSelfSuppress(t *testing.T) {
 	var matched []flecs.ID
 	it := q.Iter()
 	for it.Next() {
-		for _, e := range it.Entities() {
-			matched = append(matched, e)
-		}
+		matched = append(matched, it.Entities()...)
 	}
 
 	for _, e := range matched {
@@ -805,7 +785,7 @@ func TestQueries_ChangeDetection(t *testing.T) {
 func TestQueries_CachedQuery_Close(t *testing.T) {
 	type Position struct{ X, Y float32 }
 
-	w  := flecs.New()
+	w := flecs.New()
 	posID := flecs.RegisterComponent[Position](w)
 	cq := flecs.NewCachedQuery(w, posID)
 
