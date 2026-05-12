@@ -675,7 +675,51 @@ if cq.IsClosed() {
 
 The following features from the upstream C flecs `Queries.md` are not yet available in the Go port. See `docs/README.md` for the full feature-gap list.
 
-**Wildcard and Any query terms** — `EcsWildcard` / `EcsAny` as term IDs return one result per matching component (Wildcard) or at most one (Any). Useful for "match any pair with this relationship." Not yet ported in Go flecs.
+### Wildcard and Any query terms (Phase 15.6, v0.38.0)
+
+Use `w.Wildcard()` or `w.Any()` in the target or relationship slot of a pair term to match across an entire relationship family.
+
+**Wildcard** emits one iterator row per concrete target that exists in the matched table:
+
+```go
+// One row per (Likes, X) pair — entity "a" with (Likes, Bob) and (Likes, Alice) yields two rows.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(likesID, w.Wildcard())))
+it := q.Iter()
+for it.Next() {
+    target := flecs.MatchedTarget(it, 0)  // Bob on the first row, Alice on the second
+    mid    := flecs.MatchedID(it, 0)      // full pair ID: (Likes, Bob) then (Likes, Alice)
+    for _, e := range it.Entities() {
+        _ = e
+        _ = target
+    }
+}
+```
+
+**Any** matches once per entity regardless of how many concrete targets exist (short-circuit semantics):
+
+```go
+// Exactly one row per entity that has any (Likes, X) pair.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(likesID, w.Any())))
+```
+
+**Wildcard in relationship position** matches every relationship to a fixed target:
+
+```go
+// One row per (X, Bob) pair in each table.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
+```
+
+**Accessors for wildcard rows:**
+
+| Function | Returns |
+|---|---|
+| `flecs.MatchedTarget(it, termIdx)` | Concrete target entity for the current wildcard row |
+| `flecs.MatchedID(it, termIdx)` | Full pair ID `(rel, target)` that matched |
+| `flecs.FieldByMatch[T](it, termIdx)` | Typed `[]T` column for the matched pair (when it carries data) |
+
+`termIdx` is the 0-based index of the wildcard term in the sorted term list (same order as `it.TermsFull()`).
+
+**Wildcard and Any in CachedQuery**: both work in `NewCachedQueryFromTerms`. The cache updates automatically when new tables with matching concrete pairs are created.
 
 **Fixed per-term source** — In C flecs a term can match a component on a *specific* named entity rather than the iterated entity (e.g., match `SimTime` on a global `Game` entity). Go flecs only supports the default `$this` source. Not yet ported in Go flecs.
 

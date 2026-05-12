@@ -68,7 +68,9 @@ type World struct {
 	exclusiveID         ID                              // built-in Exclusive trait entity (index 17)
 	canToggleID         ID                              // built-in CanToggle trait entity (index 18)
 	symmetricID         ID                              // built-in Symmetric trait entity (index 19)
-	transitiveID        ID                              // built-in Transitive trait entity (index 20; first user entity at index 21)
+	transitiveID        ID                              // built-in Transitive trait entity (index 20)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 21; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 22; _; first user entity at index 23)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
@@ -114,7 +116,9 @@ type World struct {
 //   - Index 18: CanToggle built-in trait entity
 //   - Index 19: Symmetric built-in trait entity
 //   - Index 20: Transitive built-in trait entity
-//   - Index 21+: user entities (NewEntity)
+//   - Index 21: Wildcard built-in query-term sentinel (*)
+//   - Index 22: Any built-in query-term sentinel (_)
+//   - Index 23+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -244,6 +248,18 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(transitive))
 	w.transitiveID = transitive
+	// Allocate the built-in Wildcard query-term sentinel (gets index 21).
+	wildcard := w.index.Alloc()
+	rec = w.index.Get(wildcard)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(wildcard))
+	w.wildcardID = wildcard
+	// Allocate the built-in Any query-term sentinel (gets index 22).
+	any_ := w.index.Alloc()
+	rec = w.index.Get(any_)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(any_))
+	w.anyID = any_
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets

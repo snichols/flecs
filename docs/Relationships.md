@@ -163,11 +163,28 @@ for it.Next() {
 
 ### Wildcard pair queries
 
-> **Not yet ported in Go flecs.**
-> In C flecs you can write `(Eats, *)` to match every entity that has *any* Eats target.
-> The `EcsWildcard` / `EcsAny` wildcard ids and their query matching are not yet implemented
-> in the Go port. See the [Wildcard / Any queries gap](README.md#feature-gap-list-candidate-follow-up-issues)
-> in the feature-gap list.
+Use `w.Wildcard()` (`*`) or `w.Any()` (`_`) in the target or relationship slot of a pair term to match an entire relationship family without enumerating concrete targets.
+
+```go
+// One iterator row per concrete (Likes, X) pair per matched table.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(likesID, w.Wildcard())))
+it := q.Iter()
+for it.Next() {
+    concrete := flecs.MatchedTarget(it, 0) // Bob, then Alice, etc.
+    for _, e := range it.Entities() {
+        _ = e
+        _ = concrete
+    }
+}
+
+// Any: exactly one row per entity that has any (Likes, X) pair.
+q2 := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(likesID, w.Any())))
+
+// Wildcard in relationship position: any (X, Bob) pair.
+q3 := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
+```
+
+See [`docs/Queries.md`](Queries.md) § *Wildcard and Any query terms* for the full accessor reference.
 
 ---
 
@@ -606,7 +623,7 @@ Query whether a relationship is transitive with `flecs.IsTransitive(w, relID)`.
 
 **Transitive does not imply Reflexive:** an entity with no direct `(R, self)` pair is not auto-matched just because a chain terminates at itself. Reflexive is a separate unported trait.
 
-**Wildcard interaction:** wildcard query terms are not yet ported; they will compose with Transitive when Wildcard lands.
+**Wildcard interaction:** wildcard query terms compose correctly with Transitive. A term `(R, Wildcard)` where `R` is transitive will match tables that have any `(R, X)` pair — including tables that reach the target through a chain — and will emit one row per concrete direct pair in each matched table.
 
 ### Traversable
 
@@ -676,10 +693,14 @@ Pair IDs are never in the low-ID range that Flecs reserves for built-in componen
 
 ### Wildcard query performance
 
-> Wildcard pair queries are not yet ported to Go flecs. The notes below apply to the C
-> implementation and describe future behaviour when wildcard support lands.
+Wildcard matching is O(pairs\_with\_R\_in\_table) per matched table: at table-admission time `tableHasWildcardMatch` scans the table's type for any `(R, X)` pair (early exit on first hit), and at expansion time `wildcardMatchingPairs` collects all concrete matches.
 
-When a wildcard like `(Likes, *)` matches a table that has multiple `Likes` targets, the index stores the column and count for that relationship, making `(Rel, *)` scans cheap. Wildcard queries of the form `(*, Target)` require a linear scan starting from the first matching column.
+- `(Rel, Wildcard)` — linear scan of the table type for all `(Rel, X)` pairs. Cost proportional to the number of distinct targets for that relationship in the table.
+- `(Wildcard, Target)` — linear scan for all `(X, Target)` pairs. Same O(pairs) cost.
+- `(Wildcard, Wildcard)` — all pair IDs in the table; emits one row per pair.
+- `(Rel, Any)` — early exit after the first `(Rel, X)` hit; O(1) in the best case.
+
+All tables are scanned at query construction when a wildcard term is present (no component-index shortcut, since the sentinel ID is never registered as a concrete component).
 
 ---
 

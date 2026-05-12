@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.38.0 — 2026-05-12 — Phase 15.6: Wildcard and Any query-term sentinels
+
+### Added
+
+- **`w.Wildcard() ID`** — returns the built-in Wildcard sentinel (index 21, `*`). Use in a pair term's target or relationship slot to match every concrete value: `With(MakePair(likesID, w.Wildcard()))` yields one iterator row per concrete `(Likes, X)` pair in each matched table.
+- **`w.Any() ID`** — returns the built-in Any sentinel (index 22, `_`). Like Wildcard but short-circuits after the first match: exactly one row per entity regardless of how many concrete targets exist. Mirrors C `EcsQueryAndAny` semantics.
+- **`flecs.MatchedTarget(it, termIdx) ID`** — concrete target entity for the wildcard term's current expansion row.
+- **`flecs.MatchedID(it, termIdx) ID`** — full pair ID `(rel, target)` matched on the current row.
+- **`flecs.FieldByMatch[T](it, termIdx) []T`** — typed column slice for the concrete pair matched by the wildcard term; handles both value pairs and tag pairs.
+- Wildcard and Any work in both `NewQueryFromTerms` and `NewCachedQueryFromTerms`. Cache invalidation is automatic: when a new table with matching concrete pairs is created, the cached query picks it up via `notifyTableCreated`.
+- **`wildcard_test.go`** — 9 test cases: wildcard target, wildcard relationship, both-wildcard, Any target, `MatchedTarget`, `MatchedID`, mixed terms, cached query interaction, `FieldByMatch`. Plus `BenchmarkWildcardQuery_PairsPerEntity`.
+
+### Changed
+
+- Built-in entity count increases from 20 to 22. User entities now start at index 23.
+- `marshal.go` skip-set updated to exclude Wildcard (21) and Any (22) from JSON serialization.
+
+### Breaking changes
+
+- Built-in entity count increases from 20 to 22. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 22. User entities now start at index 23.
+- `World.Wildcard()` and `World.Any()` are now valid built-in entity accessors. If you had user entities starting at index 21 or 22, they now start at index 23.
+
+### Non-goals (explicitly out of scope for v0.38.0)
+
+- No Wildcard/Any in single-component (non-pair) terms.
+- No Wildcard/Any in component-set position (only target/relationship slots of pair terms).
+- No `EcsThis` variable binding or cross-term entity-ID joins.
+- No C-style component-index `cr_wildcard`/`cr_any` buckets (initial implementation scans the table type directly).
+
+---
+
 ## v0.37.0 — 2026-05-12 — Phase 15.5: Transitive relationship trait
 
 ### Added
