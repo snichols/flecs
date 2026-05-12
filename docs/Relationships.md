@@ -341,7 +341,7 @@ IsA is transitive: if `GrannySmith IsA Apple` and `Apple IsA Fruit`, then `Grann
 
 ### The ChildOf relationship
 
-`w.ChildOf()` is the built-in relationship for entity hierarchies. Adding `(ChildOf, parent)` to an entity makes it a child of `parent`. When a parent is deleted, all its `ChildOf` children are deleted recursively. See also [childof.go](../childof.go).
+`w.ChildOf()` is the built-in relationship for entity hierarchies. Adding `(ChildOf, parent)` to an entity makes it a child of `parent`. When a parent is deleted, all its `ChildOf` children are deleted recursively. See also [childof.go](../childof.go) and [HierarchiesManual.md](HierarchiesManual.md) for the full hierarchy reference.
 
 ```go
 var spaceship, cockpit flecs.ID
