@@ -659,11 +659,11 @@ func TestIsATagInheritance(t *testing.T) {
 // TestIsAWorldCountBaseline verifies that a fresh world has 11 built-in entities
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
-// RemoveAction, DeleteAction, PanicAction, Exclusive) before any user entities.
+// RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle) before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 17 {
-		t.Fatalf("fresh World.Count(): want 17 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive), got %d", base)
+	if base != 18 {
+		t.Fatalf("fresh World.Count(): want 18 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle), got %d", base)
 	}
 }

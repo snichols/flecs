@@ -100,7 +100,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`on_replace` hook** — receives both the previous and new component value when a component is overwritten via `Set`. not yet ported in Go flecs.
 - **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
 - **Cleanup policies / component-delete cascade** — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`. The `OnDelete` and `OnDeleteTarget` traits are now fully configurable with `RemoveAction`, `DeleteAction`, and `PanicAction`.
-- **`CanToggle` component trait** — per-entity component enable/disable via `ecs_enable_component`; cheaper than remove/add because it flips a bit rather than moving the entity to another archetype. not yet ported in Go flecs.
+- **`CanToggle` component trait** — **shipped in v0.35.0** via `SetCanToggle` / `EnableID` / `DisableID` / `IsEnabledID` and typed generics. `Each1`/`Each2`/`Each3`/`Each4` automatically skip disabled rows. See the [ComponentTraits manual](ComponentTraits.md#cantoggle).
 
 ### Additional gaps discovered in Phase 14.2 (Queries port)
 

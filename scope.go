@@ -511,6 +511,7 @@ func upPtr[T any](w *World, it *QueryIter, id ID) *T {
 func Each1[A any](r *Reader, fn func(e ID, a *A)) {
 	var ids [1]ID
 	ids[0] = RegisterComponent[A](r.world)
+	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
@@ -521,6 +522,9 @@ func Each1[A any](r *Reader, fn func(e ID, a *A)) {
 		} else {
 			colA := Field[A](it, ids[0])
 			for i, e := range it.Entities() {
+				if toggleA && !it.current.IsRowEnabled(ids[0], i) {
+					continue
+				}
 				fn(e, &colA[i])
 			}
 		}
@@ -536,6 +540,8 @@ func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 	var ids [2]ID
 	ids[0] = RegisterComponent[A](r.world)
 	ids[1] = RegisterComponent[B](r.world)
+	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
@@ -545,6 +551,10 @@ func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 			colA := Field[A](it, ids[0])
 			colB := Field[B](it, ids[1])
 			for i, e := range it.Entities() {
+				if (toggleA && !it.current.IsRowEnabled(ids[0], i)) ||
+					(toggleB && !it.current.IsRowEnabled(ids[1], i)) {
+					continue
+				}
 				fn(e, &colA[i], &colB[i])
 			}
 			continue
@@ -558,6 +568,10 @@ func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 			colB = Field[B](it, ids[1])
 		}
 		for i, e := range it.Entities() {
+			if (toggleA && aShared == nil && !it.current.IsRowEnabled(ids[0], i)) ||
+				(toggleB && bShared == nil && !it.current.IsRowEnabled(ids[1], i)) {
+				continue
+			}
 			a := aShared
 			if a == nil {
 				a = &colA[i]
@@ -581,6 +595,9 @@ func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 	ids[0] = RegisterComponent[A](r.world)
 	ids[1] = RegisterComponent[B](r.world)
 	ids[2] = RegisterComponent[C](r.world)
+	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
+	toggleC := r.world.canTogglePolicies[ID(ids[2].Index())]
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
@@ -592,6 +609,11 @@ func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 			colB := Field[B](it, ids[1])
 			colC := Field[C](it, ids[2])
 			for i, e := range it.Entities() {
+				if (toggleA && !it.current.IsRowEnabled(ids[0], i)) ||
+					(toggleB && !it.current.IsRowEnabled(ids[1], i)) ||
+					(toggleC && !it.current.IsRowEnabled(ids[2], i)) {
+					continue
+				}
 				fn(e, &colA[i], &colB[i], &colC[i])
 			}
 			continue
@@ -609,6 +631,11 @@ func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 			colC = Field[C](it, ids[2])
 		}
 		for i, e := range it.Entities() {
+			if (toggleA && aShared == nil && !it.current.IsRowEnabled(ids[0], i)) ||
+				(toggleB && bShared == nil && !it.current.IsRowEnabled(ids[1], i)) ||
+				(toggleC && cShared == nil && !it.current.IsRowEnabled(ids[2], i)) {
+				continue
+			}
 			a := aShared
 			if a == nil {
 				a = &colA[i]
@@ -637,6 +664,10 @@ func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
 	ids[1] = RegisterComponent[B](r.world)
 	ids[2] = RegisterComponent[C](r.world)
 	ids[3] = RegisterComponent[D](r.world)
+	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
+	toggleC := r.world.canTogglePolicies[ID(ids[2].Index())]
+	toggleD := r.world.canTogglePolicies[ID(ids[3].Index())]
 	q := NewQuery(r.world, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
@@ -650,6 +681,12 @@ func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
 			colC := Field[C](it, ids[2])
 			colD := Field[D](it, ids[3])
 			for i, e := range it.Entities() {
+				if (toggleA && !it.current.IsRowEnabled(ids[0], i)) ||
+					(toggleB && !it.current.IsRowEnabled(ids[1], i)) ||
+					(toggleC && !it.current.IsRowEnabled(ids[2], i)) ||
+					(toggleD && !it.current.IsRowEnabled(ids[3], i)) {
+					continue
+				}
 				fn(e, &colA[i], &colB[i], &colC[i], &colD[i])
 			}
 			continue
@@ -671,6 +708,12 @@ func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
 			colD = Field[D](it, ids[3])
 		}
 		for i, e := range it.Entities() {
+			if (toggleA && aShared == nil && !it.current.IsRowEnabled(ids[0], i)) ||
+				(toggleB && bShared == nil && !it.current.IsRowEnabled(ids[1], i)) ||
+				(toggleC && cShared == nil && !it.current.IsRowEnabled(ids[2], i)) ||
+				(toggleD && dShared == nil && !it.current.IsRowEnabled(ids[3], i)) {
+				continue
+			}
 			a := aShared
 			if a == nil {
 				a = &colA[i]
