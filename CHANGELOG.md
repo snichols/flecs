@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.1: EntitiesComponents doc port
+## v0.20.0 — 2026-05-12 — Phase 14.1: EntitiesComponents doc port
 
 ### Added
 
