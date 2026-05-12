@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.3: Relationships doc port (upcoming v0.22.0)
+
+### Added
+
+- **`docs/Relationships.md`** — full Go-idiomatic port of the upstream C flecs Relationships manual. Covers pair-ID encoding (`MakePair`), tag pairs (`AddID`/`RemoveID`/`HasID`), data pairs (`SetPair[T]`/`GetPair[T]`/`GetPairRef[T]`), relationship queries (`NewQueryFromTerms` with pair terms), adding a component multiple times via different pair targets, inspecting entity pairs (`EntityComponents`), the built-in `IsA` relationship (component sharing, copy-on-write override, `EachPrefab`), the built-in `ChildOf` relationship (`EachChild`, `ParentOf`, namespacing via `Lookup`/`LookupChild`), relationship traversal (`GetUp`/`HasUp`/`TargetUp`), and query traversal terms (`Up`/`SelfUp`/`Cascade`). Unported features carry explicit `Not yet ported in Go flecs` callouts: wildcard queries, exclusive/symmetric/transitive/traversable relationship traits, configurable cleanup policies, `PairIsTag` trait, and entity scoping.
+- **`docs/relationships_examples_test.go`** — 19 test functions (`TestRelationships_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — Relationships row updated to `✅ landed / 14.3`; 7 newly discovered feature gaps appended: exclusive relationship trait, symmetric relationship trait, transitive relationship trait, traversable relationship trait, configurable cleanup policies, PairIsTag trait, entity scoping.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.3 row updated to `✅ shipped (v0.22.0)`.
+
 ## v0.21.0 — 2026-05-12 — Phase 14.2: Queries doc port
 
 ### Added
