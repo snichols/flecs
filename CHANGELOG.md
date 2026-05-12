@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.10: DesignWithFlecs doc port (upcoming v0.29.0)
+
+### Added
+
+- **`docs/DesignWithFlecs.md`** — full Go-idiomatic port of the upstream C flecs DesignWithFlecs guide. Covers ECS design patterns: entity lifecycle and naming, small atomic components vs. complex component data, uncached vs. cached query selection, single-responsibility system design, four built-in pipeline phases (`PreUpdate`, `OnFixedUpdate`, `OnUpdate`, `PostUpdate`) with conventions for each, Go-package-based module structure as the Go equivalent of C `ECS_MODULE`, relationship signs and the tags-vs-components-vs-relationships decision table, and reactive observer design. Includes a "Custom phases not yet ported" callout and a design-tips summary section. Aggressively cross-links all other ported docs: [Quickstart](docs/Quickstart.md), [Entities & Components](docs/EntitiesComponents.md), [Queries](docs/Queries.md), [Relationships](docs/Relationships.md), [Hierarchies](docs/HierarchiesManual.md), [Prefabs](docs/PrefabsManual.md), [Systems](docs/Systems.md), [Observers](docs/ObserversManual.md), [ComponentTraits](docs/ComponentTraits.md), [FlecsRemoteApi](docs/FlecsRemoteApi.md).
+- **`docs/design_examples_test.go`** — 10 test functions (`TestDesign_*`) verifying every code block in the manual: entity creation via prefab, lifecycle/IsAlive guard, entity names, atomic component queries, uncached and cached query patterns, single-responsibility system, phase ordering (PreUpdate → OnUpdate → PostUpdate), tag relationship pairs, and prefab variant inheritance. Run with `go test ./docs/...`.
+- **`docs/README.md`** — DesignWithFlecs row updated to `✅ landed / 14.10`.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.10 row updated to `✅ shipped (v0.29.0)`.
+
 ## v0.28.0 — 2026-05-12 — Phase 14.9: FlecsRemoteApi doc port
 
 ### Added
