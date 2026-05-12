@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.39.0 — 2026-05-12 — Phase 15.7: Reflexive relationship trait
+
+### Added
+
+- **`SetReflexive(w, relID)`** — marks a relationship as reflexive: `R(X, X)` is implicitly true for all entities `X`, without storing an explicit self-pair. Mirrors C `EcsReflexive` (a tag entity, index 21).
+- **`IsReflexive(w, relID) bool`** — reports whether a relationship is marked reflexive.
+- **`w.Reflexive() ID`** — returns the built-in Reflexive trait entity (index 21). The bare-tag form `fw.AddID(relID, w.Reflexive())` is equivalent to `SetReflexive(w, relID)`.
+- **`HasID` self-pair extension** — `HasID(e, MakePair(R, e))` now returns `true` when `R` is reflexive, even if no self-pair is stored. The check is gated on `target == entity` before the policy-map lookup, so non-self queries pay zero extra cost. **Deliberate divergence from C:** in C flecs `ecs_has_id` does not consult `EcsReflexive`; it is purely a query-time trait. Go flecs extends `HasID` to match the semantic promise already documented in `docs/Relationships.md` and `docs/ComponentTraits.md`.
+- **Query self-match** — in both `NewQueryFromTerms` and `NewCachedQueryFromTerms`, a term `With(MakePair(R, target))` where `R` is reflexive additionally matches the table that contains `target` itself, in addition to tables that directly hold `(R, target)`.
+- **Reflexive + Transitive composition** — when a relationship has both traits, the query match is: direct `(R, target)` pair **or** transitive chain to `target` **or** self-match (target's own table). `IsA` composes both traits.
+- **IsA bootstrapped as reflexive** — matching C `src/bootstrap.c:1321`, `IsA` gains the Reflexive policy at world construction. `HasID(a, MakePair(IsA, a))` now returns `true` for any alive entity `a` without storing a self-pair.
+- **`reflexive_test.go`** — 9 test cases: default no-self-pair, SetReflexive + HasID, non-self HasID unchanged, query self-match, Reflexive+Transitive composition, IsA bootstrap, IsReflexive round-trip, non-relationship entity lenient, cached query self-match.
+
+### Changed
+
+- Built-in entity count increases from 22 to 23. User entities now start at index 24.
+- Wildcard is now at index 22; Any is at index 23 (each bumped by one to make room for Reflexive at index 21).
+- `marshal.go` skip-set updated to exclude Reflexive (21) from JSON serialization.
+
+### Breaking changes
+
+- Built-in entity count increases from 22 to 23. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 23. User entities now start at index 24.
+- `IsA` is now reflexive: `HasID(a, MakePair(IsA, a))` returns `true` for any alive `a`. If existing code expected this to return `false`, update it.
+
+### Non-goals (explicitly out of scope for v0.39.0)
+
+- No `EcsTermReflexive` internal flag porting (a C query-compiler detail).
+- No "Reflexive implies Transitive" or other cross-trait propagation.
+- No automatic pair storage for self-pairs (Reflexive is a lazy, check-at-query-time trait).
+- No entity-migration cache invalidation for `CachedQuery` (staleness is accepted and documented).
+
+---
+
 ## v0.38.0 — 2026-05-12 — Phase 15.6: Wildcard and Any query-term sentinels
 
 ### Added

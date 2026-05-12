@@ -159,7 +159,6 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.8 (ComponentTraits port)
 
-- **`Reflexive` relationship trait** — `Has(e, R, e)` is always true for a reflexive relationship (e.g. `IsA` is reflexive; `LocatedIn` is not). not yet ported in Go flecs.
 - **`Constant` component trait** — marks a component read-only after its initial write; subsequent `Set` calls would be a fatal error. not yet ported in Go flecs.
 - **`DontFragment` component trait** — opt a component into non-fragmenting sparse storage; sparse but does not create new archetype tables. not yet ported in Go flecs.
 - **`Singleton` component trait** (`EcsSingleton`) — constrains a component to a single world-global instance stored on the component entity itself; queries auto-match the component entity as source. not yet ported in Go flecs.

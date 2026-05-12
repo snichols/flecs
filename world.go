@@ -69,14 +69,16 @@ type World struct {
 	canToggleID         ID                              // built-in CanToggle trait entity (index 18)
 	symmetricID         ID                              // built-in Symmetric trait entity (index 19)
 	transitiveID        ID                              // built-in Transitive trait entity (index 20)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 21; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 22; _; first user entity at index 23)
+	reflexiveID         ID                              // built-in Reflexive trait entity (index 21)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 22; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 23; _; first user entity at index 24)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
 	canTogglePolicies   map[ID]bool                     // component entity index → CanToggle flag
 	symmetricPolicies   map[ID]bool                     // relationship entity index → symmetric flag
 	transitivePolicies  map[ID]bool                     // relationship entity index → transitive flag
+	reflexivePolicies   map[ID]bool                     // relationship entity index → reflexive flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -116,9 +118,10 @@ type World struct {
 //   - Index 18: CanToggle built-in trait entity
 //   - Index 19: Symmetric built-in trait entity
 //   - Index 20: Transitive built-in trait entity
-//   - Index 21: Wildcard built-in query-term sentinel (*)
-//   - Index 22: Any built-in query-term sentinel (_)
-//   - Index 23+: user entities (NewEntity)
+//   - Index 21: Reflexive built-in trait entity
+//   - Index 22: Wildcard built-in query-term sentinel (*)
+//   - Index 23: Any built-in query-term sentinel (_)
+//   - Index 24+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -248,13 +251,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(transitive))
 	w.transitiveID = transitive
-	// Allocate the built-in Wildcard query-term sentinel (gets index 21).
+	// Allocate the built-in Reflexive trait entity (gets index 21).
+	reflexive := w.index.Alloc()
+	rec = w.index.Get(reflexive)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(reflexive))
+	w.reflexiveID = reflexive
+	// Allocate the built-in Wildcard query-term sentinel (gets index 22).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 22).
+	// Allocate the built-in Any query-term sentinel (gets index 23).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -273,6 +282,10 @@ func New() *World {
 	applyExclusivePolicy(w, w.onDeleteID)
 	applyExclusivePolicy(w, w.onDeleteTargetID)
 	applyExclusivePolicy(w, w.onInstantiateID)
+	// Bootstrap IsA as reflexive, matching C src/bootstrap.c:1321.
+	// This makes HasID(a, MakePair(IsA, a)) return true for any alive entity a
+	// (deliberate divergence from C ecs_has_id; documented in CHANGELOG).
+	applyReflexivePolicy(w, w.isAID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

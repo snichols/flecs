@@ -376,11 +376,24 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 					if !tableHasWildcardMatch(cq.w, t, term.ID) {
 						return
 					}
-				} else if term.ID.IsPair() && cq.w.transitivePolicies[ID(term.ID.First().Index())] {
-					// Transitive pair matching: walk (R, *) chains.
-					// Cached queries re-evaluate on table creation; pair-mutation
-					// staleness is accepted and documented (see type comment).
-					if !transitiveTableMatches(cq.w, t, term.ID) {
+				} else if term.ID.IsPair() {
+					rel := ID(term.ID.First().Index())
+					isTransitive := cq.w.transitivePolicies[rel]
+					isReflexive := cq.w.reflexivePolicies[rel]
+					matched := false
+					if isTransitive {
+						// Transitive pair matching: walk (R, *) chains.
+						// Cached queries re-evaluate on table creation; pair-mutation
+						// staleness is accepted and documented (see type comment).
+						matched = transitiveTableMatches(cq.w, t, term.ID)
+					}
+					if !matched && isReflexive {
+						// Reflexive self-match: target entity's own table qualifies.
+						// Composes with Transitive. Staleness on entity migration is
+						// accepted; cache invalidation on migration is a future enhancement.
+						matched = reflexiveTableMatches(cq.w, t, term.ID)
+					}
+					if !matched {
 						return
 					}
 				} else {
