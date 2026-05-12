@@ -1440,3 +1440,558 @@ func TestCachedQueryFromTermsFieldMaybe(t *testing.T) {
 		t.Error("e2 (has Velocity): want hasVel=true")
 	}
 }
+
+// ── Traversal term tests ──────────────────────────────────────────────────────
+
+// TestQueryUp_MatchesViaPrefab: entity has (IsA, prefab), prefab has Position.
+// With(posID).Up(w.IsA()) matches the entity; FieldShared returns prefab's value;
+// IsFieldSelf is false.
+func TestQueryUp_MatchesViaPrefab(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 42, Y: 7})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+
+	var visited []flecs.ID
+	var gotPos Position
+	var gotSelf bool
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			visited = append(visited, e)
+			p, ok := flecs.FieldShared[Position](it, posID)
+			if !ok {
+				t.Error("FieldShared should return (value, true) for Up match")
+			}
+			gotPos = p
+			gotSelf = flecs.IsFieldSelf(it, posID)
+		}
+	})
+
+	if len(visited) != 1 || visited[0] != inst {
+		t.Fatalf("want [inst], got %v", visited)
+	}
+	if gotSelf {
+		t.Error("IsFieldSelf: want false for Up-matched term")
+	}
+	if gotPos.X != 42 || gotPos.Y != 7 {
+		t.Errorf("FieldShared Position: want {42 7}, got %+v", gotPos)
+	}
+}
+
+// TestQueryUp_MatchesViaChildOf: child→mid→grandparent ChildOf chain; grandparent
+// has Marker. With(markerID).Up(w.ChildOf()) matches the child; IsFieldSelf is false.
+func TestQueryUp_MatchesViaChildOf(t *testing.T) {
+	type Marker struct{}
+	w := flecs.New()
+	markerID := flecs.RegisterComponent[Marker](w)
+
+	var grandparent, mid, child flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		grandparent = fw.NewEntity()
+		flecs.Set(fw, grandparent, Marker{})
+
+		mid = fw.NewEntity()
+		flecs.AddID(fw, mid, flecs.MakePair(w.ChildOf(), grandparent))
+
+		child = fw.NewEntity()
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), mid))
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(markerID).Up(w.ChildOf()))
+
+	visited := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			visited[e] = true
+		}
+	})
+
+	// grandparent has Marker locally so it won't match a pure-Up query
+	// (Up starts from parent, not self). mid and child should match.
+	if !visited[mid] {
+		t.Error("mid should match Up(ChildOf) — grandparent has Marker")
+	}
+	if !visited[child] {
+		t.Error("child should match Up(ChildOf) — ancestor chain has Marker")
+	}
+	_ = grandparent
+}
+
+// TestQuerySelfUp_PrefersSelf: entity has Position locally AND inherits via IsA.
+// SelfUp matches via Self; Field[Position] works; IsFieldSelf is true.
+func TestQuerySelfUp_PrefersSelf(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 99})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, Position{X: 1}) // local override
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).SelfUp(w.IsA()))
+
+	found := false
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			if e != inst {
+				continue
+			}
+			found = true
+			if !flecs.IsFieldSelf(it, posID) {
+				t.Error("IsFieldSelf: want true (entity owns Position locally)")
+			}
+			pos := flecs.Field[Position](it, posID)
+			if len(pos) == 0 || pos[0].X != 1 {
+				t.Errorf("Field[Position]: want X=1 (local), got %+v", pos)
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not visited by SelfUp query")
+	}
+}
+
+// TestQuerySelfUp_FallsBackToUp: entity has no Position locally but inherits.
+// SelfUp falls back to Up; IsFieldSelf is false.
+func TestQuerySelfUp_FallsBackToUp(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 55})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		// inst has no local Position
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).SelfUp(w.IsA()))
+
+	found := false
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			if e != inst {
+				continue
+			}
+			found = true
+			if flecs.IsFieldSelf(it, posID) {
+				t.Error("IsFieldSelf: want false (Position comes from prefab)")
+			}
+			p, ok := flecs.FieldShared[Position](it, posID)
+			if !ok {
+				t.Error("FieldShared: want (value, true) for Up-fallback")
+			}
+			if p.X != 55 {
+				t.Errorf("FieldShared Position: want X=55, got %+v", p)
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not visited by SelfUp query")
+	}
+}
+
+// TestQueryUp_NoMatch: entity with no ancestor having the component does not match.
+func TestQueryUp_NoMatch(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var orphan flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		orphan = fw.NewEntity()
+		// orphan has no Position and no IsA relationship
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+
+	visited := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			visited[e] = true
+		}
+	})
+	if visited[orphan] {
+		t.Error("orphan (no ancestor with Position) should NOT match")
+	}
+}
+
+// TestQueryUp_DeadAncestor: ancestor is deleted between query construction and
+// iteration; chain terminates cleanly without panic (walkUp dead-target guard).
+func TestQueryUp_DeadAncestor(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	// Delete the prefab — inst's ancestor is now dead.
+	w.Write(func(fw *flecs.Writer) { fw.Delete(prefab) })
+
+	// Must not panic; the dead ancestor terminates the chain.
+	var visited []flecs.ID
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+	q.Each(func(it *flecs.QueryIter) {
+		visited = append(visited, it.Entities()...)
+	})
+	if len(visited) != 0 {
+		t.Errorf("want 0 matches (ancestor dead), got %v", visited)
+	}
+}
+
+// TestQueryUp_CycleSafety: pathological cycle via IsA; matcher terminates within
+// maxTraversalDepth without panicking.
+func TestQueryUp_CycleSafety(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var a, b flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		a = fw.NewEntity()
+		b = fw.NewEntity()
+		flecs.AddID(fw, a, flecs.MakePair(w.IsA(), b))
+		flecs.AddID(fw, b, flecs.MakePair(w.IsA(), a))
+		// Neither has Position.
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+
+	var visited []flecs.ID
+	q.Each(func(it *flecs.QueryIter) {
+		visited = append(visited, it.Entities()...)
+	})
+	if len(visited) != 0 {
+		t.Errorf("want 0 matches (cycle, no Position anywhere), got %v", visited)
+	}
+}
+
+// TestQueryCascade_OrdersByDepth: three-level ChildOf chain (root, mid, leaf), each
+// with Marker. NewCachedQueryFromTerms with Cascade(ChildOf) iterates root→mid→leaf.
+func TestQueryCascade_OrdersByDepth(t *testing.T) {
+	type Marker struct{}
+	w := flecs.New()
+	markerID := flecs.RegisterComponent[Marker](w)
+
+	var root, mid, leaf flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		root = fw.NewEntity()
+		flecs.Set(fw, root, Marker{})
+
+		mid = fw.NewEntity()
+		flecs.Set(fw, mid, Marker{})
+		flecs.AddID(fw, mid, flecs.MakePair(w.ChildOf(), root))
+
+		leaf = fw.NewEntity()
+		flecs.Set(fw, leaf, Marker{})
+		flecs.AddID(fw, leaf, flecs.MakePair(w.ChildOf(), mid))
+	})
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(markerID).Cascade(w.ChildOf()))
+	defer cq.Close()
+
+	var order []flecs.ID
+	cq.Each(func(it *flecs.QueryIter) {
+		order = append(order, it.Entities()...)
+	})
+
+	if len(order) != 3 {
+		t.Fatalf("want 3 entities, got %d: %v", len(order), order)
+	}
+	if order[0] != root || order[1] != mid || order[2] != leaf {
+		t.Errorf("want [root mid leaf], got %v", order)
+	}
+}
+
+// TestQueryCascade_RejectedForUncached: NewQueryFromTerms with a Cascade term panics.
+func TestQueryCascade_RejectedForUncached(t *testing.T) {
+	w := flecs.New()
+	type Marker struct{}
+	markerID := flecs.RegisterComponent[Marker](w)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for Cascade in NewQueryFromTerms")
+		}
+		msg, _ := r.(string)
+		if msg == "" {
+			t.Fatalf("panic value should be a string, got %T: %v", r, r)
+		}
+	}()
+	flecs.NewQueryFromTerms(w, flecs.With(markerID).Cascade(w.ChildOf()))
+}
+
+// TestCachedQueryUp_MatchesViaPrefab: same as TestQueryUp_MatchesViaPrefab but
+// using NewCachedQueryFromTerms.
+func TestCachedQueryUp_MatchesViaPrefab(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 10, Y: 20})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+	defer cq.Close()
+
+	var visited []flecs.ID
+	cq.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			visited = append(visited, e)
+			p, ok := flecs.FieldShared[Position](it, posID)
+			if !ok {
+				t.Error("FieldShared should return (value, true) for cached Up match")
+			}
+			if p.X != 10 || p.Y != 20 {
+				t.Errorf("FieldShared Position: want {10 20}, got %+v", p)
+			}
+			if flecs.IsFieldSelf(it, posID) {
+				t.Error("IsFieldSelf: want false for cached Up match")
+			}
+		}
+	})
+	if len(visited) != 1 || visited[0] != inst {
+		t.Fatalf("want [inst], got %v", visited)
+	}
+}
+
+// TestCachedQueryUp_NewTableTriggersRematch: create a cached Up query, then create
+// a new entity-via-prefab landing in a fresh archetype; the query picks it up via
+// notifyTableCreated.
+func TestCachedQueryUp_NewTableTriggersRematch(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	type Extra struct{ V int }
+	extraID := flecs.RegisterComponent[Extra](w)
+
+	var prefab flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 5})
+	})
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+	defer cq.Close()
+
+	initialCount := cq.EntityCount()
+
+	// Create a new entity that inherits Position AND has Extra — this forces a new table.
+	var inst2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		inst2 = fw.NewEntity()
+		flecs.AddID(fw, inst2, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst2, Extra{V: 9})
+	})
+
+	if cq.EntityCount() != initialCount+1 {
+		t.Fatalf("after new entity in new table: want %d, got %d", initialCount+1, cq.EntityCount())
+	}
+
+	found := false
+	cq.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			if e == inst2 {
+				found = true
+			}
+		}
+	})
+	if !found {
+		t.Error("inst2 should be found in the cached Up query after notifyTableCreated")
+	}
+	_ = extraID
+}
+
+// TestQueryUp_TagComponent: FieldShared returns (zero, true) for a tag component
+// inherited via Up (tests the nil-column branch in FieldShared).
+func TestQueryUp_TagComponent(t *testing.T) {
+	type Tag struct{} // zero-size tag
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Tag{})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(tagID).Up(w.IsA()))
+	found := false
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			if e != inst {
+				continue
+			}
+			found = true
+			_, ok := flecs.FieldShared[Tag](it, tagID)
+			if !ok {
+				t.Error("FieldShared on tag Up match: want (zero, true)")
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not matched by Up(IsA) query for tag component")
+	}
+}
+
+// TestTermSelf: Term.Self() returns the same semantics as the default constructor.
+func TestTermSelf(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 3})
+	})
+
+	// With(posID).Self() should behave identically to With(posID).
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Self())
+	count := 0
+	q.Each(func(it *flecs.QueryIter) {
+		count += it.Count()
+		if !flecs.IsFieldSelf(it, posID) {
+			t.Error("IsFieldSelf: want true for Self() term")
+		}
+	})
+	if count != 1 {
+		t.Errorf("want 1 entity, got %d", count)
+	}
+}
+
+// TestQuerySelfUp_CachedWithLocalAndInherited: cached SelfUp query with one entity
+// having local component (Self) and another inheriting (Up); verifies both appear
+// and IsFieldSelf/FieldShared work correctly for each.
+func TestQuerySelfUp_CachedWithLocalAndInherited(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, local, inherited flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 99})
+
+		local = fw.NewEntity()
+		flecs.Set(fw, local, Position{X: 1}) // locally owned
+
+		inherited = fw.NewEntity()
+		flecs.AddID(fw, inherited, flecs.MakePair(w.IsA(), prefab)) // no local Position
+	})
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).SelfUp(w.IsA()))
+	defer cq.Close()
+
+	type selfResult struct {
+		self bool
+		x    float32
+	}
+	results := make(map[flecs.ID]selfResult)
+	cq.Each(func(it *flecs.QueryIter) {
+		isSelf := flecs.IsFieldSelf(it, posID)
+		for _, e := range it.Entities() {
+			if isSelf {
+				pos := flecs.Field[Position](it, posID)
+				for i, ent := range it.Entities() {
+					if ent == e {
+						results[e] = selfResult{self: true, x: pos[i].X}
+					}
+				}
+			} else {
+				p, ok := flecs.FieldShared[Position](it, posID)
+				if !ok {
+					t.Error("FieldShared: want (value, true) for Up match")
+				}
+				results[e] = selfResult{self: false, x: p.X}
+			}
+		}
+	})
+
+	if r, ok := results[local]; !ok || !r.self || r.x != 1 {
+		t.Errorf("local entity: want {self=true x=1}, got %+v ok=%v", r, ok)
+	}
+	if r, ok := results[inherited]; !ok || r.self || r.x != 99 {
+		t.Errorf("inherited entity: want {self=false x=99}, got %+v ok=%v", r, ok)
+	}
+}
+
+// TestFieldShared_PanicWhenSelf: FieldShared on a TraverseSelf term panics.
+func TestFieldShared_PanicWhenSelf(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Position{X: 1})
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+	it := q.Iter()
+	if !it.Next() {
+		t.Fatal("expected Next()=true")
+	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for FieldShared on TraverseSelf term")
+		}
+	}()
+	flecs.FieldShared[Position](it, posID)
+}
+
+// TestField_PanicWhenShared: Field[T] on an Up-matched term panics directing
+// callers to FieldShared.
+func TestField_PanicWhenShared(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, Position{X: 1})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+	it := q.Iter()
+	if !it.Next() {
+		t.Fatal("expected Next()=true")
+	}
+	_ = inst
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for Field[T] on Up-matched term")
+		}
+		msg, _ := r.(string)
+		if msg == "" {
+			t.Fatalf("panic should be a string, got %T: %v", r, r)
+		}
+	}()
+	flecs.Field[Position](it, posID)
+}

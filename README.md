@@ -110,6 +110,49 @@ within a table.
 - `NewQueryFromTerms` — structured terms with `With`, `Without`, `Maybe` (NOT / Optional support).
 - `NewCachedQuery` / `NewCachedQueryFromTerms` — persistent queries that incrementally track new tables.
 
+#### Cascade for parent-before-child systems
+
+`Term.Cascade(rel)` orders matched tables in a cached query from shallowest to
+deepest in the `rel` hierarchy — so a parent's row is always processed before its
+children. This is the canonical pattern for "propagate from parent to child" systems
+(e.g. accumulate a world-space transform from a local-space transform):
+
+```go
+type Transform struct{ X, Y float32 }
+
+transformID := flecs.RegisterComponent[Transform](w)
+
+var root, mid, leaf flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    root = fw.NewEntity()
+    flecs.Set(fw, root, Transform{X: 0, Y: 0})
+
+    mid = fw.NewEntity()
+    flecs.Set(fw, mid, Transform{X: 1, Y: 0})
+    flecs.AddID(fw, mid, flecs.MakePair(w.ChildOf(), root))
+
+    leaf = fw.NewEntity()
+    flecs.Set(fw, leaf, Transform{X: 0, Y: 1})
+    flecs.AddID(fw, leaf, flecs.MakePair(w.ChildOf(), mid))
+})
+
+// Iterate root → mid → leaf (ascending ChildOf depth).
+cq := flecs.NewCachedQueryFromTerms(w,
+    flecs.With(transformID).Cascade(w.ChildOf()),
+)
+cq.Each(func(it *flecs.QueryIter) {
+    transforms := flecs.Field[Transform](it, transformID)
+    for i := range transforms {
+        // process in parent-before-child order
+        _ = transforms[i]
+    }
+})
+```
+
+`Term.Up(rel)` and `Term.SelfUp(rel)` express per-term inheritance in both
+uncached and cached queries. `IsFieldSelf` and `FieldShared[T]` disambiguate
+local vs. inherited values at iteration time.
+
 ### Pipelines
 
 `Progress(dt)` runs all registered systems in four built-in phases:
@@ -167,6 +210,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Exclusive-access ownership assertion | `ExclusiveAccessBegin`, `ExclusiveAccessEnd` — always on; panics with `ErrExclusiveAccessViolation` on cross-goroutine violations; common case costs one `atomic.Load` per call |
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
+| Traversal query terms | `With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)`; `IsFieldSelf`, `FieldShared[T]` |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
 | Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |
@@ -194,7 +238,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Fixed timestep | ✅ | ✅ |
 | NOT / Optional query terms | ✅ (`With`, `Without`, `Maybe`) | ✅ |
 | OR query terms | ✅ (`Or`, `TermOr`, `FieldMaybe` on Or-group IDs) | ✅ |
-| Up/Down traversal in queries | ❌ deferred | ✅ |
+| Up/SelfUp/Cascade query terms | ✅ (`With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)`; `IsFieldSelf`, `FieldShared[T]`) | ✅ |
 | Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
 | Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
 | Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates scale linearly; deferred mutations serialize on shared queue until Phase 11.0) | ✅ |
