@@ -264,35 +264,37 @@ ecs_add_id(world, ecs_id(Position), EcsDontFragment);
 
 ### Exclusive
 
-**What it does:** An exclusive relationship enforces that an entity can have at most one target for a given relationship. Adding a second target automatically replaces the first. The built-in `ChildOf` relationship is implicitly exclusive (an entity can only have one parent).
+**What it does:** An exclusive relationship enforces that an entity can have at most one target for a given relationship. Adding a second target automatically replaces the first. The built-in `ChildOf`, `OnDelete`, `OnDeleteTarget`, and `OnInstantiate` relationships are exclusive by default. `IsA` is NOT exclusive — multiple prefab bases per entity are permitted.
 
-**What the C API looks like:**
-
-```c
-// C — not available in Go flecs
-ecs_entity_t MarriedTo = ecs_new(world);
-ecs_add_id(world, MarriedTo, EcsExclusive);
-
-ecs_entity_t Bob = ecs_new(world);
-ecs_entity_t Alice = ecs_new(world);
-ecs_entity_t Carol = ecs_new(world);
-ecs_add_pair(world, Bob, MarriedTo, Alice);
-ecs_add_pair(world, Bob, MarriedTo, Carol); // replaces (MarriedTo, Alice)
-```
-
-**Workaround:** Manually remove the old pair before adding the new one:
+**Go API (shipped v0.34.0):**
 
 ```go
-// Go workaround — remove old target before adding new one
+w := flecs.New()
+
+var marriedTo, bob, alice, carol flecs.ID
 w.Write(func(fw *flecs.Writer) {
-    // Remove any existing (MarriedTo, *) pair before adding the new one.
-    // There is no wildcard-remove; application must track the previous target.
-    fw.RemoveID(bob, flecs.MakePair(marriedTo, alice))
-    fw.AddID(bob, flecs.MakePair(marriedTo, carol))
+    marriedTo = fw.NewEntity()
+    bob = fw.NewEntity()
+    alice = fw.NewEntity()
+    carol = fw.NewEntity()
 })
+
+// Mark the relationship exclusive.
+flecs.SetExclusive(w, marriedTo)
+// Equivalent bare-tag form:
+// w.Write(func(fw *flecs.Writer) { fw.AddID(marriedTo, w.Exclusive()) })
+
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(bob, flecs.MakePair(marriedTo, alice))
+})
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(bob, flecs.MakePair(marriedTo, carol)) // replaces (marriedTo, alice)
+})
+
+// flecs.IsExclusive(w, marriedTo) == true
 ```
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-143-relationships-port): *Exclusive relationship trait*.
+The replace-on-add path fires `OnRemove` for the old pair and `OnAdd` for the new pair via the standard hook/observer machinery — no special handling is needed in observer callbacks.
 
 ---
 
@@ -559,7 +561,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **OnDeleteTarget** | `EcsOnDeleteTarget` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDeleteTarget(), action)`; `ChildOf` bootstrapped with `DeleteAction`; `IsA` has no default (opt-in) |
 | **Constant** | *(informal)* | ⏳ planned | No read-only enforcement after first write |
 | **DontFragment** | `EcsDontFragment` | ⏳ planned | No sparse non-fragmenting storage |
-| **Exclusive** | `EcsExclusive` | ⏳ planned | No automatic single-target enforcement |
+| **Exclusive** | `EcsExclusive` | ✅ shipped (v0.34.0) | `SetExclusive(w, relID)` / `IsExclusive(w, relID)`; `w.Exclusive()` bare-tag form; `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive |
 | **Final** | `EcsFinal` | ⏳ planned | No `IsA`-extension prevention |
 | **OneOf** | `EcsOneOf` | ⏳ planned | No relationship-target constraint |
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |

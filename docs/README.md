@@ -79,7 +79,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Query groups** — not ported.
 - **Transitive relationships** (`EcsTransitive`, `Trav` flag) — not ported.
 - **Symmetric relationships** (`EcsSymmetric`) — not ported.
-- **Exclusive relationships** (`EcsExclusive`) — not ported.
+- **Exclusive relationships** (`EcsExclusive`) — **shipped in v0.34.0** via `SetExclusive` / `IsExclusive` / `w.Exclusive()`. `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive.
 - **Union relationships** (`EcsUnion`) — not ported.
 - **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — not ported.
 - **World snapshots** (beyond JSON serialization) — not ported.
@@ -115,7 +115,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.3 (Relationships port)
 
-- **Exclusive relationship trait** (`EcsExclusive`) — ensures an entity can have at most one target for a given relationship; adding a second target automatically removes the first. Useful for state machines. not yet ported in Go flecs.
+- **Exclusive relationship trait** (`EcsExclusive`) — **shipped in v0.34.0**. `SetExclusive(w, relID)` / `IsExclusive(w, relID)` / `w.Exclusive()`. Built-in relationships `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` are exclusive by default. `IsA` is not exclusive.
 - **Symmetric relationship trait** (`EcsSymmetric`) — makes a relationship bidirectional: adding `(R, Y)` to entity `X` automatically adds `(R, X)` to entity `Y`. not yet ported in Go flecs.
 - **Transitive relationship trait** (`EcsTransitive`) — enables transitive query matching for custom relationships (if `A R B` and `B R C`, queries for `(R, C)` also match `A`). The built-in `IsA` already walks its chain in `Get`/`Has`; general transitivity for custom relationships requires this unported trait. not yet ported in Go flecs.
 - **Traversable relationship trait** (`EcsTraversable`) — formally marks a relationship as safe to traverse in queries; controls which relationships the query engine may follow when evaluating `Up`/`SelfUp`/`Cascade` terms. In Go flecs any entity can be used as a traversal relationship without explicit registration; the formal trait and its safety enforcement are not ported. not yet ported in Go flecs.

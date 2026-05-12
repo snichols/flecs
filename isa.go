@@ -6,6 +6,11 @@ package flecs
 // from prefab. Reads (Get/Has) consult the IsA chain transitively on a local
 // miss; writes (Set/AddID) always land locally on the child (copy-on-write
 // override). The IsA entity is always alive for the lifetime of the World.
+//
+// IsA is intentionally NOT exclusive: an entity may have multiple prefab bases
+// (multiple (IsA, *) pairs), enabling mixin-style composition. This matches C
+// flecs — only ChildOf, OnDelete, OnDeleteTarget, and OnInstantiate are
+// bootstrapped exclusive.
 func (w *World) IsA() ID { return w.isAID }
 
 // OnInstantiate returns the built-in OnInstantiate relationship entity.

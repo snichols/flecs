@@ -138,6 +138,20 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		case cmdDelete:
 			deleted = true
 		case cmdAddID:
+			if c.id.IsPair() && w.exclusivePolicies[c.id.First()] {
+				// Exclusive pair: remove any existing (R, A) before inserting (R, B)
+				// so the net signature has exactly one target for this relationship.
+				relIdx := uint32(c.id.First())
+				for k, sigID := range q.scratch1 {
+					if sigID.IsPair() && uint32(sigID.First()) == relIdx && sigID.Second() != c.id.Second() {
+						q.scratch1 = append(q.scratch1[:k], q.scratch1[k+1:]...)
+						break
+					}
+				}
+			} else if !c.id.IsPair() && c.id.Index() == w.exclusiveID.Index() {
+				// Bare Exclusive tag: mark entity as an exclusive relationship.
+				applyExclusivePolicy(w, entity)
+			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			c.kind = cmdSkip
 		case cmdRemoveID:

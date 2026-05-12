@@ -496,11 +496,35 @@ Relationship traits are components added to relationship *entities* to change th
 
 ### Exclusive
 
-> **Not yet ported in Go flecs.**
-> `EcsExclusive` ensures that an entity can have at most one target for a given
-> relationship (adding a second target automatically removes the first). Useful for
-> state machines.
-> See the [Exclusive relationships gap](README.md#feature-gap-list-candidate-follow-up-issues).
+An exclusive relationship enforces that an entity can have **at most one target** for that relationship. Adding a second target automatically replaces the first. Useful for state machines and other single-valued relationships.
+
+Use `flecs.SetExclusive(w, relID)` to mark a custom relationship as exclusive, or the equivalent bare-tag form `fw.AddID(relID, w.Exclusive())`:
+
+```go
+w := flecs.New()
+var marriedTo, bob, alice, carol flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    marriedTo = fw.NewEntity()
+    bob = fw.NewEntity()
+    alice = fw.NewEntity()
+    carol = fw.NewEntity()
+})
+
+flecs.SetExclusive(w, marriedTo) // or: fw.AddID(marriedTo, w.Exclusive())
+
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(bob, flecs.MakePair(marriedTo, alice))
+    // (marriedTo, alice) is now on bob.
+})
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(bob, flecs.MakePair(marriedTo, carol))
+    // (marriedTo, carol) replaces (marriedTo, alice); bob now married to carol only.
+})
+```
+
+Query `flecs.IsExclusive(w, relID)` to check whether a relationship is exclusive.
+
+The following built-in relationships are exclusive by default: **`ChildOf`**, **`OnDelete`**, **`OnDeleteTarget`**, **`OnInstantiate`**. `IsA` is intentionally NOT exclusive — multiple prefab bases per entity are allowed.
 
 ### Symmetric
 

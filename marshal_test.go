@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 16 built-in entities plus all registered component entities.
+// the 17 built-in entities plus all registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
 		w.ChildOf(): {}, w.IsA(): {}, w.Name(): {},
@@ -47,6 +47,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.OnInstantiate(): {}, w.Inherit(): {}, w.Override(): {}, w.DontInherit(): {},
 		w.OnDelete(): {}, w.OnDeleteTarget(): {},
 		w.RemoveAction(): {}, w.DeleteAction(): {}, w.PanicAction(): {},
+		w.Exclusive(): {},
 	}
 	for _, cid := range w.Components() {
 		skip[cid] = struct{}{}
@@ -789,19 +790,30 @@ func TestMarshalParentNotInJSONWhenAbsent(t *testing.T) {
 }
 
 func TestMarshalMultipleChildOfParents(t *testing.T) {
-	// When an entity has ChildOf relationships to two different parents, only the
-	// first one in signature order (lowest pair ID, i.e. the parent with the
-	// smaller entity index — p1, allocated first) must appear in the JSON output.
+	// ChildOf is exclusive (v0.34.0): adding a second parent replaces the first.
+	// Adding (ChildOf, p1) then (ChildOf, p2) in the same scope leaves only p2.
+	// The JSON output must reference p2 as the sole parent.
 	w := flecs.New()
+	var p1, p2, child flecs.ID
 	w.Write(func(fw *flecs.Writer) {
-		p1 := fw.NewEntity()
+		p1 = fw.NewEntity()
 		w.SetName(p1, "parent1")
-		p2 := fw.NewEntity()
+		p2 = fw.NewEntity()
 		w.SetName(p2, "parent2")
-		child := fw.NewEntity()
+		child = fw.NewEntity()
 		w.SetName(child, "child")
 		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), p1))
 		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), p2))
+	})
+
+	// Verify exclusive enforcement took effect.
+	w.Read(func(fr *flecs.Reader) {
+		if fr.HasID(child, flecs.MakePair(w.ChildOf(), p1)) {
+			t.Error("expected (ChildOf, parent1) to be replaced by exclusive enforcement")
+		}
+		if !fr.HasID(child, flecs.MakePair(w.ChildOf(), p2)) {
+			t.Error("expected (ChildOf, parent2) to be the sole parent")
+		}
 	})
 
 	data := mustMarshal(t, w)
@@ -827,15 +839,13 @@ func TestMarshalMultipleChildOfParents(t *testing.T) {
 		parentSerialByName[e.Name] = e.Parent
 	}
 
-	// The child must reference exactly one parent — the first ChildOf target in
-	// signature order, which is p1 (lower entity index → lower pair ID → first
-	// in sorted signature).
+	// Child must reference exactly one parent — parent2 (exclusive replace leaves p2).
 	if parentSerialByName["child"] == 0 {
 		t.Fatal("child should have a parent field in JSON")
 	}
-	if parentSerialByName["child"] != serialByName["parent1"] {
-		t.Fatalf("child.parent=%d want %d (parent1); only first ChildOf parent must be serialized",
-			parentSerialByName["child"], serialByName["parent1"])
+	if parentSerialByName["child"] != serialByName["parent2"] {
+		t.Fatalf("child.parent=%d want %d (parent2); exclusive ChildOf means only the last-added parent survives",
+			parentSerialByName["child"], serialByName["parent2"])
 	}
 }
 
