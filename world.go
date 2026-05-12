@@ -38,48 +38,48 @@ type Table = table.Table
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	mu                 sync.RWMutex // guards Read/Write scopes
-	writeCapability    Writer       // cached Writer; &writeCapability avoids per-Write allocation
-	readCapability     Reader       // cached Reader; &readCapability avoids per-Read allocation
-	index              *entityindex.Index
-	registry           *component.Registry
-	tables             map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty              *table.Table                    // canonical empty-signature table for new entities
-	compIndex          *componentindex.Index           // reverse map: component ID → tables containing it
-	observers          map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	cachedQueries      []*CachedQuery                  // lazily allocated; notified on new table creation
-	systems            []*System                       // lazily allocated; compacted in NewSystem
-	childOfID          ID                              // built-in ChildOf relationship entity (index 1)
-	isAID              ID                              // built-in IsA relationship entity (index 2)
-	nameID             ID                              // built-in Name component entity (index 3)
-	preUpdateID        ID                              // built-in PreUpdate phase entity (index 4)
-	onUpdateID         ID                              // built-in OnUpdate phase entity (index 5)
-	postUpdateID       ID                              // built-in PostUpdate phase entity (index 6)
-	onFixedUpdateID    ID                              // built-in OnFixedUpdate phase entity (index 7)
-	onInstantiateID    ID                              // built-in OnInstantiate relationship entity (index 8)
-	inheritID          ID                              // built-in Inherit trait entity (index 9)
-	overrideID         ID                              // built-in Override trait entity (index 10)
-	dontInheritID      ID                              // built-in DontInherit trait entity (index 11)
-	onDeleteID         ID                              // built-in OnDelete trait relationship entity (index 12)
-	onDeleteTargetID   ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
-	removeActionID     ID                              // built-in Remove cleanup action entity (index 14)
-	deleteActionID     ID                              // built-in Delete cleanup action entity (index 15)
-	panicActionID      ID                              // built-in Panic cleanup action entity (index 16; first user entity at index 17)
-	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
-	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
-	exclusiveAccess    atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
-	exclusiveThread    string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	stages             []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
-	workerStageWriters []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
-	workerCount        int                             // number of persistent goroutines in the worker pool; 0 = serial
-	workerCh           chan func()                     // job channel; nil when workerCount == 0
-	inProgress         bool                            // true while Progress is executing
-	time               float32                         // total accumulated simulation time
-	frameCount         uint64                          // number of Progress calls
-	fixedTimestep      float32                         // fixed step size; 0 means disabled
-	fixedAccumulator   float32                         // internal accumulator for fixed-step dispatch
-	lastFramePhases    [4]PhaseStats                   // per-phase timing from the most recent Progress call
-	logger             *slog.Logger                    // optional structured logger; nil means no logging
+	mu                  sync.RWMutex // guards Read/Write scopes
+	writeCapability     Writer       // cached Writer; &writeCapability avoids per-Write allocation
+	readCapability      Reader       // cached Reader; &readCapability avoids per-Read allocation
+	index               *entityindex.Index
+	registry            *component.Registry
+	tables              map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty               *table.Table                    // canonical empty-signature table for new entities
+	compIndex           *componentindex.Index           // reverse map: component ID → tables containing it
+	observers           map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	cachedQueries       []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems             []*System                       // lazily allocated; compacted in NewSystem
+	childOfID           ID                              // built-in ChildOf relationship entity (index 1)
+	isAID               ID                              // built-in IsA relationship entity (index 2)
+	nameID              ID                              // built-in Name component entity (index 3)
+	preUpdateID         ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID          ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID        ID                              // built-in PostUpdate phase entity (index 6)
+	onFixedUpdateID     ID                              // built-in OnFixedUpdate phase entity (index 7)
+	onInstantiateID     ID                              // built-in OnInstantiate relationship entity (index 8)
+	inheritID           ID                              // built-in Inherit trait entity (index 9)
+	overrideID          ID                              // built-in Override trait entity (index 10)
+	dontInheritID       ID                              // built-in DontInherit trait entity (index 11)
+	onDeleteID          ID                              // built-in OnDelete trait relationship entity (index 12)
+	onDeleteTargetID    ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
+	removeActionID      ID                              // built-in Remove cleanup action entity (index 14)
+	deleteActionID      ID                              // built-in Delete cleanup action entity (index 15)
+	panicActionID       ID                              // built-in Panic cleanup action entity (index 16; first user entity at index 17)
+	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
+	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
+	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
+	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
+	workerStageWriters  []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
+	workerCount         int                             // number of persistent goroutines in the worker pool; 0 = serial
+	workerCh            chan func()                     // job channel; nil when workerCount == 0
+	inProgress          bool                            // true while Progress is executing
+	time                float32                         // total accumulated simulation time
+	frameCount          uint64                          // number of Progress calls
+	fixedTimestep       float32                         // fixed step size; 0 means disabled
+	fixedAccumulator    float32                         // internal accumulator for fixed-step dispatch
+	lastFramePhases     [4]PhaseStats                   // per-phase timing from the most recent Progress call
+	logger              *slog.Logger                    // optional structured logger; nil means no logging
 }
 
 // New initializes and returns an empty World.
