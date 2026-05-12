@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.5: PrefabsManual doc port (upcoming v0.24.0)
+## v0.24.0 — 2026-05-12 — Phase 14.5: PrefabsManual doc port
 
 ### Added
 
