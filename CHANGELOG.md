@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.4: HierarchiesManual doc port (upcoming v0.23.0)
+## v0.23.0 — 2026-05-12 — Phase 14.4: HierarchiesManual doc port
 
 ### Added
 
