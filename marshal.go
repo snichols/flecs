@@ -106,6 +106,10 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.OnUpdate():      {},
 		w.PostUpdate():    {},
 		w.OnFixedUpdate(): {},
+		w.OnInstantiate(): {},
+		w.Inherit():       {},
+		w.Override():      {},
+		w.DontInherit():   {},
 	}
 
 	var result []byte

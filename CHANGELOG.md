@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased — Phase 13.1: Inheritable components
+
+Auto-`Self|Up(IsA)` promotion for components marked with `SetInheritable`.
+`Each1`/`Each2`/`NewQuery` and friends now match entities that *inherit* a
+component from a prefab via IsA — without requiring explicit traversal modifiers
+on every query term. Port of C flecs `validator.c:766-770`.
+
+### Added
+
+- **`SetInheritable[T any](w *World)`** — marks component type T as inheritable.
+  Must be called after `RegisterComponent[T]` and before any query referencing T
+  is built.
+- **`(*World).SetInheritable(cid ID)`** — non-generic variant; panics if cid is
+  not a registered component.
+- **`World.OnInstantiate() ID`**, **`World.Inherit() ID`**,
+  **`World.Override() ID`**, **`World.DontInherit() ID`** — four new built-in
+  trait entities (indices 8-11). These expose the C flecs `(OnInstantiate,
+  Inherit)` pair IDs for API symmetry. The Go port uses a direct bool on
+  `TypeInfo` rather than a pair observer; the IDs are provided for future-proofing.
+- **`TraverseExplicitSelf`** (`= 4`) internal sentinel returned by `Term.Self()`.
+  The validator skips auto-promotion when it sees this value, so explicit
+  `.Self()` on an inheritable-component term keeps the term local-only.
+- **Auto-promotion in `NewQuery`, `NewQueryFromTerms`, `NewCachedQuery`,
+  `NewCachedQueryFromTerms`** — any `TermAnd`/`TermOptional` term whose
+  `Traverse` is the default zero and whose component is inheritable is promoted
+  to `TraverseSelfUp` with `Trav = w.IsA()`. TermNot is never promoted.
+- **Shared-pointer semantics in `Each1`/`Each2`/`Each3`/`Each4`** — when a term
+  was resolved via an ancestor (Up path), the same prefab component pointer is
+  passed for every entity in the matched table (C flecs option (a); documented
+  as a foot-gun in each function's godoc).
+- **13 new tests** in `inheritance_test.go` covering: Each1 match, value from
+  prefab, local override, unmarked stays exclusive, explicit Self override, Each2
+  mixed, NewQueryFromTerms FieldShared, cached query rematch, TermNot not
+  promoted, SetInheritable panic for unregistered ID/type, explicit Up,
+  built-in trait entity distinctness.
+- **2 new benchmarks** in `bench_test.go`:
+  - `BenchmarkInheritableEach1_NoInheritors` — inheritable component, no IsA
+    pairs (baseline; should be within noise of `BenchmarkEach1`).
+  - `BenchmarkInheritableEach1_WithInheritors` — N inheritors from one prefab.
+
+### Changed
+
+- `Term.Self()` now returns `TraverseExplicitSelf` (4) instead of `TraverseSelf`
+  (0). At runtime both behave identically (local-only match). The change is
+  source-compatible: callers don't inspect the numeric value.
+- `validateAndSortTerms` signature now takes `*World` as the first argument to
+  enable auto-promotion. Package-internal only; no public API change.
+- Marshal (`MarshalJSON`) now skips the four new built-in trait entities, keeping
+  serialized output user-entity-only as before.
+- `World.Count()` on a fresh world now returns 11 instead of 7.
+
+### Not ported (deliberate)
+
+- **`(OnInstantiate, Inherit)` pair as the component representation.** C flecs
+  stores the trait as a pair and folds it into `cr->flags` via an observer. The
+  Go port stores a bool on `TypeInfo` directly (no `ecs_component_record_t`
+  analog). The pair IDs are exposed but not consumed by the validator.
+- **Trait-locked check.** C flecs panics if `EcsInheritable` is set after a
+  query has been built (`flecs_component_is_trait_locked`). The Go port omits
+  this for now; calling `SetInheritable` after queries produces undefined
+  match-behavior on existing queries but no panic.
+- **Down-cache observers.** Same limitation as Phase 13.0: cached queries are
+  NOT automatically invalidated when a prefab gains/loses an inheritable
+  component after construction. Rebuild the query in that case.
+
 ## v0.17.0 — 2026-05-12 — Phase 13.0: Query-term traversal modifiers
 
 Inline traversal in `NewQueryFromTerms` / `NewCachedQueryFromTerms`. Terms can

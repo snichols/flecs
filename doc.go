@@ -164,6 +164,50 @@
 // [CachedQuery] is built, the cache is NOT automatically updated. Rebuild the
 // query to reflect structural ancestry changes.
 //
+// # Inheritable Components
+//
+// Marking a component inheritable causes queries to automatically match entities
+// that inherit the component from a prefab via IsA — without requiring explicit
+// traversal modifiers on every query term.
+//
+//	type Position struct{ X, Y float32 }
+//
+//	posID := flecs.RegisterComponent[Position](w)
+//	flecs.SetInheritable[Position](w) // opt-in; default is non-inheritable
+//
+//	var prefab, instance flecs.ID
+//	w.Write(func(fw *flecs.Writer) {
+//	    prefab = fw.NewEntity()
+//	    flecs.Set(fw, prefab, Position{X: 10, Y: 20})
+//
+//	    instance = fw.NewEntity()
+//	    flecs.AddID(fw, instance, flecs.MakePair(w.IsA(), prefab))
+//	    // instance has no local Position; it inherits from prefab
+//	})
+//
+//	// Each1 now matches both prefab (owns Position) and instance (inherits it).
+//	w.Read(func(r *flecs.Reader) {
+//	    flecs.Each1[Position](r, func(e flecs.ID, p *Position) {
+//	        // e may be prefab (p points to its local slot) or instance
+//	        // (p points to prefab's slot — shared C-flecs semantics).
+//	        _ = p
+//	    })
+//	})
+//
+// The auto-promotion applies to [Each1], [Each2], [Each3], [Each4], [NewQuery],
+// [NewQueryFromTerms], [NewCachedQuery], and [NewCachedQueryFromTerms].
+// Calling [Term.Self] on a term suppresses auto-promotion for that term.
+//
+// When an entity inherits a component (Up path), [Each1]-style callbacks receive
+// the prefab's component pointer — the same pointer for every entity in the
+// matched table. Mutating through the pointer alters the prefab's value and
+// therefore all inheritors. Use [IsFieldSelf] to detect the Up path and
+// [FieldShared] to read a safe copy.
+//
+// [SetInheritable] must be called BEFORE any query referencing that component
+// is constructed. Components default to non-inheritable; only opt-in types
+// change query semantics, so existing code is unaffected.
+//
 // # Deferred Mutation
 //
 // [World.Write] opens an exclusive read/write scope. All structural mutations

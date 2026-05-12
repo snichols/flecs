@@ -141,6 +141,7 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
 		terms[i] = Term{ID: id, Kind: TermAnd}
+		applyInheritablePromotion(w, &terms[i])
 	}
 	return newCachedQueryInternal(w, terms, cp, nil)
 }
@@ -171,7 +172,7 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
-	cp, andIDs, orGroups := validateAndSortTerms("flecs: NewCachedQueryFromTerms", terms)
+	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
 	return newCachedQueryInternal(w, cp, andIDs, orGroups)
 }
 

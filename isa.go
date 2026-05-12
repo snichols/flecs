@@ -8,6 +8,29 @@ package flecs
 // override). The IsA entity is always alive for the lifetime of the World.
 func (w *World) IsA() ID { return w.isAID }
 
+// OnInstantiate returns the built-in OnInstantiate relationship entity.
+// Mirror of C's EcsOnInstantiate. Used with Inherit/Override/DontInherit as
+// targets to form the (OnInstantiate, Inherit) pair. In the Go port the
+// preferred API is SetInheritable[T] / World.SetInheritable(cid), which sets a
+// bool on the component's TypeInfo directly; the pair form is exposed for API
+// symmetry and potential future use.
+func (w *World) OnInstantiate() ID { return w.onInstantiateID }
+
+// Inherit returns the built-in Inherit trait entity.
+// The pair (OnInstantiate, Inherit) on a component entity is the C-flecs way to
+// mark it as inheritable. In the Go port, use SetInheritable[T] instead.
+func (w *World) Inherit() ID { return w.inheritID }
+
+// Override returns the built-in Override trait entity. Exposed for API symmetry
+// with C flecs; the Go port's Set already performs copy-on-write override
+// semantics (Phase 4.3) and does not consult this entity.
+func (w *World) Override() ID { return w.overrideID }
+
+// DontInherit returns the built-in DontInherit trait entity. Exposed for API
+// symmetry; has no runtime effect in the Go port because non-inheritable is the
+// default — components opt IN via SetInheritable rather than opting out.
+func (w *World) DontInherit() ID { return w.dontInheritID }
+
 // prefabOfInternal returns the first IsA prefab of entity e.
 // Internal helper; no exclusive-access check.
 func prefabOfInternal(w *World, e ID) (ID, bool) {

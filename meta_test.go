@@ -9,8 +9,9 @@ import (
 )
 
 // builtinEntityCount is the number of alive entities immediately after World.New():
-// ChildOf(1), IsA(2), Name(3), PreUpdate(4), OnUpdate(5), PostUpdate(6), OnFixedUpdate(7).
-const builtinEntityCount = 7
+// ChildOf(1), IsA(2), Name(3), PreUpdate(4), OnUpdate(5), PostUpdate(6),
+// OnFixedUpdate(7), OnInstantiate(8), Inherit(9), Override(10), DontInherit(11).
+const builtinEntityCount = 11
 
 // ── Components() ─────────────────────────────────────────────────────────────
 
@@ -369,7 +370,7 @@ func TestEachEntityEarlyExit(t *testing.T) {
 }
 
 // TestEachEntityIncludesBuiltins verifies that built-in entities (ChildOf, IsA,
-// phase entities, Name) are included in EachEntity iteration.
+// phase entities, Name, and instantiation-trait entities) are included in EachEntity.
 func TestEachEntityIncludesBuiltins(t *testing.T) {
 	w := flecs.New()
 

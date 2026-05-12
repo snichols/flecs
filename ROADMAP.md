@@ -30,6 +30,7 @@ The following features are available in the current release:
 - **Exclusive-access ownership assertion** — always-on goroutine-safety check. `World.ExclusiveAccessBegin(name)` claims the world for the calling goroutine; any subsequent mutation or read from another goroutine panics with `ErrExclusiveAccessViolation`. `ExclusiveAccessEnd(lockWorld bool)` releases the claim (optionally entering a write-locked state where all goroutines receive a panic on mutation but reads still pass). Goroutine ID via `github.com/petermattis/goid`; common-case overhead is one `atomic.Load` per public method. No build tag — the check is on in every build. `world.Read` / `world.Write` integrate this check automatically.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
 - **Query-term traversal modifiers** — `With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)` inline traversal in `NewQueryFromTerms` / `NewCachedQueryFromTerms`; `IsFieldSelf` / `FieldShared[T]` accessors disambiguate local vs. inherited values. Cascade guarantees root-first table iteration order in cached queries.
+- **Query-time IsA inheritance (inheritable components)** — `SetInheritable[T](w)` / `w.SetInheritable(cid)` marks a component as inheritable. Query terms for that component are auto-promoted to `Self|Up(IsA)` at construction: `Each1`/`Each2`/`NewQuery`/`NewQueryFromTerms`/`NewCachedQuery`/`NewCachedQueryFromTerms` all match entities that own the component locally AND entities that inherit it from a prefab via IsA. Explicit `.Self()` on a term suppresses auto-promotion. Value-inheritance (`Get`/`Has`, Phase 4.3) and match-inheritance (this phase) are orthogonal: Get/Has always walk the IsA chain regardless of this flag.
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
 - **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
@@ -39,7 +40,7 @@ The following features are available in the current release:
 The following are deferred to later phases. No timeline is set; issues welcome.
 
 ### Query extensions
-- Query-time IsA inheritance (match entities whose prefab has a component)
+(all originally-planned query extensions shipped)
 
 ### Addons
 - (all originally-planned addons shipped)

@@ -1288,3 +1288,69 @@ func BenchmarkQueryUpTraversal(b *testing.B) {
 		}
 	}
 }
+
+// ── Inheritable component benchmarks ────────────────────────────────────────
+
+// BenchmarkInheritableEach1_NoInheritors measures the cost of Each1 when the
+// component is inheritable but no IsA pairs exist in the world. The auto-promoted
+// SelfUp term should produce results within noise of BenchmarkEach1.
+func BenchmarkInheritableEach1_NoInheritors(b *testing.B) {
+	const n = 10_000
+	w := flecs.New()
+	posID := flecs.RegisterComponent[benchPos](w)
+	flecs.SetInheritable[benchPos](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		for range n {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, benchPos{X: 1, Y: 2})
+		}
+	})
+	_ = posID
+
+	b.ResetTimer()
+	for range b.N {
+		count := 0
+		w.Read(func(r *flecs.Reader) {
+			flecs.Each1[benchPos](r, func(_ flecs.ID, _ *benchPos) {
+				count++
+			})
+		})
+		if count == 0 {
+			b.Fatal("no entities matched")
+		}
+	}
+}
+
+// BenchmarkInheritableEach1_WithInheritors measures the cost of Each1 when n
+// entities inherit Position from a single prefab via IsA. Each matched table
+// goes through the upPtr path, which requires one entity-index lookup per table.
+func BenchmarkInheritableEach1_WithInheritors(b *testing.B) {
+	const n = 10_000
+	w := flecs.New()
+	flecs.RegisterComponent[benchPos](w)
+	flecs.SetInheritable[benchPos](w)
+
+	var prefab flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, benchPos{X: 1, Y: 2})
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+		}
+	})
+
+	b.ResetTimer()
+	for range b.N {
+		count := 0
+		w.Read(func(r *flecs.Reader) {
+			flecs.Each1[benchPos](r, func(_ flecs.ID, _ *benchPos) {
+				count++
+			})
+		})
+		if count == 0 {
+			b.Fatal("no entities matched")
+		}
+	}
+}
