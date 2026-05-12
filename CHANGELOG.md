@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.41.0 — 2026-05-12 — Phase 15.9: Acyclic relationship trait
+
+### Added
+
+- **`SetAcyclic(w, relID)`** — marks a relationship as acyclic: adding a pair `(e, R, target)` panics if `target` can transitively reach `e` via `R`. Mirrors C `EcsAcyclic` (a tag entity, index 22).
+- **`IsAcyclic(w, relID) bool`** — reports whether a relationship is marked acyclic.
+- **`w.Acyclic() ID`** — returns the built-in Acyclic trait entity (index 22). The bare-tag form `fw.AddID(relID, w.Acyclic())` is equivalent to `SetAcyclic(w, relID)`.
+- **Write-time cycle rejection** — `addIDImmediate` and the deferred `batchForEntity` path both check for cycles before storing a pair when the relationship is acyclic. The check uses `walkUp` from `traversal.go`, which has its own depth limit and seen-map so that pre-existing malformed data cannot cause an infinite walk.
+- **Self-pair allowed** — `(e, R, e)` is explicitly permitted; Acyclic does not reject self-pairs. Combine with Reflexive if implicit self-pair truth is desired.
+- **ChildOf bootstrapped as acyclic** — matching C `src/bootstrap.c:1011`, `ChildOf` gains the Acyclic policy at world construction. Mutual parent/child cycles now panic at `AddID` time, preventing infinite recursion in `EachChild` and related hierarchy traversals.
+- **`acyclic_test.go`** — 9 test cases: non-acyclic allows cycles, direct cycle rejected, transitive cycle rejected, self-pair allowed, ChildOf bootstrap regression, IsAcyclic round-trip, Acyclic+Transitive composition, Acyclic+Symmetric edge case, bare-tag form.
+
+### Changed
+
+- Built-in entity count increases from 23 to 24. User entities now start at index 25.
+- Acyclic is at index 22; Wildcard moves to index 23; Any moves to index 24.
+- `marshal.go` skip-set updated to exclude Acyclic (22) from JSON serialization.
+- `TestMarshalCycleDetection` updated: the test now verifies the write-time panic rather than a MarshalJSON error, since ChildOf cycles can no longer be stored.
+
+### Breaking changes
+
+- Built-in entity count increases from 23 to 24. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 24. User entities now start at index 25.
+- **ChildOf is now acyclic.** Code that deliberately constructs circular parent hierarchies (e.g., `a ChildOf b` and `b ChildOf a`) will now panic at the second `AddID`. This was always undefined behavior; the new behavior makes it explicit.
+
+### Deliberate divergence from C flecs
+
+C flecs guards Acyclic cycles at lookup/traversal time via `ECS_MAX_RECURSION` depth caps in `flecs_get_base_component` (entity.c:75) and related functions. The Go port enforces at `AddID` time so that `EachChild` and similar recursors never encounter an infinite chain. The tradeoff is a per-add O(chain length) check on acyclic relationships; for typical ChildOf trees this is negligible. This divergence is analogous to Phase 15.7's `HasID` self-pair extension — both go further than C to provide clearer early-error semantics.
+
+### Non-goals (explicitly out of scope for v0.41.0)
+
+- No retroactive cycle detection on existing data (only new adds are checked).
+- No automatic cycle breaking — just rejection by panic.
+- No Acyclic bootstrap on IsA — C does not bootstrap it, and IsA's separate recursion guard is independent.
+- No performance optimization for deep chains (correctness first).
+
+---
+
 ## v0.40.0 — 2026-05-12 — Phase 15.8: scope interface — Writer ⊇ Reader at free-function boundaries
 
 ### Added

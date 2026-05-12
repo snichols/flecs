@@ -43,6 +43,8 @@ w.Read(func(r *flecs.Reader) {
 
 An entity can have **at most one ChildOf parent**. Adding a second `(ChildOf, newParent)` pair replaces the first. A parent can have any number of children.
 
+**Cycle prevention (v0.41.0):** `ChildOf` is bootstrapped as [Acyclic](ComponentTraits.md#acyclic). Adding a pair that would create a cycle — for example, making a parent a child of one of its own descendants — panics immediately at `AddID` time with a message identifying the entities involved. This prevents infinite recursion in `EachChild` and related hierarchy walks. (C flecs detects this at traversal time via depth caps; Go flecs rejects it earlier, at write time.)
+
 ---
 
 ## Get parent and children

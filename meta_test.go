@@ -13,8 +13,8 @@ import (
 // OnFixedUpdate(7), OnInstantiate(8), Inherit(9), Override(10), DontInherit(11),
 // OnDelete(12), OnDeleteTarget(13), RemoveAction(14), DeleteAction(15),
 // PanicAction(16), Exclusive(17), CanToggle(18), Symmetric(19), Transitive(20),
-// Reflexive(21), Wildcard(22), Any(23).
-const builtinEntityCount = 23
+// Reflexive(21), Acyclic(22), Wildcard(23), Any(24).
+const builtinEntityCount = 24
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

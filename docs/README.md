@@ -77,6 +77,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Monitor addon** — not ported.
 - **Units addon** — not ported.
 - **Query groups** — not ported.
+- **Acyclic relationship trait** (`EcsAcyclic`) — **shipped in v0.41.0** via `SetAcyclic` / `IsAcyclic` / `w.Acyclic()`. Write-time cycle rejection at `AddID`; `ChildOf` bootstrapped acyclic (deliberate divergence from C's lookup-time guards). See [ComponentTraits.md § Acyclic](ComponentTraits.md#acyclic).
 - **Transitive relationships** (`EcsTransitive`, `Trav` flag) — **shipped in v0.37.0** via `SetTransitive` / `IsTransitive` / `w.Transitive()`. Query terms for `(R, C)` where R is transitive walk the chain automatically at query time. See the [Transitive section in ComponentTraits.md](ComponentTraits.md#transitive).
 - **Symmetric relationships** (`EcsSymmetric`) — **shipped in v0.36.0** via `SetSymmetric` / `IsSymmetric` / `w.Symmetric()`. Adding `(R, B)` to `A` automatically mirrors `(R, A)` to `B`; removal is mirrored too. See the [Symmetric section in ComponentTraits.md](ComponentTraits.md#symmetric).
 - **Exclusive relationships** (`EcsExclusive`) — **shipped in v0.34.0** via `SetExclusive` / `IsExclusive` / `w.Exclusive()`. `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive.

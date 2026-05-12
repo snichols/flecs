@@ -70,8 +70,9 @@ type World struct {
 	symmetricID         ID                              // built-in Symmetric trait entity (index 19)
 	transitiveID        ID                              // built-in Transitive trait entity (index 20)
 	reflexiveID         ID                              // built-in Reflexive trait entity (index 21)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 22; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 23; _; first user entity at index 24)
+	acyclicID           ID                              // built-in Acyclic trait entity (index 22)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 23; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 24; _; first user entity at index 25)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
@@ -79,6 +80,7 @@ type World struct {
 	symmetricPolicies   map[ID]bool                     // relationship entity index → symmetric flag
 	transitivePolicies  map[ID]bool                     // relationship entity index → transitive flag
 	reflexivePolicies   map[ID]bool                     // relationship entity index → reflexive flag
+	acyclicPolicies     map[ID]bool                     // relationship entity index → acyclic flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -119,9 +121,10 @@ type World struct {
 //   - Index 19: Symmetric built-in trait entity
 //   - Index 20: Transitive built-in trait entity
 //   - Index 21: Reflexive built-in trait entity
-//   - Index 22: Wildcard built-in query-term sentinel (*)
-//   - Index 23: Any built-in query-term sentinel (_)
-//   - Index 24+: user entities (NewEntity)
+//   - Index 22: Acyclic built-in trait entity
+//   - Index 23: Wildcard built-in query-term sentinel (*)
+//   - Index 24: Any built-in query-term sentinel (_)
+//   - Index 25+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -257,13 +260,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(reflexive))
 	w.reflexiveID = reflexive
-	// Allocate the built-in Wildcard query-term sentinel (gets index 22).
+	// Allocate the built-in Acyclic trait entity (gets index 22).
+	acyclic := w.index.Alloc()
+	rec = w.index.Get(acyclic)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(acyclic))
+	w.acyclicID = acyclic
+	// Allocate the built-in Wildcard query-term sentinel (gets index 23).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 23).
+	// Allocate the built-in Any query-term sentinel (gets index 24).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -286,6 +295,10 @@ func New() *World {
 	// This makes HasID(a, MakePair(IsA, a)) return true for any alive entity a
 	// (deliberate divergence from C ecs_has_id; documented in CHANGELOG).
 	applyReflexivePolicy(w, w.isAID)
+	// Bootstrap ChildOf as acyclic, matching C src/bootstrap.c:1011.
+	// Write-time cycle rejection (deliberate divergence from C which guards at
+	// lookup/traversal time; documented in CHANGELOG v0.41.0).
+	applyAcyclicPolicy(w, w.childOfID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

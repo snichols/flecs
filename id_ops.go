@@ -92,6 +92,17 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(relID, w.Reflexive()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsReflexive).
 		applyReflexivePolicy(w, e)
+	} else if id.Index() == w.acyclicID.Index() {
+		// Bare Acyclic tag added to entity e: mark e's relationship as acyclic.
+		// This is the fw.AddID(relID, w.Acyclic()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsAcyclic).
+		applyAcyclicPolicy(w, e)
+	}
+	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
+	// that target cannot already reach e via R. Write-time rejection is a
+	// deliberate divergence from C (which guards at lookup/traversal time).
+	if id.IsPair() && w.acyclicPolicies[ID(id.First().Index())] {
+		checkAcyclic(w, e, id.First(), id.Second())
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that
