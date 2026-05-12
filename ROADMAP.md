@@ -35,6 +35,28 @@ The following features are available in the current release:
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
 - **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
 
+## Documentation
+
+Conceptual docs are ported from the upstream C flecs docs one phase at a time. Each phase ports one doc to Go idioms and verifies all code blocks compile.
+
+| Phase | Doc | Status |
+|---|---|---|
+| 14.0 | Survey + `docs/` scaffold + `Quickstart.md` | ✅ shipped (v0.18.0) |
+| 14.1 | `EntitiesComponents.md` | pending |
+| 14.2 | `Queries.md` | pending |
+| 14.3 | `Relationships.md` | pending |
+| 14.4 | `HierarchiesManual.md` | pending |
+| 14.5 | `PrefabsManual.md` | pending |
+| 14.6 | `Systems.md` | pending |
+| 14.7 | `ObserversManual.md` | pending |
+| 14.8 | `ComponentTraits.md` | pending |
+| 14.9 | `FlecsRemoteApi.md` | pending |
+| 14.10 | `DesignWithFlecs.md` | pending |
+| 14.11 | `Manual.md` | pending |
+| 14.12 | `FAQ.md` | pending |
+
+**Process rule (operator directive, Phase 14.0+):** every phase from 14.0 onward must include an explicit "update docs accordingly" deliverable. The design agent must add it to each phase brief; the review agent must verify it.
+
 ## Future Work
 
 The following are deferred to later phases. No timeline is set; issues welcome.
