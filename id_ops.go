@@ -97,12 +97,23 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(relID, w.Acyclic()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsAcyclic).
 		applyAcyclicPolicy(w, e)
+	} else if id.Index() == w.finalID.Index() {
+		// Bare Final tag added to entity e: mark e as final so it cannot be
+		// used as an IsA target. This is the fw.AddID(entityID, w.Final()) form,
+		// mirroring C's ecs_add_id(world, e, EcsFinal).
+		applyFinalPolicy(w, e)
 	}
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a
 	// deliberate divergence from C (which guards at lookup/traversal time).
 	if id.IsPair() && w.acyclicPolicies[ID(id.First().Index())] {
 		checkAcyclic(w, e, id.First(), id.Second())
+	}
+	// Final enforcement: adding (IsA, target) panics if target has the Final
+	// trait. Mirrors C component_index.c:447-453. Fires for self-pairs too
+	// (src == target), matching C's unconditional ecs_has_id check.
+	if id.IsPair() && id.First().Index() == w.isAID.Index() {
+		checkFinal(w, id.Second())
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that

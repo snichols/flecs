@@ -71,8 +71,9 @@ type World struct {
 	transitiveID        ID                              // built-in Transitive trait entity (index 20)
 	reflexiveID         ID                              // built-in Reflexive trait entity (index 21)
 	acyclicID           ID                              // built-in Acyclic trait entity (index 22)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 23; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 24; _; first user entity at index 25)
+	finalID             ID                              // built-in Final trait entity (index 23)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 24; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 25; _; first user entity at index 26)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
@@ -81,6 +82,7 @@ type World struct {
 	transitivePolicies  map[ID]bool                     // relationship entity index → transitive flag
 	reflexivePolicies   map[ID]bool                     // relationship entity index → reflexive flag
 	acyclicPolicies     map[ID]bool                     // relationship entity index → acyclic flag
+	finalPolicies       map[ID]bool                     // entity index → final flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -122,9 +124,10 @@ type World struct {
 //   - Index 20: Transitive built-in trait entity
 //   - Index 21: Reflexive built-in trait entity
 //   - Index 22: Acyclic built-in trait entity
-//   - Index 23: Wildcard built-in query-term sentinel (*)
-//   - Index 24: Any built-in query-term sentinel (_)
-//   - Index 25+: user entities (NewEntity)
+//   - Index 23: Final built-in trait entity
+//   - Index 24: Wildcard built-in query-term sentinel (*)
+//   - Index 25: Any built-in query-term sentinel (_)
+//   - Index 26+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -266,13 +269,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(acyclic))
 	w.acyclicID = acyclic
-	// Allocate the built-in Wildcard query-term sentinel (gets index 23).
+	// Allocate the built-in Final trait entity (gets index 23).
+	final_ := w.index.Alloc()
+	rec = w.index.Get(final_)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(final_))
+	w.finalID = final_
+	// Allocate the built-in Wildcard query-term sentinel (gets index 24).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 24).
+	// Allocate the built-in Any query-term sentinel (gets index 25).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty

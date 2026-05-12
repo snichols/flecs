@@ -350,6 +350,10 @@ IsA is transitive: if `GrannySmith IsA Apple` and `Apple IsA Fruit`, then `Grann
 
 Custom relationships can also be made transitive using `flecs.SetTransitive` (see [Transitive trait in ComponentTraits.md](ComponentTraits.md#transitive)). For IsA specifically, `Get`, `Has`, `GetUp`, and `HasUp` already walk the chain regardless of the Transitive flag.
 
+#### Sealing an IsA target with Final
+
+The `Final` trait is the inverse boundary to IsA inheritance: marking an entity Final prevents it from ever being used as an `IsA` target. Attempting `fw.AddID(instance, MakePair(w.IsA(), finalEntity))` panics at write time (immediate or deferred). See [ComponentTraits.md § Final](ComponentTraits.md#final) and [PrefabsManual.md § Sealing prefabs with Final](PrefabsManual.md#sealing-prefabs-with-final) for details.
+
 ---
 
 ### The ChildOf relationship

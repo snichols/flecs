@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.42.0 — 2026-05-12 — Phase 15.10: Final entity trait
+
+### Added
+
+- **`SetFinal(w, entityID)`** — marks an entity as Final: any subsequent `AddID(src, MakePair(IsA, entityID))` panics with `"cannot add (IsA, <id>): <id> has the Final trait"`. Mirrors C `EcsFinal` (a tag entity, index 23).
+- **`IsFinal(s scope, entityID ID) bool`** — reports whether an entity is marked Final. Accepts the `scope` interface (per Phase 15.8 convention) so it works inside both `Read` and `Write` blocks without `AsReader()`.
+- **`w.Final() ID`** — returns the built-in Final trait entity (index 23). The bare-tag form `fw.AddID(entityID, w.Final())` is equivalent to `SetFinal(w, entityID)`.
+- **Write-time enforcement** — `addIDImmediate` checks for Final before storing an `(IsA, target)` pair. The check fires on both the immediate path and the deferred path (when the `Write` scope flushes). Self-pairs (`AddID(e, MakePair(IsA, e))` where `e` is Final) are also rejected, matching C's unconditional `ecs_has_id` check in `component_index.c:447-453`.
+- **`final_test.go`** — 8 test cases: default allows IsA, immediate path panics, non-IsA pairs to Final entity allowed, non-Final target allowed, IsFinal round-trip via *Reader and *Writer, Final+Reflexive composition (no spurious panic), self-IsA-add to Final entity panics, deferred path panics on flush.
+
+### Changed
+
+- Built-in entity count increases from 24 to 25. User entities now start at index 26.
+- Final is at index 23; Wildcard moves to index 24; Any moves to index 25.
+- `marshal.go` skip-set updated to exclude Final (23) from JSON serialization.
+- `TestIsAWorldCountBaseline`, `nonDataEntities` in `marshal_test.go`, and `builtinEntityCount` in `meta_test.go` updated to reflect the new count.
+
+### Breaking changes
+
+- Built-in entity count increases from 24 to 25. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 25. User entities now start at index 26.
+
+### Deliberate divergence from C flecs
+
+C's query engine uses `EcsFinal` to suppress IsA-substitution in the query validator (`query/validator.c:849`). The Go port enforces Final only at write time for v0.42.0; query-side optimization is out of scope. Write-time enforcement gives clear early-error semantics and matches the pattern established by Acyclic (Phase 15.9).
+
+### Non-goals (explicitly out of scope for v0.42.0)
+
+- No retroactive enforcement (existing `(IsA, X)` edges where `X` is later marked Final are not removed).
+- No automatic Final propagation along IsA chains.
+- No query-side optimization using Final (C uses it in `query/validator.c:849` to suppress IsA-substitution).
+
+---
+
 ## v0.41.0 — 2026-05-12 — Phase 15.9: Acyclic relationship trait
 
 ### Added

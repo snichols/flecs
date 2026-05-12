@@ -121,6 +121,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.Transitive():     {},
 		w.Reflexive():      {},
 		w.Acyclic():        {},
+		w.Final():          {},
 		w.Wildcard():       {},
 		w.Any():            {},
 	}

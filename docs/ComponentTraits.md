@@ -357,22 +357,46 @@ The replace-on-add path fires `OnRemove` for the old pair and `OnAdd` for the ne
 
 ### Final
 
-**What it does:** The `Final` trait prevents an entity from being used as the target of an `IsA` relationship, similar to a `final` class in object-oriented languages. Queries may use this to optimize traversal: they do not need to explore subsets of a final entity.
+**Shipped in v0.42.0.** The `Final` trait prevents an entity from being used as the target of an `IsA` relationship, similar to a `final` class in object-oriented languages. Use it to seal a concrete prefab so no further specialization is possible.
 
-**What the C API looks like:**
+**Go API:**
 
-```c
-// C — not available in Go flecs
-ecs_entity_t e = ecs_new(world);
-ecs_add_id(world, e, EcsFinal);
+- `flecs.SetFinal(w, entityID)` — marks `entityID` as Final.
+- `flecs.IsFinal(s scope, entityID ID) bool` — reports whether `entityID` is marked Final; accepts `scope` so it works inside both `Read` and `Write` blocks.
+- `w.Final() ID` — returns the built-in Final trait entity (index 23). The bare-tag form `fw.AddID(entityID, w.Final())` is equivalent to `SetFinal(w, entityID)`.
 
-ecs_entity_t child = ecs_new(world);
-ecs_add_pair(world, child, EcsIsA, e); // would panic with Final
+**Enforcement:** Adding `(IsA, target)` panics immediately if `target` has the Final trait. The check fires on both the immediate path and the deferred path (when the `Write` scope flushes). Self-pairs — `(IsA, e)` where `e` is Final — are also rejected, matching C semantics.
+
+```go
+w := flecs.New()
+
+var concretePrefab, instance flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    concretePrefab = fw.NewEntity()
+    instance = fw.NewEntity()
+})
+
+// Seal the prefab — no further IsA subtyping allowed.
+flecs.SetFinal(w, concretePrefab)
+
+// This would panic: "cannot add (IsA, <id>): <id> has the Final trait"
+// w.Write(func(fw *flecs.Writer) {
+//     fw.AddID(instance, flecs.MakePair(w.IsA(), concretePrefab))
+// })
+
+// Non-IsA pairs to a Final entity are unaffected.
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(instance, flecs.MakePair(w.ChildOf(), concretePrefab)) // OK
+})
+
+w.Read(func(fr *flecs.Reader) {
+    fmt.Println(flecs.IsFinal(fr, concretePrefab)) // true
+})
 ```
 
-**Workaround:** None — the Go port does not enforce this constraint. Any entity can be used as an `IsA` target.
+**No built-in ships Final** — matching C bootstrap behavior. Final is a plain tag stored on the target entity (no `EcsIdFinal` flag bit in Go, matching C's implementation in `component_index.c:447-453`).
 
-> **Not yet ported in Go flecs.**
+**Divergence from C:** C's query engine uses `EcsFinal` to suppress IsA-substitution in the validator (`query/validator.c:849`). The Go port enforces Final only at write time for v0.42.0; query-side optimization is out of scope.
 
 ---
 
@@ -675,7 +699,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Constant** | *(informal)* | ⏳ planned | No read-only enforcement after first write |
 | **DontFragment** | `EcsDontFragment` | ⏳ planned | No sparse non-fragmenting storage |
 | **Exclusive** | `EcsExclusive` | ✅ shipped (v0.34.0) | `SetExclusive(w, relID)` / `IsExclusive(w, relID)`; `w.Exclusive()` bare-tag form; `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive |
-| **Final** | `EcsFinal` | ⏳ planned | No `IsA`-extension prevention |
+| **Final** | `EcsFinal` | ✅ shipped (v0.42.0) | `SetFinal(w, entityID)` / `IsFinal(scope, entityID)`; `w.Final()` bare-tag form; write-time enforcement: adding `(IsA, target)` panics if target is Final; no built-in ships Final; self-pair `(IsA, e)` also rejected when e is Final |
 | **OneOf** | `EcsOneOf` | ⏳ planned | No relationship-target constraint |
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
 | **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
