@@ -67,6 +67,12 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		if firstIdx == w.onInstantiateID.Index() {
 			applyInstantiatePolicy(w, e, id.Second())
 		}
+		// When a (OneOf, parent) pair is added to a relationship entity, register
+		// the OneOf constraint with the specified parent. Pair form allows
+		// fw.AddID(relID, MakePair(w.OneOf(), parentID)) to configure the constraint.
+		if firstIdx == w.oneOfID.Index() {
+			applyOneOfPolicy(w, e, id.Second())
+		}
 	} else if id.Index() == w.exclusiveID.Index() {
 		// Bare Exclusive tag added to entity e: mark e's relationship as exclusive.
 		// This is the fw.AddID(myRel, w.Exclusive()) form, mirroring C's
@@ -102,6 +108,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// used as an IsA target. This is the fw.AddID(entityID, w.Final()) form,
 		// mirroring C's ecs_add_id(world, e, EcsFinal).
 		applyFinalPolicy(w, e)
+	} else if id.Index() == w.oneOfID.Index() {
+		// Bare OneOf tag added to relationship entity e: self-tag form — targets
+		// must be direct children of e itself. This is the fw.AddID(relID, w.OneOf())
+		// form, mirroring C's ecs_add_id(world, MyRel, EcsOneOf).
+		applyOneOfPolicy(w, e, e)
 	}
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a
@@ -114,6 +125,13 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 	// (src == target), matching C's unconditional ecs_has_id check.
 	if id.IsPair() && id.First().Index() == w.isAID.Index() {
 		checkFinal(w, id.Second())
+	}
+	// OneOf constraint enforcement: adding (R, target) panics if R has a OneOf
+	// constraint and target is not a direct child of the required parent. Mirrors
+	// C component_index.c:418-441. Enforced before Exclusive migration so that
+	// replacement targets are validated before the atomic swap occurs.
+	if id.IsPair() {
+		checkOneOf(w, id.First(), id.Second())
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that

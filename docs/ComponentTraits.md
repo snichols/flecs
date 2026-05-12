@@ -402,25 +402,64 @@ w.Read(func(fr *flecs.Reader) {
 
 ### OneOf
 
-**What it does:** `OneOf` constrains the target of a relationship to be a child of a specified entity (or of the relationship itself). This is commonly used for enum-style relationships where valid values are known children of a parent entity.
+**Shipped in v0.43.0.**
 
-**What the C API looks like:**
+**What it does:** `OneOf` constrains the target of a relationship to be a **direct child** (`ChildOf`) of a specified parent entity, or of the relationship itself (self-tag form). This is commonly used for enum-style relationships where valid values are known children of a parent entity.
 
-```c
-// C — not available in Go flecs
-ecs_entity_t Food = ecs_new(world);
-ecs_add_id(world, Food, EcsOneOf);
+Two forms:
 
-ecs_entity_t Apples = ecs_new_w_pair(world, EcsChildOf, Food);
-ecs_entity_t Fork   = ecs_new(world);
+- **Self-tag form** — `SetOneOf(w, R, R)` or `fw.AddID(R, w.OneOf())`: targets must be direct children of `R` itself.
+- **Pair form** — `SetOneOf(w, R, P)` or `fw.AddID(R, MakePair(w.OneOf(), P))`: targets must be direct children of `P`.
 
-ecs_entity_t a = ecs_new_w_pair(world, Food, Apples); // OK
-ecs_entity_t b = ecs_new_w_pair(world, Food, Fork);   // panic — Fork not child of Food
+The check is **direct** `(ChildOf, parent)` on the target — not a transitive ancestor walk. Wildcard and Any targets are exempt (matching C semantics).
+
+**Go API:**
+
+```go
+w := flecs.New()
+
+var colorsID, red, green, blue, fork, e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    colorsID = fw.NewEntity()
+    red   = fw.NewEntity()
+    green = fw.NewEntity()
+    blue  = fw.NewEntity()
+    fork  = fw.NewEntity()
+    e     = fw.NewEntity()
+
+    // Make red, green, blue children of colorsID.
+    fw.AddID(red,   flecs.MakePair(w.ChildOf(), colorsID))
+    fw.AddID(green, flecs.MakePair(w.ChildOf(), colorsID))
+    fw.AddID(blue,  flecs.MakePair(w.ChildOf(), colorsID))
+})
+
+// Register Color as a OneOf relationship: targets must be children of colorsID.
+flecs.SetOneOf(w, colorsID, colorsID) // self-tag: colorsID itself is the parent
+
+// Or pair form with a separate parent:
+// flecs.SetOneOf(w, colorsID, paletteID)
+
+// Valid add (red is a child of colorsID).
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(e, flecs.MakePair(colorsID, red)) // OK
+})
+
+// Invalid add (fork is not a child of colorsID) — panics at AddID time.
+// w.Write(func(fw *flecs.Writer) {
+//     fw.AddID(e, flecs.MakePair(colorsID, fork)) // panic: OneOf constraint violated
+// })
+
+// Query whether a relationship has a OneOf constraint.
+parent, ok := flecs.IsOneOf(w, colorsID) // parent.Index() == colorsID.Index(), ok == true
+_ = parent
+_ = ok
 ```
 
-**Workaround:** Enforce target validity manually in application code before adding the pair.
+`IsOneOf` accepts the `scope` interface so it works inside both `Read` and `Write` blocks.
 
-> **Not yet ported in Go flecs.**
+**No built-in relationship ships OneOf by default** — matching C bootstrap behavior.
+
+**Deliberate divergence from C:** The check is only at write time; C also enforces at query plan construction. Write-time enforcement gives clear early-error semantics consistent with Acyclic (Phase 15.9) and Final (Phase 15.10).
 
 ---
 
@@ -700,7 +739,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **DontFragment** | `EcsDontFragment` | ⏳ planned | No sparse non-fragmenting storage |
 | **Exclusive** | `EcsExclusive` | ✅ shipped (v0.34.0) | `SetExclusive(w, relID)` / `IsExclusive(w, relID)`; `w.Exclusive()` bare-tag form; `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive |
 | **Final** | `EcsFinal` | ✅ shipped (v0.42.0) | `SetFinal(w, entityID)` / `IsFinal(scope, entityID)`; `w.Final()` bare-tag form; write-time enforcement: adding `(IsA, target)` panics if target is Final; no built-in ships Final; self-pair `(IsA, e)` also rejected when e is Final |
-| **OneOf** | `EcsOneOf` | ⏳ planned | No relationship-target constraint |
+| **OneOf** | `EcsOneOf` | ✅ shipped (v0.43.0) | `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)`; `w.OneOf()` bare-tag and pair forms; write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent; Wildcard/Any exempt; no built-in ships OneOf |
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
 | **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
