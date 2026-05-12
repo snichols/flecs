@@ -33,13 +33,15 @@ type Writer struct {
 	stage *stage // routes mutations to this stage's command queue
 }
 
-// AsReader returns the embedded *Reader so callers can pass it to read-only
-// free functions (e.g. Each1, Get) without opening a separate w.Read scope.
-//
-//	w.Write(func(fw *flecs.Writer) {
-//	    flecs.Each2[Position, Velocity](fw.AsReader(), func(...) { ... })
-//	})
-func (fw *Writer) AsReader() *Reader { return &fw.Reader }
+// scope is satisfied by both *Reader and *Writer, allowing read free-functions
+// (Each1, Each2, Get, Has, etc.) to be called directly from inside a Write scope
+// without an explicit AsReader() downgrade. Unexported: users pass *Reader or *Writer.
+type scope interface {
+	scopeWorld() *World
+}
+
+func (r *Reader) scopeWorld() *World { return r.world }
+func (w *Writer) scopeWorld() *World { return w.world }
 
 // ── Reader methods ────────────────────────────────────────────────────────────
 
@@ -327,49 +329,69 @@ func (fw *Writer) SetPairByID(e, rel, tgt ID, v any) {
 // Get returns the value of component T on entity e.
 // Checks the entity's own table first; on a miss, walks the IsA chain.
 // Does NOT auto-register T.
-func Get[T any](r *Reader, e ID) (T, bool) {
-	return getOnWorld[T](r.world, e)
+func Get[T any](s scope, e ID) (T, bool) {
+	return getOnWorld[T](s.scopeWorld(), e)
 }
 
 // GetRef returns a pointer to component T on entity e. The pointer is only
 // valid for the duration of the enclosing Read or Write scope. Returns nil
 // if T is not registered, e is not alive, or e does not have T locally.
-func GetRef[T any](r *Reader, e ID) *T {
-	return getRefOnWorld[T](r.world, e)
+func GetRef[T any](s scope, e ID) *T {
+	return getRefOnWorld[T](s.scopeWorld(), e)
 }
 
 // Has reports whether entity e has component T — locally or via an IsA chain.
 // Auto-registers T so the answer is meaningful.
-func Has[T any](r *Reader, e ID) bool {
-	return hasOnWorld[T](r.world, e)
+func Has[T any](s scope, e ID) bool {
+	return hasOnWorld[T](s.scopeWorld(), e)
 }
 
 // Owns reports whether entity e locally owns component T.
 // Auto-registers T (matches Has[T] policy).
-func Owns[T any](r *Reader, e ID) bool {
-	return ownsOnWorld[T](r.world, e)
+func Owns[T any](s scope, e ID) bool {
+	return ownsOnWorld[T](s.scopeWorld(), e)
 }
 
 // GetPair returns the value of pair (rel, tgt) on entity e.
-func GetPair[T any](r *Reader, e ID, rel ID, tgt ID) (T, bool) {
-	return getPairOnWorld[T](r.world, e, rel, tgt)
+func GetPair[T any](s scope, e ID, rel ID, tgt ID) (T, bool) {
+	return getPairOnWorld[T](s.scopeWorld(), e, rel, tgt)
 }
 
 // GetPairRef returns a pointer into the pair (rel, tgt) data slot for entity e.
 // The pointer is only valid for the duration of the enclosing scope.
-func GetPairRef[T any](r *Reader, e ID, rel ID, tgt ID) *T {
-	return getPairRefOnWorld[T](r.world, e, rel, tgt)
+func GetPairRef[T any](s scope, e ID, rel ID, tgt ID) *T {
+	return getPairRefOnWorld[T](s.scopeWorld(), e, rel, tgt)
 }
 
 // HasID reports whether entity e has the component or tag identified by id —
 // locally or via an IsA chain.
-func HasID(r *Reader, e ID, id ID) bool {
-	return r.HasID(e, id)
+func HasID(s scope, e ID, id ID) bool {
+	w := s.scopeWorld()
+	rec := w.index.Get(e)
+	if rec == nil {
+		return false
+	}
+	if rec.Table != nil && rec.Table.HasComponent(id) {
+		return true
+	}
+	if id.IsPair() {
+		second := id.Second()
+		if second == ID(e.Index()) {
+			if w.reflexivePolicies[id.First()] {
+				return true
+			}
+		}
+	}
+	return hasViaIsA(w, e, id, nil)
 }
 
 // OwnsID reports whether entity e locally owns the component or tag identified by id.
-func OwnsID(r *Reader, e ID, id ID) bool {
-	return r.OwnsID(e, id)
+func OwnsID(s scope, e ID, id ID) bool {
+	rec := s.scopeWorld().index.Get(e)
+	if rec == nil {
+		return false
+	}
+	return rec.Table != nil && rec.Table.HasComponent(id)
 }
 
 // ── Free functions (Writer-based writes) ─────────────────────────────────────
@@ -467,25 +489,25 @@ func RemoveID(fw *Writer, e ID, id ID) bool {
 
 // GetUp walks the relationship rel up from e (self-first), returning the value
 // of component T from the first entity in the chain that locally owns T.
-func GetUp[T any](r *Reader, e ID, rel ID) (T, bool) {
-	return getUpInternal[T](r.world, e, rel)
+func GetUp[T any](s scope, e ID, rel ID) (T, bool) {
+	return getUpInternal[T](s.scopeWorld(), e, rel)
 }
 
 // HasUp reports whether e or any ancestor reachable via rel locally owns the
 // component identified by id.
-func HasUp(r *Reader, e ID, id ID, rel ID) bool {
-	return hasUpInternal(r.world, e, id, rel)
+func HasUp(s scope, e ID, id ID, rel ID) bool {
+	return hasUpInternal(s.scopeWorld(), e, id, rel)
 }
 
 // TargetUp returns the ID of the first entity in the chain (e or an ancestor
 // via rel) that locally owns the component identified by id.
-func TargetUp(r *Reader, e ID, id ID, rel ID) (ID, bool) {
-	return targetUpInternal(r.world, e, id, rel)
+func TargetUp(s scope, e ID, id ID, rel ID) (ID, bool) {
+	return targetUpInternal(s.scopeWorld(), e, id, rel)
 }
 
 // PrefabOf returns the first IsA prefab of entity e.
-func PrefabOf(r *Reader, e ID) (ID, bool) {
-	return prefabOfInternal(r.world, e)
+func PrefabOf(s scope, e ID) (ID, bool) {
+	return prefabOfInternal(s.scopeWorld(), e)
 }
 
 // ── Each free functions on Reader ─────────────────────────────────────────────
@@ -525,14 +547,15 @@ func upPtr[T any](w *World, it *QueryIter, id ID) *T {
 // via an ancestor (Up path), the same prefab pointer is passed for every entity
 // in the matched table — mutating through the pointer affects the prefab and all
 // entities that inherit from it.
-func Each1[A any](r *Reader, fn func(e ID, a *A)) {
+func Each1[A any](s scope, fn func(e ID, a *A)) {
+	w := s.scopeWorld()
 	var ids [1]ID
-	ids[0] = RegisterComponent[A](r.world)
-	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
-	q := NewQuery(r.world, ids[:]...)
+	ids[0] = RegisterComponent[A](w)
+	toggleA := w.canTogglePolicies[ID(ids[0].Index())]
+	q := NewQuery(w, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		if aShared := upPtr[A](r.world, it, ids[0]); aShared != nil {
+		if aShared := upPtr[A](w, it, ids[0]); aShared != nil {
 			for _, e := range it.Entities() {
 				fn(e, aShared)
 			}
@@ -553,17 +576,18 @@ func Each1[A any](r *Reader, fn func(e ID, a *A)) {
 // If any component is marked inheritable, its query term is auto-promoted to
 // Self|Up(IsA). For each matched table, components resolved via an ancestor
 // yield the same prefab pointer for every row (see [Each1] doc for details).
-func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
+func Each2[A, B any](s scope, fn func(e ID, a *A, b *B)) {
+	w := s.scopeWorld()
 	var ids [2]ID
-	ids[0] = RegisterComponent[A](r.world)
-	ids[1] = RegisterComponent[B](r.world)
-	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
-	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
-	q := NewQuery(r.world, ids[:]...)
+	ids[0] = RegisterComponent[A](w)
+	ids[1] = RegisterComponent[B](w)
+	toggleA := w.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := w.canTogglePolicies[ID(ids[1].Index())]
+	q := NewQuery(w, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		aShared := upPtr[A](r.world, it, ids[0])
-		bShared := upPtr[B](r.world, it, ids[1])
+		aShared := upPtr[A](w, it, ids[0])
+		bShared := upPtr[B](w, it, ids[1])
 		if aShared == nil && bShared == nil {
 			colA := Field[A](it, ids[0])
 			colB := Field[B](it, ids[1])
@@ -607,20 +631,21 @@ func Each2[A, B any](r *Reader, fn func(e ID, a *A, b *B)) {
 // If any component is marked inheritable, its query term is auto-promoted to
 // Self|Up(IsA). For each matched table, components resolved via an ancestor
 // yield the same prefab pointer for every row (see [Each1] doc for details).
-func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
+func Each3[A, B, C any](s scope, fn func(e ID, a *A, b *B, c *C)) {
+	w := s.scopeWorld()
 	var ids [3]ID
-	ids[0] = RegisterComponent[A](r.world)
-	ids[1] = RegisterComponent[B](r.world)
-	ids[2] = RegisterComponent[C](r.world)
-	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
-	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
-	toggleC := r.world.canTogglePolicies[ID(ids[2].Index())]
-	q := NewQuery(r.world, ids[:]...)
+	ids[0] = RegisterComponent[A](w)
+	ids[1] = RegisterComponent[B](w)
+	ids[2] = RegisterComponent[C](w)
+	toggleA := w.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := w.canTogglePolicies[ID(ids[1].Index())]
+	toggleC := w.canTogglePolicies[ID(ids[2].Index())]
+	q := NewQuery(w, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		aShared := upPtr[A](r.world, it, ids[0])
-		bShared := upPtr[B](r.world, it, ids[1])
-		cShared := upPtr[C](r.world, it, ids[2])
+		aShared := upPtr[A](w, it, ids[0])
+		bShared := upPtr[B](w, it, ids[1])
+		cShared := upPtr[C](w, it, ids[2])
 		if aShared == nil && bShared == nil && cShared == nil {
 			colA := Field[A](it, ids[0])
 			colB := Field[B](it, ids[1])
@@ -675,23 +700,24 @@ func Each3[A, B, C any](r *Reader, fn func(e ID, a *A, b *B, c *C)) {
 // If any component is marked inheritable, its query term is auto-promoted to
 // Self|Up(IsA). For each matched table, components resolved via an ancestor
 // yield the same prefab pointer for every row (see [Each1] doc for details).
-func Each4[A, B, C, D any](r *Reader, fn func(e ID, a *A, b *B, c *C, d *D)) {
+func Each4[A, B, C, D any](s scope, fn func(e ID, a *A, b *B, c *C, d *D)) {
+	w := s.scopeWorld()
 	var ids [4]ID
-	ids[0] = RegisterComponent[A](r.world)
-	ids[1] = RegisterComponent[B](r.world)
-	ids[2] = RegisterComponent[C](r.world)
-	ids[3] = RegisterComponent[D](r.world)
-	toggleA := r.world.canTogglePolicies[ID(ids[0].Index())]
-	toggleB := r.world.canTogglePolicies[ID(ids[1].Index())]
-	toggleC := r.world.canTogglePolicies[ID(ids[2].Index())]
-	toggleD := r.world.canTogglePolicies[ID(ids[3].Index())]
-	q := NewQuery(r.world, ids[:]...)
+	ids[0] = RegisterComponent[A](w)
+	ids[1] = RegisterComponent[B](w)
+	ids[2] = RegisterComponent[C](w)
+	ids[3] = RegisterComponent[D](w)
+	toggleA := w.canTogglePolicies[ID(ids[0].Index())]
+	toggleB := w.canTogglePolicies[ID(ids[1].Index())]
+	toggleC := w.canTogglePolicies[ID(ids[2].Index())]
+	toggleD := w.canTogglePolicies[ID(ids[3].Index())]
+	q := NewQuery(w, ids[:]...)
 	it := q.Iter()
 	for it.Next() {
-		aShared := upPtr[A](r.world, it, ids[0])
-		bShared := upPtr[B](r.world, it, ids[1])
-		cShared := upPtr[C](r.world, it, ids[2])
-		dShared := upPtr[D](r.world, it, ids[3])
+		aShared := upPtr[A](w, it, ids[0])
+		bShared := upPtr[B](w, it, ids[1])
+		cShared := upPtr[C](w, it, ids[2])
+		dShared := upPtr[D](w, it, ids[3])
 		if aShared == nil && bShared == nil && cShared == nil && dShared == nil {
 			colA := Field[A](it, ids[0])
 			colB := Field[B](it, ids[1])

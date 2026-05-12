@@ -397,7 +397,7 @@ func TestDeferOriginalTestsStillPass(t *testing.T) {
 			}
 		})
 		w.Write(func(fw *flecs.Writer) {
-			flecs.Each1[CPos](fw.AsReader(), func(e flecs.ID, p *CPos) {
+			flecs.Each1[CPos](fw, func(e flecs.ID, p *CPos) {
 				if p.X < 0 {
 					fw.Delete(e)
 				}

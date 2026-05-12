@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.39)
+## Shipped (through v0.40)
 
 The following features are available in the current release:
 
@@ -42,6 +42,7 @@ The following features are available in the current release:
 - **Transitive relationship trait** _(v0.37.0)_ — `SetTransitive(w, relID)` / `IsTransitive(w, relID)` / `w.Transitive()`. Query terms for `(R, C)` walk the `(R, *)` chain lazily at query time; cycle-safe, depth-bounded (64 hops). Cached queries pre-evaluate at construction and on table-create; pair-mutation staleness accepted. Composes with Symmetric: both traits can be active on the same relationship. Built-in entity count: 20.
 - **Wildcard and Any query-term sentinels** _(v0.38.0)_ — `w.Wildcard()` (`*`, index 22) and `w.Any()` (`_`, index 23). `MakePair(R, w.Wildcard())` emits one iterator row per concrete `(R, X)` pair in the table; `MakePair(R, w.Any())` matches once per entity. `MatchedTarget(it, termIdx)` / `MatchedID(it, termIdx)` / `FieldByMatch[T](it, termIdx)` accessors. Works in both live queries and `CachedQuery`.
 - **Reflexive relationship trait** _(v0.39.0)_ — `SetReflexive(w, relID)` / `IsReflexive(w, relID)` / `w.Reflexive()` (index 21). `R(X, X)` is implicitly true for all X without storing an explicit self-pair. `HasID(e, MakePair(R, e))` returns `true` (deliberate extension of C semantics; documented in CHANGELOG). Query self-match includes the target entity's own table. Composes with Transitive: a Reflexive+Transitive query yields the starting entity and all ancestors. `IsA` bootstrapped as reflexive. Built-in entity count: 23; user entities now start at index 24.
+- **Writer ⊇ Reader at free-function boundaries** _(v0.40.0, Phase 15.8)_ — unexported `scope` interface with `scopeWorld() *World`. All read free-functions (`Get`, `Has`, `Each1`–`Each4`, `HasID`, `OwnsID`, `GetUp`, `HasUp`, `TargetUp`, `PrefabOf`, `IsEnabledID`, `IsEnabled`, etc.) now accept `scope` instead of `*Reader`. `*Writer` satisfies `scope`, so `flecs.Each2[A,B](fw, ...)` compiles inside a `Write` block without `fw.AsReader()`. `AsReader()` removed (pre-1.0 breaking change).
 
 ## Documentation
 
@@ -70,6 +71,9 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 ## Future Work
 
 The following are deferred to later phases. No timeline is set; issues welcome.
+
+### Acyclic relationship trait (Phase 15.9)
+- **`SetAcyclic` / `IsAcyclic`** — marks a relationship as acyclic; the runtime panics or warns if a cycle is detected when adding a pair. Mirrors C `EcsAcyclic`. Bumped from 15.8 to 15.9 (Phase 15.8 shipped as the `scope` interface ergonomic fix).
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
 - **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).

@@ -77,8 +77,8 @@ func DisableID(fw *Writer, e ID, componentID ID) {
 // Returns false if e does not have componentID.
 // Returns true if componentID is not marked CanToggle or if no row has been
 // disabled in e's table (all-enabled default).
-func IsEnabledID(r *Reader, e ID, componentID ID) bool {
-	rec := r.world.index.Get(e)
+func IsEnabledID(s scope, e ID, componentID ID) bool {
+	rec := s.scopeWorld().index.Get(e)
 	if rec == nil || rec.Table == nil || !rec.Table.HasComponent(componentID) {
 		return false
 	}
@@ -115,10 +115,10 @@ func Disable[T any](fw *Writer, e ID) {
 // Delegates to [IsEnabledID] after resolving T's component ID from the registry.
 //
 // Returns false if T is not registered or if e does not have T.
-func IsEnabled[T any](r *Reader, e ID) bool {
-	info, ok := component.LookupByType[T](r.world.registry)
+func IsEnabled[T any](s scope, e ID) bool {
+	info, ok := component.LookupByType[T](s.scopeWorld().registry)
 	if !ok || info.Component == 0 {
 		return false
 	}
-	return IsEnabledID(r, e, info.Component)
+	return IsEnabledID(s, e, info.Component)
 }

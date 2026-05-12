@@ -24,7 +24,7 @@ func ExampleWorld_Write() {
 
 	// Write queues mutations; reads inside the block still see current state.
 	w.Write(func(fw *flecs.Writer) {
-		flecs.Each1[defPos](fw.AsReader(), func(e flecs.ID, p *defPos) {
+		flecs.Each1[defPos](fw, func(e flecs.ID, p *defPos) {
 			if p.X < 0 {
 				fw.Delete(e) // queued, not applied yet
 			}

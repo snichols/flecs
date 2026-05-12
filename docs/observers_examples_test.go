@@ -376,7 +376,7 @@ func TestObservers_WriterIsAlive(t *testing.T) {
 	flecs.Observe[Position](w, flecs.EventOnSet, func(fw *flecs.Writer, e flecs.ID, v Position) {
 		// Read operations are explicitly safe from within a callback.
 		gotAlive = fw.IsAlive(e)
-		if p, ok := flecs.Get[Position](fw.AsReader(), e); ok {
+		if p, ok := flecs.Get[Position](fw, e); ok {
 			gotValue = p
 		}
 	})

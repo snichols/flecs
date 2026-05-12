@@ -111,7 +111,7 @@ func TestDeferWrappedIterationStillPasses(t *testing.T) {
 
 	var deleted int
 	w.Write(func(fw *flecs.Writer) {
-		flecs.Each1[readonlyPos](fw.AsReader(), func(e flecs.ID, p *readonlyPos) {
+		flecs.Each1[readonlyPos](fw, func(e flecs.ID, p *readonlyPos) {
 			if p.X < 0 {
 				fw.Delete(e)
 				deleted++
@@ -132,13 +132,19 @@ func TestDeferWrappedIterationStillPasses(t *testing.T) {
 	}
 }
 
-// TestWriterAsReader verifies that Writer.AsReader returns a non-nil Reader.
-func TestWriterAsReader(t *testing.T) {
+// TestWriterScopePromotion verifies that *Writer satisfies read free-functions directly.
+func TestWriterScopePromotion(t *testing.T) {
 	w := flecs.New()
+	var e flecs.ID
 	w.Write(func(fw *flecs.Writer) {
-		fr := fw.AsReader()
-		if fr == nil {
-			t.Fatal("AsReader returned nil")
+		e = fw.NewEntity()
+		flecs.Set[readonlyPos](fw, e, readonlyPos{X: 1})
+	})
+	// Read using *Writer as scope — no AsReader() needed.
+	w.Write(func(fw *flecs.Writer) {
+		p, ok := flecs.Get[readonlyPos](fw, e)
+		if !ok || p.X != 1 {
+			t.Fatal("Get[readonlyPos] via Writer should work without AsReader")
 		}
 	})
 }
