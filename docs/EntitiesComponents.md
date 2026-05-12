@@ -325,7 +325,9 @@ Because component entities are regular entities, you can name them, add tags to 
 
 Tags added to component entities customize their storage and query behaviour. These are called *traits*.
 
-> **Not yet ported in Go flecs** — the `Sparse` component trait (opt-in sparse storage, better for components accessed randomly with high add/remove frequency) is not yet implemented. The `CanToggle` component trait (per-entity component enable/disable) is also not yet implemented. See the [feature-gap list](README.md) and the [ComponentTraits manual](ComponentTraits.md) stub.
+The `CanToggle` trait (shipped v0.35.0) allows individual entities to have a component temporarily disabled without removing it. See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for the full API.
+
+> **Not yet ported in Go flecs** — the `Sparse` component trait (opt-in sparse storage, better for components accessed randomly with high add/remove frequency) is not yet implemented. See the [feature-gap list](README.md) and the [ComponentTraits manual](ComponentTraits.md).
 
 ### Registration
 
@@ -395,7 +397,29 @@ w.Write(func(fw *flecs.Writer) {
 
 ### Component Disabling
 
-> **Not yet ported in Go flecs** — components can be individually disabled on an entity (via the `CanToggle` trait), which prevents the entity from matching queries on that component without removing it. See the [feature-gap list](README.md) and the [ComponentTraits manual](ComponentTraits.md) stub.
+**Shipped in v0.35.0** — components can be individually disabled on an entity using the `CanToggle` trait. Disabling prevents the entity from matching queries on that component without removing it; the component value is preserved and the entity stays in its archetype table.
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+flecs.SetCanToggle(w, posID) // mark once
+
+w.Write(func(fw *flecs.Writer) {
+    flecs.DisableID(fw, e, posID)          // bit-flip, no table migration
+    // flecs.Disable[Position](fw, e)      // typed variant
+
+    flecs.IsEnabledID(fw.AsReader(), e, posID) // → false
+    fw.HasID(e, posID)                     // → true (still on entity)
+
+    flecs.EnableID(fw, e, posID)           // restore
+})
+
+// Queries skip disabled rows automatically:
+flecs.Each1[Position](r, func(e flecs.ID, p *Position) {
+    // not called while Position is disabled for e
+})
+```
+
+See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for the complete API reference.
 
 ---
 

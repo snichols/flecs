@@ -65,10 +65,12 @@ type World struct {
 	removeActionID      ID                              // built-in Remove cleanup action entity (index 14)
 	deleteActionID      ID                              // built-in Delete cleanup action entity (index 15)
 	panicActionID       ID                              // built-in Panic cleanup action entity (index 16)
-	exclusiveID         ID                              // built-in Exclusive trait entity (index 17; first user entity at index 18)
+	exclusiveID         ID                              // built-in Exclusive trait entity (index 17)
+	canToggleID         ID                              // built-in CanToggle trait entity (index 18; first user entity at index 19)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
+	canTogglePolicies   map[ID]bool                     // component entity index → CanToggle flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -105,7 +107,8 @@ type World struct {
 //   - Index 15: DeleteAction built-in cleanup action entity
 //   - Index 16: PanicAction built-in cleanup action entity
 //   - Index 17: Exclusive built-in trait entity
-//   - Index 18+: user entities (NewEntity)
+//   - Index 18: CanToggle built-in trait entity
+//   - Index 19+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -217,6 +220,12 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(exclusive))
 	w.exclusiveID = exclusive
+	// Allocate the built-in CanToggle trait entity (gets index 18).
+	canToggle := w.index.Alloc()
+	rec = w.index.Get(canToggle)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(canToggle))
+	w.canToggleID = canToggle
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
@@ -822,6 +831,18 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			ptr := oldTable.Get(oldRow, id)
 			if ptr != nil {
 				newTable.Set(newRow, id, ptr)
+			}
+		}
+		// Transfer CanToggle disabled bits for components shared by both tables.
+		for _, id := range oldSig {
+			if id == removeID {
+				continue
+			}
+			if !newTable.HasComponent(id) {
+				continue
+			}
+			if !oldTable.IsRowEnabled(id, oldRow) {
+				newTable.DisableRow(id, newRow)
 			}
 		}
 	}

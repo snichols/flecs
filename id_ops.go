@@ -72,6 +72,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(myRel, w.Exclusive()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsExclusive).
 		applyExclusivePolicy(w, e)
+	} else if id.Index() == w.canToggleID.Index() {
+		// Bare CanToggle tag added to entity e: mark e's component as toggleable.
+		// This is the fw.AddID(posID, w.CanToggle()) form, mirroring C's
+		// ecs_add_id(world, ecs_id(Position), EcsCanToggle).
+		applyCanTogglePolicy(w, e)
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that

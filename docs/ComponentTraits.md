@@ -176,20 +176,51 @@ The following sections describe traits that exist in C flecs but are not yet por
 
 ### CanToggle
 
-**What it does:** The `CanToggle` trait enables per-entity component enable/disable. Toggling is cheaper than remove/add because it flips a bit in a per-entity bitset rather than moving the entity to a different archetype table. Disabled components are excluded from queries but their value is preserved and can be restored by re-enabling.
+**Shipped in v0.35.0.**
 
-**What the C API looks like:**
+**What it does:** The `CanToggle` trait enables per-entity component enable/disable. Toggling is cheaper than remove/add because it flips a bit in a per-entity bitset rather than migrating the entity to a different archetype table. Disabled components are excluded from queries but their value is preserved; re-enabling restores normal query visibility instantly.
 
-```c
-// C — not available in Go flecs
-ecs_add_id(world, ecs_id(Position), EcsCanToggle);
-ecs_enable_component(world, e, Position, false); // disable
-ecs_enable_component(world, e, Position, true);  // re-enable
+**Go API:**
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+
+// Mark the component as toggleable (call once, before any Enable/Disable).
+flecs.SetCanToggle(w, posID)
+// Equivalent bare-tag form:
+// w.Write(func(fw *flecs.Writer) { fw.AddID(posID, w.CanToggle()) })
+
+// Inspect the policy:
+flecs.IsCanToggle(w, posID) // → true
+
+w.Write(func(fw *flecs.Writer) {
+    // Disable — the component value is preserved; Has still returns true.
+    flecs.DisableID(fw, e, posID)
+    // Typed variant:
+    // flecs.Disable[Position](fw, e)
+
+    // Re-enable — next Each1 iteration will visit the entity again.
+    flecs.EnableID(fw, e, posID)
+    // flecs.Enable[Position](fw, e)
+})
+
+w.Read(func(fr *flecs.Reader) {
+    flecs.IsEnabledID(fr, e, posID)    // → true / false
+    flecs.IsEnabled[Position](fr, e)   // typed variant
+})
+
+// Each1 / Each2 / Each3 / Each4 automatically skip disabled rows:
+flecs.Each1[Position](r, func(e flecs.ID, p *Position) {
+    // only called when Position is enabled for e
+})
 ```
 
-**Workaround:** Use `Remove[T]` and `Set[T]` to approximate disable/enable. This moves the entity between archetype tables (more expensive) and loses the previous value on remove unless the application caches it separately.
-
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-141-entitiescomponents-port): *`CanToggle` component trait*.
+**Behaviour notes:**
+- `Has` returns `true` regardless of enabled/disabled state — the component is still on the entity.
+- Disabling/enabling does **not** move the entity between archetype tables.
+- The disabled state survives archetype migration (e.g., adding an unrelated component).
+- Disabling/enabling bumps `Table.ChangeCount()`, so cached-query change detection works correctly.
+- `EnableID`/`DisableID` panic if the component is not marked `CanToggle` or if the entity does not own the component.
 
 ---
 
@@ -556,7 +587,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Override** (target) | `EcsOverride` | ✅ shipped (v0.33.0) | Eager copy from prefab at `(IsA, prefab)` add time; multi-level chain; pre-set value wins |
 | **DontInherit** (target) | `EcsDontInherit` | ✅ shipped (v0.33.0) | Suppresses `Has`/`Get` IsA walk and query auto-promotion; takes precedence over Inheritable |
 | **Acyclic** | `EcsAcyclic` | ⏳ planned | No cycle detection for custom relationships |
-| **CanToggle** | `EcsCanToggle` | ⏳ planned | No per-entity component bitset toggle |
+| **CanToggle** | `EcsCanToggle` | ✅ shipped (v0.35.0) | `SetCanToggle(w, cid)` / `IsCanToggle`; `w.CanToggle()` bare-tag form; `Each1`/`Each2`/`Each3`/`Each4` skip disabled rows; `EnableID`/`DisableID`/`IsEnabledID` + typed generics |
 | **OnDelete** | `EcsOnDelete` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDelete(), action)` / `GetCleanupPolicy`; actions: `RemoveAction`, `DeleteAction`, `PanicAction` |
 | **OnDeleteTarget** | `EcsOnDeleteTarget` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDeleteTarget(), action)`; `ChildOf` bootstrapped with `DeleteAction`; `IsA` has no default (opt-in) |
 | **Constant** | *(informal)* | ⏳ planned | No read-only enforcement after first write |

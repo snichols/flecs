@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.35.0 — 2026-05-12 — Phase 15.3: CanToggle component trait
+
+### Added
+
+- **`SetCanToggle(w, componentID)`** — marks a component as toggleable: individual entities can have the component temporarily disabled without removing it or migrating to a different archetype table.
+- **`IsCanToggle(w, componentID) bool`** — reports whether a component is marked CanToggle.
+- **`w.CanToggle() ID`** — returns the built-in CanToggle trait entity (index 18). The bare-tag form `fw.AddID(componentID, w.CanToggle())` is equivalent to `SetCanToggle(w, componentID)`.
+- **`EnableID(fw, e, componentID)`** / **`DisableID(fw, e, componentID)`** — set the enabled bit for a specific entity+component pair. Panics if the component is not marked CanToggle or the entity does not own the component.
+- **`IsEnabledID(r, e, componentID) bool`** — reads the enabled bit; returns `true` when no bitset entry exists (all-enabled default) and `false` when the entity does not own the component.
+- **Typed generics**: `Enable[T](fw, e)` / `Disable[T](fw, e)` / `IsEnabled[T](r, e) bool` — resolve the component ID via the registry and delegate to the ID-based variants.
+- **Per-row bitset storage** on `table.Table` — lazy `map[ID][]uint64` allocated on the first `DisableRow` call; default (no entry) means all rows enabled. `Append` grows existing bitsets (new row = enabled); `RemoveSwap` swaps bits and shrinks. The disabled state survives archetype migration (`migrate` transfers toggle bits for shared components).
+- **Query filter integration**: `Each1`, `Each2`, `Each3`, `Each4` check the bitset for CanToggle components and skip rows where any queried component is disabled. Components without the CanToggle policy bypass the check entirely (zero overhead for non-toggle queries).
+- **`cantoggle.go`** — new file parallel to `exclusive.go` and `cleanup.go`.
+- **`cantoggle_test.go`** — 13 test cases covering: non-CanToggle panic (EnableID and DisableID), mark+disable+enable round-trip, `Each1` skips disabled rows, re-enable restores visibility, independent per-component tracking, table migration preserves disable state, change-count bump on toggle, multi-entity table with mixed enabled/disabled, `Each2` filter, typed generic API, error paths.
+
+### Documentation
+
+- `docs/ComponentTraits.md` — CanToggle section rewritten with shipped Go API and worked example; roadmap row updated to `✅ shipped (v0.35.0)`.
+- `docs/EntitiesComponents.md` — Component Disabling section replaced "Not yet ported" callout with shipped API and worked example; Component Traits note updated.
+- `docs/Queries.md` — new "Disabled rows (CanToggle)" section explaining automatic row-skip in `Each1`/`Each2`/etc.
+- `docs/README.md` — CanToggle entry in the feature-gap list updated to shipped status.
+- `ROADMAP.md` — Phase 15.3 marked shipped; built-in entity count note updated to 18.
+
+### Migration Guide
+
+- Built-in entity count increases from 17 to 18. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to include `CanToggle` (18).
+- `World.CanToggle()` is now a valid built-in entity accessor. If you had user entities starting at index 18, they now start at index 19.
+
+### Non-goals (explicitly out of scope for v0.35.0)
+
+- No entity-level disabling (`EcsDisabled` tag); this is component-level only.
+- No bulk enable/disable across many entities.
+- No deferred toggle commands; `EnableID`/`DisableID` operate immediately even inside a `Write` scope.
+
 ## v0.34.0 — 2026-05-12 — Phase 15.2: Exclusive relationship trait
 
 ### Added

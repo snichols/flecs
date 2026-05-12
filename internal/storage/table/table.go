@@ -42,6 +42,11 @@ type Table struct {
 	// CachedQuery.Changed() for opt-in change detection. Wrapping at max uint64
 	// is treated as a change (conservative; practical infinity for any real use).
 	changeCount uint64
+	// bitsets holds per-component enabled/disabled state for CanToggle components.
+	// Each entry is a packed bitset (1 = enabled, 0 = disabled) covering all rows.
+	// Absence of an entry means all rows are enabled (lazy allocation: only created
+	// on the first DisableRow call). Keyed by component ID as it appears in sig.
+	bitsets map[ids.ID][]uint64
 }
 
 // New constructs a Table for the given sorted component-id signature.
@@ -105,12 +110,23 @@ func (t *Table) BumpChange() { t.changeCount++ }
 
 // Append adds a new zero-initialized row for entity and returns its row index.
 // All non-tag component columns are extended by one zero element.
+// Existing CanToggle bitsets are extended with the new row set to enabled (1).
 func (t *Table) Append(entity ids.ID) int {
 	row := len(t.entities)
 	t.entities = append(t.entities, entity)
 	for _, col := range t.columns {
 		if col != nil {
 			col.appendZero()
+		}
+	}
+	// Extend any existing bitsets: new row defaults to enabled (bit = 1).
+	for id, bs := range t.bitsets {
+		wordIdx := row >> 6
+		bitIdx := uint(row) & 63
+		if wordIdx >= len(bs) {
+			t.bitsets[id] = append(bs, uint64(1)<<bitIdx)
+		} else {
+			bs[wordIdx] |= uint64(1) << bitIdx
 		}
 	}
 	t.changeCount++
@@ -137,6 +153,30 @@ func (t *Table) RemoveSwap(row int) (movedEntity ids.ID, moved bool) {
 	for _, col := range t.columns {
 		if col != nil {
 			col.removeSwap(row)
+		}
+	}
+	// Update any CanToggle bitsets: swap last row's bit into the removed slot,
+	// then shrink. Mirror of how columns use swap-remove.
+	newN := n - 1
+	newNW := (newN + 63) >> 6
+	for id, bs := range t.bitsets {
+		lastWordIdx := last >> 6
+		lastBitIdx := uint(last) & 63
+		if row != last {
+			rowWordIdx := row >> 6
+			rowBitIdx := uint(row) & 63
+			lastBit := (bs[lastWordIdx] >> lastBitIdx) & 1
+			if lastBit != 0 {
+				bs[rowWordIdx] |= uint64(1) << rowBitIdx
+			} else {
+				bs[rowWordIdx] &^= uint64(1) << rowBitIdx
+			}
+		}
+		bs[lastWordIdx] &^= uint64(1) << lastBitIdx
+		if newNW == 0 {
+			delete(t.bitsets, id)
+		} else if newNW < len(bs) {
+			t.bitsets[id] = bs[:newNW]
 		}
 	}
 	t.changeCount++
@@ -278,4 +318,68 @@ func (t *Table) CacheRemoveEdge(id ids.ID, dst *Table) {
 		panic("table: CacheRemoveEdge: conflicting destination for same (table, id)")
 	}
 	t.removeEdges[id] = dst
+}
+
+// DisableRow marks row as disabled for component id. Creates the bitset lazily
+// on the first call (initialising all existing rows to enabled). No-op if row
+// is already disabled.
+//
+// Panics if row is out of range.
+func (t *Table) DisableRow(id ids.ID, row int) {
+	if row < 0 || row >= len(t.entities) {
+		panic("table: DisableRow row out of range")
+	}
+	if t.bitsets == nil {
+		t.bitsets = make(map[ids.ID][]uint64)
+	}
+	bs, ok := t.bitsets[id]
+	if !ok {
+		n := len(t.entities)
+		nw := (n + 63) >> 6
+		bs = make([]uint64, nw)
+		for i := range bs {
+			bs[i] = ^uint64(0)
+		}
+		if n%64 != 0 {
+			bs[nw-1] = (uint64(1) << uint(n%64)) - 1
+		}
+		t.bitsets[id] = bs
+	}
+	bs[row>>6] &^= uint64(1) << (uint(row) & 63)
+}
+
+// EnableRow marks row as enabled for component id. If no bitset exists for id
+// the row is already considered enabled (default), so this is a no-op.
+//
+// Panics if row is out of range.
+func (t *Table) EnableRow(id ids.ID, row int) {
+	if row < 0 || row >= len(t.entities) {
+		panic("table: EnableRow row out of range")
+	}
+	if t.bitsets == nil {
+		return
+	}
+	bs, ok := t.bitsets[id]
+	if !ok {
+		return
+	}
+	bs[row>>6] |= uint64(1) << (uint(row) & 63)
+}
+
+// IsRowEnabled reports whether row is enabled for component id.
+// Returns true when no bitset exists for id (all rows enabled by default).
+//
+// Panics if row is out of range.
+func (t *Table) IsRowEnabled(id ids.ID, row int) bool {
+	if row < 0 || row >= len(t.entities) {
+		panic("table: IsRowEnabled row out of range")
+	}
+	if t.bitsets == nil {
+		return true
+	}
+	bs, ok := t.bitsets[id]
+	if !ok {
+		return true
+	}
+	return (bs[row>>6]>>(uint(row)&63))&1 != 0
 }

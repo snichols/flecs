@@ -682,10 +682,30 @@ The following features from the upstream C flecs `Queries.md` are not yet availa
 
 ---
 
+## Disabled rows (CanToggle)
+
+When a component is marked with the `CanToggle` trait (`flecs.SetCanToggle(w, compID)`), individual entities can have that component temporarily disabled. `Each1`, `Each2`, `Each3`, and `Each4` **automatically skip rows where the component is disabled**; no extra filtering is needed in the callback.
+
+```go
+flecs.SetCanToggle(w, posID)
+
+// Disable Position for one entity — it won't appear in the loop below.
+w.Write(func(fw *flecs.Writer) { flecs.DisableID(fw, e, posID) })
+
+flecs.Each1[Position](r, func(e flecs.ID, p *Position) {
+    // called only for entities where Position is enabled
+})
+```
+
+See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for full details.
+
+---
+
 ## See Also
 
 - [Quickstart](Quickstart.md) — hands-on introduction to entities, components, queries, and systems.
 - [EntitiesComponents.md](EntitiesComponents.md) — entity and component API in full detail.
 - [Systems.md](Systems.md) — systems use cached queries; parallel and multi-threaded dispatch.
 - [Relationships.md](Relationships.md) — pair traversal terms and relationship queries.
+- [ComponentTraits](ComponentTraits.md) — CanToggle, Exclusive, and other trait customisation.
 - [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.
