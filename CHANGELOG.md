@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 12.1: Per-stage command queues
+## v0.16.0 — 2026-05-12 — Phase 12.1: Per-stage command queues
 
 Lock-free deferred mutations for multi-threaded systems. Each worker goroutine
 now writes into its own per-stage command queue with no synchronization on the
