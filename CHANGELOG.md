@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Phase 14.6: Systems doc port (upcoming v0.25.0)
+
+### Added
+
+- **`docs/Systems.md`** — full Go-idiomatic port of the upstream C flecs Systems doc. Covers `NewSystem` with the default OnUpdate phase, `NewSystemInPhase` with all four built-in phases (`PreUpdate`, `OnFixedUpdate`, `OnUpdate`, `PostUpdate`), pipeline phase execution order, `delta_time` semantics, `SetFixedTimestep` accumulator loop with spiral-of-death warning, system lifecycle (`Close` / `IsClosed`), parallel dispatch (`SetParallel`, `SetWriteSet`, `SetWorkerCount`), deferred-mutation semantics in parallel systems, multi-threaded within-system row-range splitting (`SetMultiThreaded`), and `World.Stats()` per-phase timing observability. Seven not-yet-ported features documented: custom phases, DependsOn ordering, system disabling, rate filters, single-system `Run`, `RunWorker`, and pipeline introspection.
+- **`docs/systems_examples_test.go`** — 10 test functions (`TestSystems_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — Systems row updated to `✅ landed / 14.6`; 7 newly discovered feature gaps appended.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.6 row updated to `✅ shipped (v0.25.0)`.
+- **`docs/Quickstart.md`** — updated Systems Next Steps row from "pending Phase 14.6" to link to the landed manual.
+
 ## v0.24.0 — 2026-05-12 — Phase 14.5: PrefabsManual doc port
 
 ### Added

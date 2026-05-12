@@ -19,7 +19,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [Relationships.md](Relationships.md) | ✅ landed | 14.3 |
 | [HierarchiesManual.md](HierarchiesManual.md) | ✅ landed | 14.4 |
 | [PrefabsManual.md](PrefabsManual.md) | ✅ landed | 14.5 |
-| [Systems.md](Systems.md) | pending | 14.6 |
+| [Systems.md](Systems.md) | ✅ landed / 14.6 | 14.6 |
 | [ObserversManual.md](ObserversManual.md) | pending | 14.7 |
 | [ComponentTraits.md](ComponentTraits.md) | pending | 14.8 |
 | [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending | 14.9 |
@@ -135,3 +135,13 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Auto-override on instantiation** (`OnInstantiate, Override`) — automatically copies a component from the prefab into each new instance at `(IsA, prefab)` add time. `w.Override()` exposes the entity ID but the behavior is not implemented. not yet ported in Go flecs.
 - **Prefab hierarchies** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab replicates the entire child subtree onto the instance. not yet ported in Go flecs.
 - **Prefab slots** (`SlotOf`) — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1) without a name lookup. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.6 (Systems port)
+
+- **Custom pipeline phases** — In C flecs any entity tagged with `EcsPhase` can be a pipeline phase; phases are ordered via `DependsOn` pairs. Go flecs has exactly four hard-coded built-in phases (`PreUpdate`, `OnFixedUpdate`, `OnUpdate`, `PostUpdate`). not yet ported in Go flecs.
+- **DependsOn ordering between systems** — C lets applications add `(DependsOn, OtherSystem)` to order two systems within a phase independently of registration order. Go flecs orders within a phase strictly by registration order. not yet ported in Go flecs.
+- **System disabling** (`ecs_enable` / `EcsDisabled`) — pause a system without removing it; re-enable later. Go flecs requires `Close()` + `NewSystem` to approximate this. not yet ported in Go flecs.
+- **Rate filters** (`SetInterval` / `SetRate`) — run a system every N frames or at a fixed wall-clock interval per system without restructuring the pipeline. not yet ported in Go flecs.
+- **Single-system `Run` out-of-pipeline** — `ecs_run` invokes one system synchronously outside the normal pipeline. not yet ported in Go flecs.
+- **`RunWorker` / explicit thread dispatch** — `ecs_run_worker` for manual entity-range partitioning outside the pipeline. not yet ported in Go flecs.
+- **Pipeline introspection** — iterate the ordered system list in a pipeline to inspect execution order at runtime. not yet ported in Go flecs.
