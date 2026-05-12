@@ -287,6 +287,7 @@ func (w *World) Progress(dt float32) {
 				if s.multiThreaded {
 					// Within-system parallelism: split the iter across all N
 					// workers, each receiving a disjoint row slice per table.
+					// Each worker writes into its own stage queue (no contention).
 					// Cannot batch with siblings — waits for all workers before
 					// the next system starts.
 					n := w.workerCount
@@ -295,6 +296,7 @@ func (w *World) Progress(dt float32) {
 					for wi := 0; wi < n; wi++ {
 						wi := wi
 						workerIt := base.clippedCopy(wi, n)
+						workerIt.workerWriter = &w.workerStageWriters[wi]
 						wg.Add(1)
 						w.workerCh <- func() {
 							defer wg.Done()
@@ -302,6 +304,21 @@ func (w *World) Progress(dt float32) {
 						}
 					}
 					wg.Wait()
+					// Merge worker stages in ascending id order, then stage 0.
+					// Within each stage the per-entity coalescer applies; across
+					// stages there is no coalescing (two stages mutating the same
+					// entity produce two migrations in id order).
+					for i := 1; i <= n; i++ {
+						q := w.stages[i].queue
+						w.stages[i].queue = acquireCmdQueue()
+						q.flush(w)
+						releaseCmdQueue(q)
+					}
+					q0 := w.stages[0].queue
+					w.stages[0].queue = acquireCmdQueue()
+					q0.flush(w)
+					releaseCmdQueue(q0)
+					// stages[0].deferDepth is unchanged (managed by deferScope).
 					i++
 					continue
 				}

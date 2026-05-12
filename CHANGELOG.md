@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Phase 12.1: Per-stage command queues
+
+Lock-free deferred mutations for multi-threaded systems. Each worker goroutine
+now writes into its own per-stage command queue with no synchronization on the
+hot path. After `wg.Wait()`, the main goroutine merges stages in ascending id
+order (worker stages 1…N, then stage 0). Within each stage, per-entity FIFO
+coalescing is preserved; there is no cross-stage coalescing. Hook callbacks
+fired during the merge always run on the main goroutine and receive the stage-0
+`*Writer`.
+
+### Changes
+
+- **`World.stages`** — replaces `deferMu`/`deferDepth`/`deferred`; a slice of
+  `*stage` structs (one per goroutine context). `stages[0]` is the main stage;
+  `stages[1..N]` are worker stages with `deferDepth` permanently 1.
+- **`Writer.stage`** — each `Writer` now carries a pointer to its owning stage.
+  `Set`, `Remove`, `Delete`, `AddID`, `RemoveID`, `SetPair`, `SetByID`,
+  `SetPairByID` all route through `stage.queue` when `deferDepth > 0`.
+- **`QueryIter.Writer()`** — returns the per-worker `*Writer` inside a
+  multi-threaded system dispatch; returns the shared stage-0 `*Writer` otherwise.
+- **`BenchmarkMultiThreadedDeferredSet`** — new benchmark sweeping workers in
+  {1, 2, 4}; demonstrates ≥ 2x speedup on 4 workers vs 1 worker for the
+  deferred-mutation path.
+
 ## v0.15.0 — 2026-05-11 — Scoped Capability API (Reader / Writer) — BREAKING CHANGE
 
 > **Breaking change.** The legacy `Defer`/`DeferBegin`/`DeferEnd`/`Readonly`/`ReadonlyBegin`/`ReadonlyEnd`

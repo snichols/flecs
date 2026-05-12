@@ -10,23 +10,19 @@ import (
 // addIDOnWorld adds the component or tag identified by id to entity e.
 // Internal helper used by Writer.AddID and scope.AddID.
 func addIDOnWorld(w *World, e ID, e2 ID) bool {
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	s0 := w.stages[0]
+	if s0.deferDepth > 0 {
 		rec := w.index.Get(e)
 		if rec == nil {
-			w.deferMu.Unlock()
 			panic("flecs: AddID called on dead entity")
 		}
 		if rec.Table != nil && rec.Table.HasComponent(e2) {
-			w.deferMu.Unlock()
 			return false
 		}
 		w.registry.EnsureID(e2)
-		w.deferred.append(cmd{kind: cmdAddID, entity: e, id: e2})
-		w.deferMu.Unlock()
+		s0.queue.append(cmd{kind: cmdAddID, entity: e, id: e2})
 		return true
 	}
-	w.deferMu.Unlock()
 	return addIDImmediate(w, e, e2)
 }
 
@@ -43,24 +39,6 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 	return true
 }
 
-// removeIDOnWorld removes the component or tag identified by id from entity e.
-// Internal helper used by Writer.RemoveID and scope.RemoveID.
-func removeIDOnWorld(w *World, e ID, id ID) bool {
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
-		rec := w.index.Get(e)
-		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
-			w.deferMu.Unlock()
-			return false
-		}
-		w.deferred.append(cmd{kind: cmdRemoveID, entity: e, id: id})
-		w.deferMu.Unlock()
-		return true
-	}
-	w.deferMu.Unlock()
-	return removeIDImmediate(w, e, id)
-}
-
 func removeIDImmediate(w *World, e ID, id ID) bool {
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -71,29 +49,6 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 	}
 	w.migrate(e, 0, id, nil)
 	return true
-}
-
-// setPairOnWorld sets the pair (rel, tgt) on entity e with typed data value v.
-// Internal helper used by Writer.SetPair and scope.SetPair.
-func setPairOnWorld[T any](w *World, e ID, rel ID, tgt ID, v T) {
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
-		// RegisterPairData may panic; unlock via defer so the mutex is always released.
-		defer w.deferMu.Unlock()
-		pairID := MakePair(rel, tgt)
-		pairInfo := component.RegisterPairData[T](w.registry, pairID)
-		if pairInfo.Size > 0 {
-			off, buf := w.deferred.arena.alloc(int(pairInfo.Size), int(pairInfo.Align))
-			copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), pairInfo.Size))
-			w.deferred.append(cmd{kind: cmdSetPair, entity: e, id: pairID,
-				valueOff: off, valueSize: uint32(pairInfo.Size)})
-		} else {
-			w.deferred.append(cmd{kind: cmdSetPair, entity: e, id: pairID})
-		}
-		return
-	}
-	w.deferMu.Unlock()
-	setPairImmediate[T](w, e, rel, tgt, v)
 }
 
 func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
