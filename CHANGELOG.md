@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.34.0 — 2026-05-12 — Phase 15.2: Exclusive relationship trait
+
+### Added
+
+- **`SetExclusive(w, relID)`** — marks a relationship as exclusive: at most one target per source entity is allowed. Adding a second target automatically replaces the first via a single archetype migration, firing `OnRemove` for the old pair and `OnAdd` for the new pair through the standard hook/observer machinery.
+- **`IsExclusive(w, relID) bool`** — reports whether a relationship is marked exclusive.
+- **`w.Exclusive() ID`** — returns the built-in Exclusive trait entity (index 17). The bare-tag form `fw.AddID(relID, w.Exclusive())` is equivalent to `SetExclusive(w, relID)`.
+- **Exclusive bootstrap**: the built-in relationships `ChildOf`, `OnDelete`, `OnDeleteTarget`, and `OnInstantiate` are marked exclusive in `World.New()`. `IsA` is intentionally NOT exclusive — multiple prefab bases per entity are permitted.
+- **ChildOf single-parent fix**: `ChildOf` is now enforced exclusive. `ParentOf` always returns the sole parent; the prior "multiple parents allowed but unusual" caveat is removed.
+- **`exclusive.go`** — new file parallel to `cleanup.go` and `instantiate_policies.go`.
+- **`exclusive_test.go`** — 9 test cases: non-exclusive allows multiple targets, replace-on-add with hook verification, replace-on-add in deferred batch (net result only), re-add same target is no-op, ChildOf exclusive after bootstrap, IsA NOT exclusive, IsExclusive round-trip, exclusive+cleanup interaction (no cascade delete on pair replace), bare-tag form sets flag.
+
+### Documentation
+
+- `docs/Relationships.md` — Exclusive section replaced "Not yet ported" callout with shipped API and worked example.
+- `docs/ComponentTraits.md` — Exclusive section rewritten with Go API; roadmap table row updated to `✅ shipped (v0.34.0)`.
+- `docs/README.md` — Exclusive entries in the feature-gap lists updated to shipped status.
+- `ROADMAP.md` — Exclusive added to the Shipped section; built-in entity count note updated to 17.
+
+### Migration Guide
+
+- `ChildOf` is now exclusive by default. If any existing code added two `(ChildOf, *)` pairs to the same entity (the prior "allowed but unusual" path), the second add now silently replaces the first. Audit `childof_test.go` or similar if you relied on multiple parents.
+- Built-in entity count increases from 16 to 17. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to include `Exclusive` (17).
+
+### Non-goals (explicitly out of scope for v0.34.0)
+
+- No Symmetric trait. No Transitive trait. No Reflexive trait.
+- No observer-driven enforcement layer (runtime addIDImmediate check is sufficient).
+- No `UnsetExclusive` / removing the Exclusive flag.
+
+---
+
 ## v0.33.0 — 2026-05-12 — Phase 15.1: OnInstantiate Override / DontInherit policies
 
 ### Added

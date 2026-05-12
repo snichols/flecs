@@ -67,6 +67,27 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		if firstIdx == w.onInstantiateID.Index() {
 			applyInstantiatePolicy(w, e, id.Second())
 		}
+	} else if id.Index() == w.exclusiveID.Index() {
+		// Bare Exclusive tag added to entity e: mark e's relationship as exclusive.
+		// This is the fw.AddID(myRel, w.Exclusive()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsExclusive).
+		applyExclusivePolicy(w, e)
+	}
+	// Exclusive pair enforcement: if adding (R, B) and the entity already has
+	// (R, A) where A != B, replace A with B in a single migration so that
+	// OnRemove for A and OnAdd for B both fire via the standard emit path.
+	// This mirrors C table_graph.c:1062-1073 flecs_table_traverse_add.
+	if id.IsPair() && w.exclusivePolicies[id.First()] {
+		rec = w.index.Get(e)
+		if rec != nil && rec.Table != nil {
+			relIdx := uint32(id.First())
+			for _, sigID := range rec.Table.Type() {
+				if sigID.IsPair() && uint32(sigID.First()) == relIdx && sigID.Second() != id.Second() {
+					w.migrate(e, id, sigID, nil)
+					return true
+				}
+			}
+		}
 	}
 	w.migrate(e, id, 0, nil)
 	// Override copy hook: after adding (IsA, prefab) to an entity, walk the prefab's

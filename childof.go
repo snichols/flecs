@@ -32,8 +32,9 @@ func (w *World) EachChild(parent ID, fn func(child ID) bool) {
 // ParentOf returns the parent of entity e: the target of the first
 // (ChildOf, *) pair found in e's archetype signature.
 //
-// If e has multiple ChildOf parents (allowed but unusual), the first one in
-// signature order is returned.
+// ChildOf is an exclusive relationship: at most one parent is allowed. Adding a
+// second (ChildOf, parent) pair replaces the first. The returned value is always
+// the entity's sole parent.
 //
 // Returns (0, false) if e is not alive or has no ChildOf relationship.
 func (w *World) ParentOf(e ID) (ID, bool) {
