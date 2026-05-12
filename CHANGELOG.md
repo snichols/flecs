@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.3: Relationships doc port (upcoming v0.22.0)
+## v0.22.0 — 2026-05-12 — Phase 14.3: Relationships doc port
 
 ### Added
 
