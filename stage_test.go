@@ -119,30 +119,43 @@ func TestStageWorkerIsolationNoLeakBeforeMerge(t *testing.T) {
 // ── Merge ordering ───────────────────────────────────────────────────────────
 
 // TestStageMergeOrdering verifies that stage queues drain in ascending id
-// order: worker-stage mutations appear before main-stage hook mutations.
+// order: hooks triggered by stage-1 mutations all fire before hooks triggered
+// by stage-2 mutations.
+//
+// Setup: 4 entities in one archetype, 2 workers.  clippedCopy assigns rows
+// [0,1] to worker-0 (stage 1) and rows [2,3] to worker-1 (stage 2).  The
+// multi-threaded system adds Velocity to every entity; OnAdd[stageVel] records
+// entity IDs in order.  After wg.Wait the dispatcher merges stage 1 then
+// stage 2, so hookOrder must be entirely stage-1 entities followed by entirely
+// stage-2 entities with no interleaving.
 func TestStageMergeOrdering(t *testing.T) {
 	w := flecs.New()
 	w.SetWorkerCount(2)
 	posID := flecs.RegisterComponent[stagePos](w)
 	velID := flecs.RegisterComponent[stageVel](w)
 
-	var mu sync.Mutex
-	var order []string
+	// n must be even so clippedCopy gives each worker exactly n/2 entities.
+	const n = 4
+	entities := make([]flecs.ID, n)
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, stagePos{X: float32(i)})
+			entities[i] = e
+		}
+	})
 
-	// Hook on Velocity fires when Velocity is added. It records "onAdd:vel".
-	flecs.OnAdd[stageVel](w, func(fw *flecs.Writer, _ flecs.ID, _ stageVel) {
+	var mu sync.Mutex
+	var hookOrder []flecs.ID
+
+	// Hook records each entity ID in the order its OnAdd fires.
+	flecs.OnAdd[stageVel](w, func(_ *flecs.Writer, entity flecs.ID, _ stageVel) {
 		mu.Lock()
-		order = append(order, "onAdd:vel")
+		hookOrder = append(hookOrder, entity)
 		mu.Unlock()
 	})
 
-	var e flecs.ID
-	w.Write(func(fw *flecs.Writer) {
-		e = fw.NewEntity()
-		flecs.Set(fw, e, stagePos{})
-	})
-
-	// Workers add Velocity; hook fires during stage merge.
+	// Workers add Velocity; hooks fire during stage merge, not during dispatch.
 	cq := flecs.NewCachedQuery(w, posID)
 	sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
 		fw := it.Writer()
@@ -156,10 +169,37 @@ func TestStageMergeOrdering(t *testing.T) {
 
 	w.Progress(0)
 
-	// After merge, e should have Velocity.
+	// All n hooks must have fired.
+	if len(hookOrder) != n {
+		t.Fatalf("expected %d OnAdd[stageVel] firings, got %d", n, len(hookOrder))
+	}
+
+	// Stage 1 (worker 0) owns rows [0, n/2): entities[0..n/2-1].
+	// Stage 2 (worker 1) owns rows [n/2, n): entities[n/2..n-1].
+	// Because stages merge in ascending id order, all stage-1 entity hooks must
+	// appear in the first half of hookOrder and all stage-2 entity hooks in the
+	// second half — no interleaving.
+	stage1 := make(map[flecs.ID]bool, n/2)
+	for _, e := range entities[:n/2] {
+		stage1[e] = true
+	}
+	for i, e := range hookOrder[:n/2] {
+		if !stage1[e] {
+			t.Errorf("hookOrder[%d]=%v: stage-2 entity appeared before stage-2 boundary; stage-1 hooks must precede stage-2 hooks", i, e)
+		}
+	}
+	for i, e := range hookOrder[n/2:] {
+		if stage1[e] {
+			t.Errorf("hookOrder[%d]=%v: stage-1 entity appeared after stage-1 boundary; stage-1 hooks must precede stage-2 hooks", n/2+i, e)
+		}
+	}
+
+	// All entities must have Velocity after merge.
 	w.Read(func(fr *flecs.Reader) {
-		if !fr.HasID(e, velID) {
-			t.Fatal("entity should have Velocity after worker AddID and stage merge")
+		for _, e := range entities {
+			if !fr.HasID(e, velID) {
+				t.Fatalf("entity %v should have Velocity after worker AddID and stage merge", e)
+			}
 		}
 	})
 }
