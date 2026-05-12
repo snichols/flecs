@@ -173,7 +173,9 @@ func TestRest_Entities(t *testing.T) {
 	}
 	defer resp1.Body.Close()
 	var one []map[string]any
-	json.NewDecoder(resp1.Body).Decode(&one)
+	if err := json.NewDecoder(resp1.Body).Decode(&one); err != nil {
+		t.Fatalf("decode /entities?limit=1: %v", err)
+	}
 	if len(one) != 1 {
 		t.Fatalf("?limit=1: want 1 entity, got %d", len(one))
 	}

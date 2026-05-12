@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.32.0 — Phase 15.0: Configurable cleanup policies
+## v0.32.0 — 2026-05-12 — Phase 15.0: Configurable cleanup policies
 
 ### Added
 
