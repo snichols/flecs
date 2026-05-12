@@ -119,6 +119,8 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.CanToggle():      {},
 		w.Symmetric():      {},
 		w.Transitive():     {},
+		w.Wildcard():       {},
+		w.Any():            {},
 	}
 
 	var result []byte

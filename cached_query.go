@@ -294,6 +294,8 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		pos:             -1,
 		cached:          true,
 		tableSourcesRef: cq.tableUpSources,
+		wildcardTermIdx: findWildcardTermIdx(cq.w, cq.terms),
+		wildcardPairPos: -1,
 	}
 }
 
@@ -368,11 +370,16 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		switch term.Kind {
 		case TermAnd:
 			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
-				// Transitive pair matching: if (R, C) is the term and R is
-				// flagged transitive, walk the (R, *) chains on this table.
-				// Cached queries re-evaluate on table creation; pair-mutation
-				// staleness is accepted and documented (see type comment).
-				if term.ID.IsPair() && cq.w.transitivePolicies[ID(term.ID.First().Index())] {
+				// Wildcard/Any pair matching: sentinel IDs never appear in table
+				// signatures; check for any concrete pair that satisfies the pattern.
+				if isWildcardTerm(cq.w, term.ID) {
+					if !tableHasWildcardMatch(cq.w, t, term.ID) {
+						return
+					}
+				} else if term.ID.IsPair() && cq.w.transitivePolicies[ID(term.ID.First().Index())] {
+					// Transitive pair matching: walk (R, *) chains.
+					// Cached queries re-evaluate on table creation; pair-mutation
+					// staleness is accepted and documented (see type comment).
 					if !transitiveTableMatches(cq.w, t, term.ID) {
 						return
 					}

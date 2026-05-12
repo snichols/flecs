@@ -318,16 +318,20 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
 	// Prefer a TraverseSelf TermAnd seed (fewest tables in the component index).
-	// Skip transitive pair terms: TablesFor() returns only direct-match tables,
-	// missing tables that transitively reach the pair's target via (R, *) chains.
+	// Skip transitive and wildcard pair terms: they need an all-tables scan
+	// because the concrete pair IDs are not indexed under the sentinel ID.
 	seedIdx := -1
 	minCount := 0
+	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
 	for i, term := range q.terms {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
 		}
 		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
 			continue // transitive pairs need all-tables scan; skip as seed
+		}
+		if isWildcardTerm(q.w, term.ID) {
+			continue // wildcard/any pairs need all-tables scan; skip as seed
 		}
 		c := q.w.compIndex.Count(term.ID)
 		if seedIdx == -1 || c < minCount {
@@ -346,12 +350,14 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	return &QueryIter{
-		q:          q,
-		world:      q.w,
-		terms:      q.terms,
-		orGroups:   q.orGroups,
-		candidates: candidates,
-		pos:        -1,
+		q:               q,
+		world:           q.w,
+		terms:           q.terms,
+		orGroups:        q.orGroups,
+		candidates:      candidates,
+		pos:             -1,
+		wildcardTermIdx: wildcardIdx,
+		wildcardPairPos: -1,
 	}
 }
 
@@ -395,14 +401,32 @@ type QueryIter struct {
 	wFirst       int     // first row for this worker in the current table
 	wCount       int     // row count for this worker in the current table
 	workerWriter *Writer // per-worker Writer bound to the worker's stage; set by the dispatcher
+	// wildcard expansion state (zero-value = no wildcard term in this query)
+	wildcardTermIdx int  // index of the first wildcard/any term in terms[]; -1 if none
+	wildcardPairs   []ID // concrete matching pair IDs in current table for the wildcard term
+	wildcardPairPos int  // position in wildcardPairs; -1 = not yet set for current table
 }
 
-// Next advances to the next matching table. Returns true when positioned on a
-// valid table; returns false when iteration is exhausted.
+// Next advances to the next matching table (or next wildcard expansion row
+// within the current table). Returns true when positioned on a valid row;
+// returns false when iteration is exhausted.
+//
+// When the query contains a wildcard term, Next emits one row per concrete
+// matching pair in each table (Wildcard) or exactly one row per table (Any).
+// Use [MatchedTarget], [MatchedID], and [FieldByMatch] inside the loop body
+// to inspect the concrete pair for the current row.
 //
 // For multi-threaded iterators (workerTotal > 0), tables where this worker's
 // row count is zero are skipped transparently.
 func (it *QueryIter) Next() bool {
+	// Wildcard expansion: advance to the next concrete pair in the current table
+	// before advancing the table pointer.
+	if it.wildcardTermIdx >= 0 && it.wildcardPairPos >= 0 &&
+		it.wildcardPairPos < len(it.wildcardPairs)-1 {
+		it.wildcardPairPos++
+		return true
+	}
+
 	for {
 		it.pos++
 		if it.pos >= len(it.candidates) {
@@ -431,6 +455,12 @@ func (it *QueryIter) Next() bool {
 				continue // this worker has no rows in this table
 			}
 		}
+		// For wildcard terms, collect the matching concrete pairs and reset the
+		// expansion position. matchesTable already guarantees at least one match.
+		if it.wildcardTermIdx >= 0 {
+			it.wildcardPairs = wildcardMatchingPairs(it.world, t, it.terms[it.wildcardTermIdx].ID)
+			it.wildcardPairPos = 0
+		}
 		it.current = t
 		it.updateOptionalPresence(t)
 		return true
@@ -452,10 +482,15 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 			switch term.Traverse {
 			case TraverseSelf, TraverseExplicitSelf:
 				if !t.HasComponent(term.ID) {
-					// Transitive pair matching: if (R, C) is the term and R is
-					// flagged transitive, walk the (R, *) chains on this table
-					// to see whether any path reaches C.
-					if term.ID.IsPair() && it.world.transitivePolicies[ID(term.ID.First().Index())] {
+					// Wildcard/Any pair matching: the sentinel ID itself is never
+					// in any table; instead check for any concrete pair that satisfies
+					// the wildcard pattern (e.g. any (R, X) for term (R, Wildcard)).
+					if isWildcardTerm(it.world, term.ID) {
+						if !tableHasWildcardMatch(it.world, t, term.ID) {
+							return false
+						}
+					} else if term.ID.IsPair() && it.world.transitivePolicies[ID(term.ID.First().Index())] {
+						// Transitive pair matching: walk (R, *) chains.
 						if !transitiveTableMatches(it.world, t, term.ID) {
 							return false
 						}

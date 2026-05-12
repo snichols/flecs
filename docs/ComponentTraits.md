@@ -556,7 +556,7 @@ q.Each(func(it *flecs.QueryIter) {
 - **Depth limit:** bounded at 64 hops; chains deeper than the limit are silently truncated without panicking.
 - **Cached query staleness:** `CachedQuery` pre-evaluates transitive chains at construction and on new-table creation. It does NOT re-evaluate on pair mutation; staleness is accepted and documented.
 - **Transitive does not imply Reflexive:** `(R, self)` is not auto-matched by transitive chains. Reflexive is a separate unported trait.
-- **Wildcard interaction:** wildcard query terms will compose with Transitive when Wildcard is ported.
+- **Wildcard interaction:** wildcard query terms compose correctly with Transitive (shipped in v0.38.0). A `(R, Wildcard)` term on a transitive relationship will match tables that have any direct `(R, X)` pair and emit one expansion row per concrete pair found. See [Query-term sentinels](#query-term-sentinels-wildcard-and-any) below.
 
 ---
 
@@ -646,6 +646,19 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Traversable** | `EcsTraversable` | ⏳ planned | Any entity can be used for traversal; no formal enforcement |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
 | **With** | `EcsWith` | ⏳ planned | No automatic co-addition; use `OnAdd` hook as workaround |
+
+---
+
+## Query-term sentinels: Wildcard and Any
+
+`w.Wildcard()` (`*`) and `w.Any()` (`_`) are built-in entity IDs used exclusively as query-term annotations. They are **not** component traits — do not add them to entity or component records.
+
+| Sentinel | Index | Semantics |
+|---|---|---|
+| `w.Wildcard()` | 21 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
+| `w.Any()` | 22 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
+
+Both sentinels work in target and relationship positions. See [`docs/Queries.md`](Queries.md) § *Wildcard and Any query terms* for the full API.
 
 ---
 
