@@ -79,7 +79,7 @@ Only direct children are visited. To walk the entire subtree, recurse manually (
 
 ## Cascade delete
 
-When a parent is deleted, all of its children are deleted in **depth-last order** (deepest descendants first). This is hardcoded for ChildOf:
+When a parent is deleted, all of its children are deleted in **depth-last order** (deepest descendants first). This is driven by the general cleanup-policy mechanism (shipped in v0.32.0): `ChildOf` has `(OnDeleteTarget, DeleteAction)` registered at bootstrap, so deleting any entity cascades to all `(ChildOf, entity)` sources:
 
 ```go
 w := flecs.New()
@@ -105,7 +105,7 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
-The implementation lives in `childof.go`. Configurable cleanup policies for custom relationships are not yet ported; see [Not yet ported](#not-yet-ported).
+The same mechanism applies to any custom relationship — see [Relationships.md § Cleanup policies](Relationships.md) for the full API.
 
 ---
 
@@ -303,8 +303,6 @@ w.Read(func(r *flecs.Reader) {
 ## Not yet ported
 
 The following upstream C features are not yet implemented in Go flecs:
-
-- **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget`) — in C flecs you can choose whether deleting a relationship entity or target cascades a delete, remove, or nothing. In Go flecs, ChildOf is hardcoded to cascade-delete children; custom cleanup policies for arbitrary relationships are not yet configurable.
 
 - **`OrderedChildren` trait** — add this trait to a parent in C flecs to guarantee that `children()` iterates in creation order regardless of component mutations that would normally move children between tables. Not yet ported in Go flecs.
 

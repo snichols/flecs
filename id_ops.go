@@ -35,6 +35,33 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		return false
 	}
 	w.registry.EnsureID(id)
+	// When a cleanup-trait pair is added to an entity, translate the pair into
+	// an entry in the world's cleanupPolicies map. This makes the pair-add path
+	// fw.AddID(relID, MakePair(w.OnDeleteTarget(), w.DeleteAction())) equivalent
+	// to SetCleanupPolicy(w, relID, w.OnDeleteTarget(), w.DeleteAction()).
+	// Mirrors the C bootstrap.c:294-309 flecs_register_on_delete observer approach.
+	if id.IsPair() {
+		firstIdx := id.First().Index()
+		if firstIdx == w.onDeleteID.Index() || firstIdx == w.onDeleteTargetID.Index() {
+			var trait ID
+			if firstIdx == w.onDeleteID.Index() {
+				trait = w.onDeleteID
+			} else {
+				trait = w.onDeleteTargetID
+			}
+			actionIdx := id.Second().Index()
+			var action ID
+			switch actionIdx {
+			case w.deleteActionID.Index():
+				action = w.deleteActionID
+			case w.panicActionID.Index():
+				action = w.panicActionID
+			default:
+				action = w.removeActionID
+			}
+			applyCleanupPolicy(w, e, trait, action)
+		}
+	}
 	w.migrate(e, id, 0, nil)
 	return true
 }

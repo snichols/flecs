@@ -196,31 +196,41 @@ ecs_enable_component(world, e, Position, true);  // re-enable
 
 ### Cleanup traits (OnDelete / OnDeleteTarget)
 
-**What they do:** Cleanup traits specify what happens when a component, tag, or relationship entity is deleted, or when a target used in a relationship pair is deleted.
+**Shipped in v0.32.0.**
+
+Cleanup traits specify what happens when a component, tag, or relationship entity is deleted, or when a target used in a relationship pair is deleted.
 
 Two **conditions**:
-- `OnDelete` — fires when the component/tag/relationship entity itself is deleted.
-- `OnDeleteTarget` — fires when a target entity used in a pair for this relationship is deleted.
+- `w.OnDelete()` — fires when the component/tag/relationship entity itself is deleted.
+- `w.OnDeleteTarget()` — fires when a target entity used in a pair for this relationship is deleted.
 
 Three **actions**:
-- `Remove` (default) — remove the component/pair from all entities that have it.
-- `Delete` — delete all entities that have the component/pair.
-- `Panic` — throw a fatal error.
+- `w.RemoveAction()` (default) — remove the component/pair from source entities.
+- `w.DeleteAction()` — delete all source entities that have the component/pair.
+- `w.PanicAction()` — panic with a descriptive message. The world is left in a halted state; no recovery is attempted.
 
-**What the C API looks like:**
+**Go API:**
 
-```c
-// C — not available in Go flecs
-// Delete children when parent is deleted (like built-in ChildOf behavior):
-ecs_add_pair(world, ChildOf, EcsOnDeleteTarget, EcsDelete);
+```go
+w := flecs.New()
 
-// Remove a tag from all entities when the tag entity is deleted:
-ecs_add_pair(world, Archer, EcsOnDelete, EcsRemove);
+var likesID flecs.ID
+w.Write(func(fw *flecs.Writer) { likesID = fw.NewEntity() })
+
+// Delete all "likers" when the liked target is deleted:
+flecs.SetCleanupPolicy(w, likesID, w.OnDeleteTarget(), w.DeleteAction())
+
+// Or equivalently via pair-add:
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(likesID, flecs.MakePair(w.OnDeleteTarget(), w.DeleteAction()))
+})
+
+// Read back the registered policy:
+action, ok := flecs.GetCleanupPolicy(w, likesID, w.OnDeleteTarget())
+// action == w.DeleteAction(), ok == true
 ```
 
-**Workaround:** The built-in `ChildOf` relationship already hard-codes cascade delete of children (when a parent is deleted, all `(ChildOf, parent)` entities are deleted recursively). For custom relationships or custom cleanup policies, there is no equivalent mechanism — application code must perform manual cleanup.
-
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#feature-gap-list): *Cleanup policies (`OnDeleteTarget`, `OnDelete(component)`, `Delete` action)*. Also see [additional gaps from Phase 14.1](README.md#additional-gaps-discovered-in-phase-141-entitiescomponents-port): *Cleanup policies / component-delete cascade*.
+`ChildOf` has `(OnDeleteTarget, DeleteAction)` registered at bootstrap — this drives the parent-cascade-delete behavior. `IsA` has **no** default policy (matching C); see [PrefabsManual § Protecting prefabs](PrefabsManual.md) for the opt-in recipe.
 
 ---
 
@@ -546,8 +556,8 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **DontInherit** (target) | `EcsDontInherit` | 🟡 partial (v0.18.0) | Entity ID exists (`w.DontInherit()`); exclusion at instantiation not implemented |
 | **Acyclic** | `EcsAcyclic` | ⏳ planned | No cycle detection for custom relationships |
 | **CanToggle** | `EcsCanToggle` | ⏳ planned | No per-entity component bitset toggle |
-| **OnDelete** | `EcsOnDelete` | ⏳ planned | No configurable cleanup policy on component delete |
-| **OnDeleteTarget** | `EcsOnDeleteTarget` | ⏳ planned | `ChildOf` cascade-delete is hardcoded; no general policy |
+| **OnDelete** | `EcsOnDelete` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDelete(), action)` / `GetCleanupPolicy`; actions: `RemoveAction`, `DeleteAction`, `PanicAction` |
+| **OnDeleteTarget** | `EcsOnDeleteTarget` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDeleteTarget(), action)`; `ChildOf` bootstrapped with `DeleteAction`; `IsA` has no default (opt-in) |
 | **Constant** | *(informal)* | ⏳ planned | No read-only enforcement after first write |
 | **DontFragment** | `EcsDontFragment` | ⏳ planned | No sparse non-fragmenting storage |
 | **Exclusive** | `EcsExclusive` | ⏳ planned | No automatic single-target enforcement |

@@ -69,7 +69,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Query language / DSL** (`FlecsScript`, `FlecsQueryLanguage`) — C-only scripting layer.
 - **Module system** (`ECS_MODULE` / `world.import`) — Go packages serve this role natively.
 - **Entity hooks beyond OnAdd/OnSet/OnRemove** — C has `OnDelete`, `OnTableEmpty`, `OnTableFill`.
-- **Cleanup policies** (`OnDeleteTarget`, `OnDelete(component)`, `Delete` action) — partial in Go port.
+- **Cleanup policies** (`OnDeleteTarget`, `OnDelete`) — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`.
 - **Reflection / meta cursor** (`ecs_meta_cursor`, `ecs_meta_type_op`) — not ported.
 - **Sparse storage** (`EcsSparse` component trait opt-in) — not ported.
 - **World-level pre/post merge hooks** — not ported.
@@ -100,7 +100,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Entity disabling** (`Enable` / `Disable`) — exclude entities from queries temporarily via a `Disabled` tag without deleting them. not yet ported in Go flecs.
 - **`on_replace` hook** — receives both the previous and new component value when a component is overwritten via `Set`. not yet ported in Go flecs.
 - **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
-- **Cleanup policies / component-delete cascade** — when a component entity is deleted, automatically remove that component from all entities that have it (C default behaviour via `OnDelete` cleanup policy). not yet ported in Go flecs.
+- **Cleanup policies / component-delete cascade** — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`. The `OnDelete` and `OnDeleteTarget` traits are now fully configurable with `RemoveAction`, `DeleteAction`, and `PanicAction`.
 - **`CanToggle` component trait** — per-entity component enable/disable via `ecs_enable_component`; cheaper than remove/add because it flips a bit rather than moving the entity to another archetype. not yet ported in Go flecs.
 
 ### Additional gaps discovered in Phase 14.2 (Queries port)
@@ -120,7 +120,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Symmetric relationship trait** (`EcsSymmetric`) — makes a relationship bidirectional: adding `(R, Y)` to entity `X` automatically adds `(R, X)` to entity `Y`. not yet ported in Go flecs.
 - **Transitive relationship trait** (`EcsTransitive`) — enables transitive query matching for custom relationships (if `A R B` and `B R C`, queries for `(R, C)` also match `A`). The built-in `IsA` already walks its chain in `Get`/`Has`; general transitivity for custom relationships requires this unported trait. not yet ported in Go flecs.
 - **Traversable relationship trait** (`EcsTraversable`) — formally marks a relationship as safe to traverse in queries; controls which relationships the query engine may follow when evaluating `Up`/`SelfUp`/`Cascade` terms. In Go flecs any entity can be used as a traversal relationship without explicit registration; the formal trait and its safety enforcement are not ported. not yet ported in Go flecs.
-- **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget` with `Delete` / `Remove` actions) — controls what happens when a relationship entity or target entity is deleted. `ChildOf` is hardcoded to cascade-delete children; custom cleanup policies for arbitrary relationships are not yet configurable. not yet ported in Go flecs.
+- **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget`) — **shipped in v0.32.0**. `SetCleanupPolicy` / `GetCleanupPolicy` with `DeleteAction`, `RemoveAction`, and `PanicAction`. `ChildOf` is bootstrapped with `(OnDeleteTarget, DeleteAction)`. See [Relationships.md § Cleanup policies](Relationships.md).
 - **PairIsTag trait** (`EcsPairIsTag`) — forces a relationship's pairs to behave as tags regardless of whether an element is a component type. The built-in `ChildOf` uses this internally. Custom relationships cannot yet opt into this trait. not yet ported in Go flecs.
 - **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a parent scope so that all subsequently created entities automatically receive a `(ChildOf, scope)` pair without explicit `AddID` calls. not yet ported in Go flecs.
 
@@ -149,7 +149,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.7 (ObserversManual port)
 
 - **`OnReplace` hook** — fires when `Set` overwrites an existing component value; receives both the old and new value. not yet ported in Go flecs.
-- **`OnDelete` / `OnDeleteTarget` events** — C flecs fires `OnDelete` when a component entity is deleted and `OnDeleteTarget` when a pair target is deleted. not yet ported in Go flecs.
+- **`OnDelete` / `OnDeleteTarget` observer events** — C flecs fires observer callbacks for these events when a component entity or pair target is deleted. The Go port implements cleanup *policies* (v0.32.0) but not observer-driven cleanup hooks. not yet ported in Go flecs.
 - **`OnTableEmpty` / `OnTableFill` events** — fire when an archetype table transitions between empty and non-empty. not yet ported in Go flecs.
 - **Custom events** — create arbitrary event entities and emit them with `ecs_emit`; Go flecs supports only the three built-in events (`EventOnAdd`, `EventOnSet`, `EventOnRemove`). not yet ported in Go flecs.
 - **Term-set observer filters (multi-term observers)** — C observers can match a query with multiple terms (e.g., "fire when Position is set but only if entity also has Velocity"). Go flecs observers subscribe to a single component at a time. not yet ported in Go flecs.

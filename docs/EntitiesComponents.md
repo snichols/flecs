@@ -352,7 +352,21 @@ func registerMovement(w *flecs.World) {
 
 ### Unregistration
 
-> **Not yet ported in Go flecs** — in upstream C flecs, deleting a component entity automatically removes that component from every entity that has it (via the default cleanup policy). Full cleanup-policy support is not yet implemented in the Go port. Deleting the component entity with `w.Delete(posID)` works but does not cascade to remove the component from all entities. See the [feature-gap list](README.md).
+In Go flecs v0.32.0, configurable cleanup policies are shipped. The **default** behavior when a component entity is deleted is `OnDelete + Remove`: the component is removed from all entities that hold it. You can change the policy using `SetCleanupPolicy`:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+
+// Panic if any entity still holds Position when posID is deleted.
+flecs.SetCleanupPolicy(w, posID, w.OnDelete(), w.PanicAction())
+
+// Or via pair-add (equivalent):
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(posID, flecs.MakePair(w.OnDelete(), w.PanicAction()))
+})
+```
+
+**Note:** if `PanicAction` fires mid-cascade the world is in a halted state; no recovery is attempted. See `World.PanicAction()` godoc for details.
 
 ### Singletons
 

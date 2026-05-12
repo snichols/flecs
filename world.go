@@ -59,7 +59,13 @@ type World struct {
 	onInstantiateID    ID                              // built-in OnInstantiate relationship entity (index 8)
 	inheritID          ID                              // built-in Inherit trait entity (index 9)
 	overrideID         ID                              // built-in Override trait entity (index 10)
-	dontInheritID      ID                              // built-in DontInherit trait entity (index 11; first user entity at index 12)
+	dontInheritID      ID                              // built-in DontInherit trait entity (index 11)
+	onDeleteID         ID                              // built-in OnDelete trait relationship entity (index 12)
+	onDeleteTargetID   ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
+	removeActionID     ID                              // built-in Remove cleanup action entity (index 14)
+	deleteActionID     ID                              // built-in Delete cleanup action entity (index 15)
+	panicActionID      ID                              // built-in Panic cleanup action entity (index 16; first user entity at index 17)
+	cleanupPolicies    map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	exclusiveAccess    atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread    string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages             []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -90,7 +96,12 @@ type World struct {
 //   - Index 9: Inherit built-in trait entity
 //   - Index 10: Override built-in trait entity
 //   - Index 11: DontInherit built-in trait entity
-//   - Index 12+: user entities (NewEntity)
+//   - Index 12: OnDelete built-in cleanup trait relationship entity
+//   - Index 13: OnDeleteTarget built-in cleanup trait relationship entity
+//   - Index 14: RemoveAction built-in cleanup action entity
+//   - Index 15: DeleteAction built-in cleanup action entity
+//   - Index 16: PanicAction built-in cleanup action entity
+//   - Index 17+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -166,6 +177,42 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(dontInherit))
 	w.dontInheritID = dontInherit
+	// Allocate the built-in OnDelete cleanup trait relationship entity (gets index 12).
+	onDelete := w.index.Alloc()
+	rec = w.index.Get(onDelete)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(onDelete))
+	w.onDeleteID = onDelete
+	// Allocate the built-in OnDeleteTarget cleanup trait relationship entity (gets index 13).
+	onDeleteTarget := w.index.Alloc()
+	rec = w.index.Get(onDeleteTarget)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(onDeleteTarget))
+	w.onDeleteTargetID = onDeleteTarget
+	// Allocate the built-in Remove cleanup action entity (gets index 14).
+	removeAction := w.index.Alloc()
+	rec = w.index.Get(removeAction)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(removeAction))
+	w.removeActionID = removeAction
+	// Allocate the built-in Delete cleanup action entity (gets index 15).
+	deleteAction := w.index.Alloc()
+	rec = w.index.Get(deleteAction)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(deleteAction))
+	w.deleteActionID = deleteAction
+	// Allocate the built-in Panic cleanup action entity (gets index 16).
+	panicAction := w.index.Alloc()
+	rec = w.index.Get(panicAction)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(panicAction))
+	w.panicActionID = panicAction
+	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
+	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
+	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
+	// EcsIdOnDeleteTargetDelete. After this call deleteImmediate uses the general
+	// policy loop rather than a hardcoded ChildOf branch.
+	applyCleanupPolicy(w, w.childOfID, w.onDeleteTargetID, w.deleteActionID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}
@@ -175,6 +222,62 @@ func New() *World {
 	w.readCapability.world = w
 	return w
 }
+
+// OnDelete returns the ID of the built-in OnDelete cleanup trait relationship entity.
+//
+// OnDelete is a trait relationship. To apply a cleanup policy to a component or
+// relationship entity, add a pair (OnDelete, action) to it:
+//
+//	flecs.SetCleanupPolicy(w, myRelID, w.OnDelete(), w.DeleteAction())
+//
+// Or via Writer.AddID:
+//
+//	fw.AddID(myRelID, flecs.MakePair(w.OnDelete(), w.DeleteAction()))
+//
+// The action is one of RemoveAction() (default), DeleteAction(), or PanicAction().
+// OnDelete governs what happens to source entities when the relationship/component
+// entity itself is deleted.
+//
+// Note: if Panic fires mid-cascade the world is in a halted state; recovery is
+// not attempted. Document this contract to callers of PanicAction.
+func (w *World) OnDelete() ID { return w.onDeleteID }
+
+// OnDeleteTarget returns the ID of the built-in OnDeleteTarget cleanup trait
+// relationship entity.
+//
+// OnDeleteTarget is a trait relationship. To apply a cleanup policy when a target
+// is deleted, add a pair (OnDeleteTarget, action) to the relationship entity:
+//
+//	flecs.SetCleanupPolicy(w, likesID, w.OnDeleteTarget(), w.DeleteAction())
+//
+// Or via Writer.AddID:
+//
+//	fw.AddID(likesID, flecs.MakePair(w.OnDeleteTarget(), w.DeleteAction()))
+//
+// The action is one of RemoveAction() (default), DeleteAction(), or PanicAction().
+// OnDeleteTarget governs what happens to entities that have (relationship, target)
+// when the target entity is deleted. ChildOf uses DeleteAction() by default,
+// which is what drives the parent-cascade-delete behavior.
+func (w *World) OnDeleteTarget() ID { return w.onDeleteTargetID }
+
+// RemoveAction returns the ID of the built-in Remove cleanup action entity.
+// Remove is the default action for both OnDelete and OnDeleteTarget: when the
+// triggering entity is deleted, the component or pair is removed from sources
+// without deleting the source entities themselves.
+func (w *World) RemoveAction() ID { return w.removeActionID }
+
+// DeleteAction returns the ID of the built-in Delete cleanup action entity.
+// When used with OnDeleteTarget, deleting a target entity cascades to delete all
+// source entities that hold (relationship, target). This is the policy installed
+// on ChildOf by default, producing the parent-cascade-delete behavior.
+func (w *World) DeleteAction() ID { return w.deleteActionID }
+
+// PanicAction returns the ID of the built-in Panic cleanup action entity.
+// When used with OnDeleteTarget, attempting to delete an entity that is the
+// target of the relationship panics with a descriptive message identifying the
+// relationship and the target entity. The world is left in a halted state; no
+// recovery is performed.
+func (w *World) PanicAction() ID { return w.panicActionID }
 
 // PreUpdate returns the ID of the built-in PreUpdate pipeline phase entity.
 // Systems in this phase run first in each Progress call.
@@ -357,7 +460,14 @@ func deleteImmediate(w *World, e ID) bool {
 		return false
 	}
 
-	// Collect e and all descendants via iterative DFS with cycle detection.
+	// Collect e and all entities to cascade-delete via iterative DFS with cycle
+	// detection. For each visited node, consult the cleanup policy registry:
+	// relationships with OnDeleteTargetPanic fire immediately; relationships with
+	// OnDeleteTargetDelete enqueue their sources for deletion. The default Remove
+	// policy (no entry in cleanupPolicies) leaves sources alive with orphaned pairs.
+	//
+	// ChildOf uses OnDeleteTargetDelete (registered in New()), so the parent-cascade
+	// behavior is preserved without a hardcoded branch.
 	stack := []ID{e}
 	var toDelete []ID
 	seen := make(map[ID]struct{})
@@ -369,13 +479,36 @@ func deleteImmediate(w *World, e ID) bool {
 		}
 		seen[node] = struct{}{}
 		toDelete = append(toDelete, node)
-		pairID := MakePair(w.childOfID, node)
-		for _, t := range w.compIndex.TablesFor(pairID) {
-			// Snapshot the entity list before any deleteOne calls mutate the table.
-			entities := append([]ID(nil), t.Entities()...)
-			for _, child := range entities {
-				if w.index.IsAlive(child) {
-					stack = append(stack, child)
+
+		// Apply OnDeleteTarget policies for each relationship that has one.
+		for relID, flags := range w.cleanupPolicies {
+			if flags&(policyOnDeleteTargetDelete|policyOnDeleteTargetPanic) == 0 {
+				continue
+			}
+			pairID := MakePair(relID, node)
+			tables := w.compIndex.TablesFor(pairID)
+			if len(tables) == 0 {
+				continue
+			}
+			if flags&policyOnDeleteTargetPanic != 0 {
+				// Identify a source entity for the panic message.
+				var src ID
+				for _, t := range tables {
+					if es := t.Entities(); len(es) > 0 {
+						src = es[0]
+						break
+					}
+				}
+				panic(fmt.Sprintf("flecs: cannot delete entity %v: it is a target of relationship %v (source entity: %v) which has OnDeleteTarget+Panic policy", node, relID, src))
+			}
+			// policyOnDeleteTargetDelete: cascade-delete all source entities.
+			for _, t := range tables {
+				// Snapshot the entity list before any deleteOne calls mutate the table.
+				entities := append([]ID(nil), t.Entities()...)
+				for _, src := range entities {
+					if w.index.IsAlive(src) {
+						stack = append(stack, src)
+					}
 				}
 			}
 		}
