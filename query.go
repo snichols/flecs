@@ -330,6 +330,9 @@ func (q *Query) Iter() *QueryIter {
 		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
 			continue // transitive pairs need all-tables scan; skip as seed
 		}
+		if term.ID.IsPair() && q.w.reflexivePolicies[ID(term.ID.First().Index())] {
+			continue // reflexive pairs need all-tables scan; skip as seed
+		}
 		if isWildcardTerm(q.w, term.ID) {
 			continue // wildcard/any pairs need all-tables scan; skip as seed
 		}
@@ -489,9 +492,20 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 						if !tableHasWildcardMatch(it.world, t, term.ID) {
 							return false
 						}
-					} else if term.ID.IsPair() && it.world.transitivePolicies[ID(term.ID.First().Index())] {
-						// Transitive pair matching: walk (R, *) chains.
-						if !transitiveTableMatches(it.world, t, term.ID) {
+					} else if term.ID.IsPair() {
+						rel := ID(term.ID.First().Index())
+						isTransitive := it.world.transitivePolicies[rel]
+						isReflexive := it.world.reflexivePolicies[rel]
+						matched := false
+						if isTransitive {
+							matched = transitiveTableMatches(it.world, t, term.ID)
+						}
+						if !matched && isReflexive {
+							// Reflexive self-match: target entity's own table qualifies.
+							// Composes with Transitive: either a chain walk OR the self-match.
+							matched = reflexiveTableMatches(it.world, t, term.ID)
+						}
+						if !matched {
 							return false
 						}
 					} else {

@@ -407,11 +407,29 @@ ecs_add_pair(world, e, Serializable, ecs_id(Position));
 
 ### Reflexive
 
-**What it does:** A reflexive relationship makes `Has(e, R, e)` evaluate to true — every entity implicitly has the relationship to itself. The built-in `IsA` is reflexive: `IsA(Tree, Tree)` is true even if no such pair was explicitly added.
+**Shipped in v0.39.0.** A reflexive relationship asserts `R(X, X)` — every entity implicitly holds the relationship to itself, without storing an explicit self-pair. The built-in `IsA` is reflexive: `IsA(Tree, Tree)` is true even without an explicit pair.
 
-**Workaround:** None in the query engine. Application code can treat `Has(e, R, target)` as true when `e == target` for relationships that should be reflexive.
+```go
+flecs.SetReflexive(w, myRelID)
+// or bare-tag form:
+fw.AddID(myRelID, w.Reflexive())
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#feature-gap-list).
+// HasID self-pair returns true without a stored pair:
+r.HasID(a, flecs.MakePair(myRelID, a)) // → true
+
+// Query for (R, a) also matches a itself:
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(myRelID, a)))
+```
+
+**API:** `flecs.SetReflexive(w, relID)`, `flecs.IsReflexive(w, relID) bool`, `w.Reflexive() ID` (built-in entity at index 21).
+
+**HasID divergence from C:** in C flecs `ecs_has_id` does **not** consult `EcsReflexive`; it is query-only. In Go flecs `HasID` has been extended to return `true` for self-pairs of reflexive relationships, matching the semantic promise in the documentation. This divergence is explicitly documented in CHANGELOG v0.39.0.
+
+**Composition with Transitive:** a relationship that is both Reflexive and Transitive matches the target entity itself **and** all entities that chain to the target via transitive walk. `IsA` uses both traits.
+
+**Cached query note:** `CachedQuery` evaluates the reflexive self-match at cache construction and on every new-table creation; it does not re-evaluate when the target entity migrates. Staleness is accepted for this phase.
+
+**Implementation note:** index 21 in the built-in entity allocation order; mirrors C `EcsReflexive` (a tag entity, not a flag bit). `IsA` is bootstrapped as reflexive, matching `src/bootstrap.c:1321`.
 
 ---
 
@@ -555,7 +573,7 @@ q.Each(func(it *flecs.QueryIter) {
 - **Cycle detection:** the walk uses a visited set; cyclic chains terminate cleanly.
 - **Depth limit:** bounded at 64 hops; chains deeper than the limit are silently truncated without panicking.
 - **Cached query staleness:** `CachedQuery` pre-evaluates transitive chains at construction and on new-table creation. It does NOT re-evaluate on pair mutation; staleness is accepted and documented.
-- **Transitive does not imply Reflexive:** `(R, self)` is not auto-matched by transitive chains. Reflexive is a separate unported trait.
+- **Transitive does not imply Reflexive:** `(R, self)` is not auto-matched by transitive chains alone. Use `flecs.SetReflexive` (shipped in v0.39.0) to enable the self-match; the two traits compose cleanly.
 - **Wildcard interaction:** wildcard query terms compose correctly with Transitive (shipped in v0.38.0). A `(R, Wildcard)` term on a transitive relationship will match tables that have any direct `(R, X)` pair and emit one expansion row per concrete pair found. See [Query-term sentinels](#query-term-sentinels-wildcard-and-any) below.
 
 ---
@@ -635,7 +653,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **OneOf** | `EcsOneOf` | ⏳ planned | No relationship-target constraint |
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
 | **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
-| **Reflexive** | `EcsReflexive` | ⏳ planned | No implicit self-membership |
+| **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
 | **Relationship** | `EcsRelationship` | ⏳ planned | No usage-as-relationship constraint |
 | **Singleton** | `EcsSingleton` | ⏳ planned | No first-class singleton component; workaround via dedicated entity |
 | **Sparse** | `EcsSparse` | ⏳ planned | All components use archetype SoA storage |

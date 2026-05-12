@@ -65,6 +65,11 @@ func (r *Reader) EachTableFor(id ID, fn func(*table.Table) bool) {
 
 // HasID reports whether entity e has the component or tag identified by id —
 // locally or via an IsA chain.
+//
+// Reflexive self-pair extension: if id is a pair (R, e) and R is marked
+// [Reflexive], this returns true even when no self-pair is stored. The
+// first == second gate is evaluated before the policy map lookup so that
+// non-self queries pay zero extra cost (no map access).
 func (r *Reader) HasID(e ID, id ID) bool {
 	rec := r.world.index.Get(e)
 	if rec == nil {
@@ -72,6 +77,18 @@ func (r *Reader) HasID(e ID, id ID) bool {
 	}
 	if rec.Table != nil && rec.Table.HasComponent(id) {
 		return true
+	}
+	// Reflexive self-pair: if the query is (R, e) and R is reflexive, e
+	// implicitly has the pair without a stored record (R(X,X) == true).
+	// Gate on the target == entity check before touching the policy map so
+	// that non-self HasID calls pay zero extra cost (no map access).
+	if id.IsPair() {
+		second := id.Second() // target entity index (generation-stripped by MakePair)
+		if second == ID(e.Index()) {
+			if r.world.reflexivePolicies[id.First()] {
+				return true
+			}
+		}
 	}
 	return hasViaIsA(r.world, e, id, nil)
 }

@@ -621,9 +621,36 @@ Query whether a relationship is transitive with `flecs.IsTransitive(w, relID)`.
 
 **Cached query staleness:** `CachedQuery` evaluates transitive chains at construction and on every new table creation. It does **not** re-evaluate when an intermediate entity's pairs mutate after the cache is built. This is documented and accepted; pair-mutation invalidation is a future enhancement.
 
-**Transitive does not imply Reflexive:** an entity with no direct `(R, self)` pair is not auto-matched just because a chain terminates at itself. Reflexive is a separate unported trait.
+**Transitive does not imply Reflexive:** an entity with no direct `(R, self)` pair is not auto-matched just because a transitive chain terminates at itself. Use `flecs.SetReflexive(w, relID)` (shipped in v0.39.0) to enable the implicit self-match; the two traits compose cleanly.
 
 **Wildcard interaction:** wildcard query terms compose correctly with Transitive. A term `(R, Wildcard)` where `R` is transitive will match tables that have any `(R, X)` pair — including tables that reach the target through a chain — and will emit one row per concrete direct pair in each matched table.
+
+### Reflexive
+
+**Shipped in v0.39.0.** A reflexive relationship asserts `R(X, X)` — every entity implicitly holds the relationship to itself, without storing an explicit self-pair. The canonical example is `IsA`, which is bootstrapped as reflexive: `IsA(Tree, Tree)` is true even if no such pair was explicitly added.
+
+```go
+flecs.SetReflexive(w, locatedInID)
+// or bare-tag form:
+fw.AddID(locatedInID, w.Reflexive())
+
+// HasID self-pair now returns true even without a stored pair.
+r.HasID(city, flecs.MakePair(locatedInID, city)) // → true
+
+// Query for (LocatedIn, city) also matches city itself.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(locatedInID, cityID)))
+// Iteration includes city's own table in addition to entities with a direct pair.
+```
+
+Query whether a relationship is reflexive with `flecs.IsReflexive(w, relID)`.
+
+**HasID divergence from C:** in C flecs, `ecs_has_id` does **not** consult `EcsReflexive`; the trait is query-only. In Go flecs, `HasID(e, MakePair(R, e))` returns `true` when `R` is reflexive, matching the semantic promise already documented in these docs. This is a deliberate, documented extension (see CHANGELOG v0.39.0).
+
+**Reflexive + Transitive composition:** when a relationship has both traits, a query for `(R, target)` matches the target entity itself (Reflexive) **and** all entities that transitively chain to `target` via `R` (Transitive). The two checks are independent and additive.
+
+**Cached query note:** `CachedQuery` evaluates the reflexive self-match at cache construction and on every new-table creation. If the target entity migrates to a different table after the cache is built the cache will not update automatically; staleness is accepted for this phase.
+
+**IsA is reflexive after bootstrap:** any entity `a` satisfies `HasID(a, MakePair(IsA, a))` without storing a pair. Existing tests that expected this to return `false` should be updated if they relied on the pre-v0.39.0 behavior.
 
 ### Traversable
 
