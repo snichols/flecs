@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.44.0 — 2026-05-12 — Phase 15.12: Singleton component trait
+
+### Added
+
+- **`SetSingleton(w, componentID)`** — marks `componentID` as a singleton: at most one entity may hold it at any time. Mirrors C `EcsSingleton` (a trait entity, index 25) but with deliberately different semantics (see below).
+- **`IsSingleton(s scope, componentID ID) bool`** — reports whether `componentID` has been marked Singleton. Accepts `scope` (per Phase 15.8 convention) so it works inside `Read` and `Write` blocks.
+- **`SingletonEntity(s scope, componentID ID) (ID, bool)`** — returns the entity currently holding `componentID` as a singleton, plus true. Returns `(0, false)` if no entity holds it.
+- **`w.Singleton() ID`** — returns the built-in Singleton trait entity (index 25). Bare-tag form: `fw.AddID(componentID, w.Singleton())` is equivalent to `SetSingleton(w, componentID)`.
+- **`Singleton[T any](s scope) (*T, bool)`** — typed read accessor: registers `T` if needed, looks up the singleton holder, returns a pointer into the holding entity's component column. Returns `(nil, false)` if not a singleton or no holder.
+- **`WriteSingleton[T any](fw *Writer, e ID, v T)`** — typed write accessor: ensures `T` is marked singleton (idempotent), then calls `Set[T](fw, e, v)`. Panics if a different entity already holds `T`.
+- **Write-time enforcement** — `addIDImmediate` and the coalesced deferred path both check the singleton instance map before migrating. Panics with `"cannot add singleton component <name> to entity <e>: already held by entity <existing>"`, naming both entities.
+- **Slot lifecycle** — the singleton slot is released when the component is removed via `Remove[T]` or `RemoveID` (both immediate and coalesced deferred paths), or when the holding entity is deleted (`deleteOne` scans `singletonInstances`).
+- **`singleton_test.go`** — 9+ test cases: default no-constraint, second-holder panic (immediate), slot released on remove, `IsSingleton` round-trip, `SingletonEntity` lifecycle, entity delete clears slot, Singleton+Exclusive composition, typed accessors + deferred smoke test, multiple types coexist, pair-form singleton, coalesced deferred paths.
+
+### Changed
+
+- Built-in entity count increases from 26 to 27. User entities now start at index 28.
+- Singleton is at index 25; Wildcard moves to index 26; Any moves to index 27.
+- `marshal.go` skip-set updated to exclude Singleton (25) from JSON serialization.
+- `TestIsAWorldCountBaseline`, `nonDataEntities` in `marshal_test.go`, and `builtinEntityCount` in `meta_test.go` updated to reflect the new count.
+
+### Breaking changes
+
+- Built-in entity count increases from 26 to 27. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 27. User entities now start at index 28.
+
+### Deliberate divergence from C flecs
+
+**Go semantic differs from C `EcsSingleton`:**
+
+| Dimension | C `EcsSingleton` | Go `Singleton` (v0.44.0) |
+|---|---|---|
+| Enforcement predicate | `component == e` (must-be-self: only the component entity itself may hold it) | `at most one entity` (any entity, first wins) |
+| Enforcement scope | Debug builds only (`#ifdef FLECS_DEBUG` in `bootstrap.c:396-427`) | Always on |
+| Instance tracking | None needed (component IS the entity) | `singletonInstances map[ID]ID` per world |
+| Query integration | Queries auto-target the component entity | No query integration in v0.44.0 |
+
+**Migration from the v0.43.0 workaround:** If you were using `RegisterComponent[T] + entity ID` as a manual singleton, no migration is required — it continues to work. To adopt the first-class API: call `SetSingleton(w, compID)` to enforce the at-most-one constraint going forward.
+
+### Non-goals (explicitly out of scope for v0.44.0)
+
+- No singleton-as-tag (only data-bearing components are meaningful as singletons).
+- No automatic creation of the holding entity — the caller creates it explicitly.
+- No serialization of `singletonInstances` runtime state in v1 marshal. The singleton policy on the component entity round-trips automatically (it's stored as a pair in the entity graph); the holding entity's component data round-trips as normal entity data.
+- No query integration (fixed-source query terms for singletons).
+
+---
+
 ## v0.43.0 — 2026-05-12 — Phase 15.11: OneOf relationship trait
 
 ### Added

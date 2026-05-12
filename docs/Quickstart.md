@@ -118,6 +118,31 @@ w.Write(func(fw *flecs.Writer) {
 
 `RegisterComponent` is idempotent — multiple calls for the same type return the same ID and are no-ops after the first call.
 
+### Singletons
+
+Mark a component as a singleton (at most one holder at a time) with `SetSingleton`:
+
+```go
+type GameSettings struct{ Volume int }
+
+gsID := flecs.RegisterComponent[GameSettings](w)
+flecs.SetSingleton(w, gsID)
+
+var settingsEntity flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    settingsEntity = fw.NewEntity()
+    flecs.WriteSingleton(fw, settingsEntity, GameSettings{Volume: 80})
+})
+
+w.Read(func(fr *flecs.Reader) {
+    ptr, ok := flecs.Singleton[GameSettings](fr) // *GameSettings, bool
+    _ = ptr
+    _ = ok
+})
+```
+
+See [ComponentTraits.md](ComponentTraits.md#singleton) for the full API and C-divergence note.
+
 ---
 
 ## Named Entities
