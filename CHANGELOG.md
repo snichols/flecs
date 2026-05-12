@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.2: Queries doc port
+
+### Added
+
+- **`docs/Queries.md`** — full Go-idiomatic port of the upstream C flecs Queries manual. Covers archetype tables and caching, creating queries (`NewQuery` / `NewQueryFromTerms` / `NewCachedQuery` / `NewCachedQueryFromTerms`), operators (And / Not / Optional / Or), pull-style iteration (`Iter` / `Next` / `Field[T]` / `FieldMaybe[T]` / `FieldShared[T]` / `IsFieldSelf`), typed iteration (`Each1` / `Each2`), pairs in queries, relationship traversal (`Up` / `SelfUp` / `Cascade`), inheritable components (`SetInheritable`), and change detection (`Changed` / `Close`). Sections for features not yet ported carry explicit `Not yet ported in Go flecs` callouts: wildcards, fixed per-term sources, query variables, sorted queries, query groups, equality operators, AndFrom/OrFrom/NotFrom operators, query scopes, access modifiers, and member value queries.
+- **`docs/queries_examples_test.go`** — 19 test functions (`TestQueries_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — Queries row updated to `✅ landed / 14.2`; 8 newly discovered feature gaps appended to the feature-gap list (fixed per-term source, query variables, sorted queries, query groups, equality operators, AndFrom/OrFrom/NotFrom, query scopes, access modifiers).
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.2 row updated to `✅ shipped (v0.20.0)`.
+
 ## v0.20.0 — 2026-05-12 — Phase 14.1: EntitiesComponents doc port
 
 ### Added

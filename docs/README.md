@@ -15,7 +15,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | File | Status | Phase |
 |---|---|---|
 | [EntitiesComponents.md](EntitiesComponents.md) | ✅ landed | 14.1 |
-| [Queries.md](Queries.md) | pending | 14.2 |
+| [Queries.md](Queries.md) | ✅ landed | 14.2 |
 | [Relationships.md](Relationships.md) | pending | 14.3 |
 | [HierarchiesManual.md](HierarchiesManual.md) | pending | 14.4 |
 | [PrefabsManual.md](PrefabsManual.md) | pending | 14.5 |
@@ -102,3 +102,14 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
 - **Cleanup policies / component-delete cascade** — when a component entity is deleted, automatically remove that component from all entities that have it (C default behaviour via `OnDelete` cleanup policy). not yet ported in Go flecs.
 - **`CanToggle` component trait** — per-entity component enable/disable via `ecs_enable_component`; cheaper than remove/add because it flips a bit rather than moving the entity to another archetype. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.2 (Queries port)
+
+- **Fixed per-term source** — a query term can specify any entity as its source (e.g., match `SimTime` on a global `Game` entity rather than the iterated entity). Go flecs only supports the default `$this` source. not yet ported in Go flecs.
+- **Query variables** — `$Var` named variables in the Flecs Query Language constrain results across related entities (e.g., "spaceships docked to a planet"). not yet ported in Go flecs.
+- **Sorted queries** — `order_by_callback` sorts matched entities by a component value (two-step quicksort; cached; change-detection driven). not yet ported in Go flecs.
+- **Query groups** — `group_by_callback` partitions the query cache into labelled groups with O(1) group-iterator access. not yet ported in Go flecs. (`Cascade` provides hierarchy-depth ordering as a special built-in case.)
+- **Equality operators** — `$this == Foo`, `$this != Foo`, `$this ~= "partial"` name-match filter terms in the Flecs Query Language. not yet ported in Go flecs.
+- **AndFrom / OrFrom / NotFrom operators** — expand the component list of a given entity into implicit AND / OR / NOT terms, useful with prefab type-lists. not yet ported in Go flecs.
+- **Query scopes** — `scope_open` / `scope_close` negate a sub-expression of arbitrary terms (e.g., `Position, !{ Velocity || Speed }`). not yet ported in Go flecs.
+- **Access modifiers on query terms** — `In` / `InOut` / `Out` / `None` per-term annotations used by the C scheduler for pipeline sync-point inference. Go flecs governs mutation via `Read`/`Write` world scopes; per-term annotations are not ported.
