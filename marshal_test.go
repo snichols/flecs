@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 19 built-in entities plus all registered component entities.
+// the 20 built-in entities plus all registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
 		w.ChildOf(): {}, w.IsA(): {}, w.Name(): {},
@@ -47,7 +47,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.OnInstantiate(): {}, w.Inherit(): {}, w.Override(): {}, w.DontInherit(): {},
 		w.OnDelete(): {}, w.OnDeleteTarget(): {},
 		w.RemoveAction(): {}, w.DeleteAction(): {}, w.PanicAction(): {},
-		w.Exclusive(): {}, w.CanToggle(): {}, w.Symmetric(): {},
+		w.Exclusive(): {}, w.CanToggle(): {}, w.Symmetric(): {}, w.Transitive(): {},
 	}
 	for _, cid := range w.Components() {
 		skip[cid] = struct{}{}

@@ -82,6 +82,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(relID, w.Symmetric()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsSymmetric).
 		applySymmetricPolicy(w, e)
+	} else if id.Index() == w.transitiveID.Index() {
+		// Bare Transitive tag added to entity e: mark e's relationship as transitive.
+		// This is the fw.AddID(relID, w.Transitive()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsTransitive).
+		applyTransitivePolicy(w, e)
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that

@@ -331,11 +331,7 @@ w.Read(func(r *flecs.Reader) {
 
 IsA is transitive: if `GrannySmith IsA Apple` and `Apple IsA Fruit`, then `GrannySmith` is considered a `Fruit` as well. `Get` and `Has` walk the full chain automatically.
 
-> **Not yet ported in Go flecs — general transitive relationship queries.**
-> The full `EcsTransitive` / `EcsTrav` machinery that makes the query planner
-> traverse *custom* relationships transitively is not yet implemented.
-> For IsA specifically, `Get`, `Has`, `GetUp`, and `HasUp` already walk the chain.
-> See the [Transitive relationships gap](README.md#feature-gap-list-candidate-follow-up-issues).
+Custom relationships can also be made transitive using `flecs.SetTransitive` (see [Transitive trait in ComponentTraits.md](ComponentTraits.md#transitive)). For IsA specifically, `Get`, `Has`, `GetUp`, and `HasUp` already walk the chain regardless of the Transitive flag.
 
 ---
 
@@ -566,12 +562,51 @@ Query whether a relationship is symmetric with `flecs.IsSymmetric(w, relID)`.
 
 ### Transitive
 
-> **Not yet ported in Go flecs.**
-> `EcsTransitive` enables transitive matching in queries: if `(R, Y)` and `(R, Z)` are
-> both present, a query for `(R, Z)` also matches entities with `(R, Y)`.
-> The built-in IsA relationship already walks its chain in `Get`/`Has`; general
-> transitivity for custom relationships requires this unported trait.
-> See the [Transitive relationships gap](README.md#feature-gap-list-candidate-follow-up-issues).
+**Shipped in v0.37.0.** Use `flecs.SetTransitive(w, relID)` to enable transitive query matching on a custom relationship. If `(R, B)` is on entity `A` and `(R, C)` is on entity `B`, a query for `(R, C)` also matches `A`. Formally: `aRb ∧ bRc ⇒ aRc`.
+
+```go
+// LocatedIn example: Manhattan LocatedIn NewYork, NewYork LocatedIn USA.
+// Query for (LocatedIn, USA) matches both Manhattan and NewYork.
+w := flecs.New()
+var locatedIn, manhattan, newYork, usa flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    locatedIn = fw.NewEntity()
+    manhattan  = fw.NewEntity()
+    newYork    = fw.NewEntity()
+    usa        = fw.NewEntity()
+})
+flecs.SetTransitive(w, locatedIn)
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(manhattan, flecs.MakePair(locatedIn, newYork))
+    fw.AddID(newYork, flecs.MakePair(locatedIn, usa))
+})
+
+// Query for all things "in USA" — transitively includes manhattan and newYork.
+q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(locatedIn, usa)))
+q.Each(func(it *flecs.QueryIter) {
+    for _, e := range it.Entities() {
+        _ = e // manhattan and newYork
+    }
+})
+```
+
+The bare-tag form is equivalent:
+
+```go
+fw.AddID(locatedIn, w.Transitive())
+```
+
+Query whether a relationship is transitive with `flecs.IsTransitive(w, relID)`.
+
+**Cycle detection:** the walk uses a visited set to prevent infinite loops on cyclic chains.
+
+**Depth limit:** chains are bounded by an internal depth cap (64 hops); chains exceeding the limit are silently truncated — no panic occurs.
+
+**Cached query staleness:** `CachedQuery` evaluates transitive chains at construction and on every new table creation. It does **not** re-evaluate when an intermediate entity's pairs mutate after the cache is built. This is documented and accepted; pair-mutation invalidation is a future enhancement.
+
+**Transitive does not imply Reflexive:** an entity with no direct `(R, self)` pair is not auto-matched just because a chain terminates at itself. Reflexive is a separate unported trait.
+
+**Wildcard interaction:** wildcard query terms are not yet ported; they will compose with Transitive when Wildcard lands.
 
 ### Traversable
 
