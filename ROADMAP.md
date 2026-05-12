@@ -39,6 +39,8 @@ The following features are available in the current release:
 
 Conceptual docs are ported from the upstream C flecs docs one phase at a time. Each phase ports one doc to Go idioms and verifies all code blocks compile.
 
+**Documentation port complete (v0.31.0)** — all 13 phases (14.0–14.12) shipped across v0.19.0–v0.31.0.
+
 | Phase | Doc | Status |
 |---|---|---|
 | 14.0 | Survey + `docs/` scaffold + `Quickstart.md` | ✅ shipped (v0.19.0) |
@@ -53,7 +55,7 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 | 14.9 | `FlecsRemoteApi.md` | ✅ shipped (v0.28.0) |
 | 14.10 | `DesignWithFlecs.md` | ✅ shipped (v0.29.0) |
 | 14.11 | `Manual.md` | ✅ shipped (v0.30.0) |
-| 14.12 | `FAQ.md` | pending |
+| 14.12 | `FAQ.md` | ✅ shipped (v0.31.0) |
 
 **Process rule (operator directive, Phase 14.0+):** every phase from 14.0 onward must include an explicit "update docs accordingly" deliverable. The design agent must add it to each phase brief; the review agent must verify it.
 
