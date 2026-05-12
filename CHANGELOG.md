@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.7: ObserversManual doc port (upcoming v0.26.0)
+
+### Added
+
+- **`docs/ObserversManual.md`** — full Go-idiomatic port of the upstream C flecs ObserversManual. Leads with hooks (`OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`): single-subscriber per (component, event), hook ordering relative to observers, replacing and clearing hooks, and the `*Writer` parameter for safe reads from within callbacks. Then covers multi-subscriber observers: `Observe[T]`, `ObserveID`, `Observe2[T]`, `Observer.Unsubscribe()`, deferred-unsubscribe semantics during active dispatch, and registration-order guarantees. Includes observer use cases (validation, indexing, replication, logging). Documents 10 not-yet-ported features: `OnReplace`, `OnDelete`/`OnDeleteTarget`, `OnTableEmpty`/`OnTableFill`, custom events, term-set observer filters, yield-on-create, observer propagation/forwarding, monitor observers, observer disabling, and fixed-source observer terms.
+- **`docs/observers_examples_test.go`** — 13 test functions (`TestObservers_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — ObserversManual row updated to `✅ landed / 14.7`; 10 newly discovered feature gaps appended.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.7 row updated to `✅ shipped (v0.26.0)`.
+
 ## v0.25.0 — 2026-05-12 — Phase 14.6: Systems doc port
 
 ### Added
