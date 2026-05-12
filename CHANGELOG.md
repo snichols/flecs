@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.36.0 — 2026-05-12 — Phase 15.4: Symmetric relationship trait
+
+### Added
+
+- **`SetSymmetric(w, relID)`** — marks a relationship as symmetric: adding `(R, B)` to entity `A` automatically adds `(R, A)` to entity `B`; removing `(R, B)` from `A` removes `(R, A)` from `B`.
+- **`IsSymmetric(w, relID) bool`** — reports whether a relationship is marked symmetric.
+- **`w.Symmetric() ID`** — returns the built-in Symmetric trait entity (index 19). The bare-tag form `fw.AddID(relID, w.Symmetric())` is equivalent to `SetSymmetric(w, relID)`.
+- **Loop guard:** implemented via the existing `HasComponent` early-return in `addIDImmediate` / `removeIDImmediate`. Adding `(R, B)` to `A` mirrors `(R, A)` to `B`; the mirror tries to add `(R, B)` back to `A`, but `HasComponent` returns true, so the recursion terminates in one extra hop. Identical logic for removal.
+- **Self-pair handling:** `AddID(a, MakePair(R, a))` results in a single pair; no duplication. The `HasComponent` guard handles this naturally.
+- **Interaction with Exclusive (v0.34.0):** when both traits are active on `R`, each side's exclusivity is enforced independently. Replacing `(R, X)` with `(R, B)` on `A` mirrors `(R, A)` to `B`; if `B` held a conflicting `(R, Y)`, the exclusive constraint replaces it with `(R, A)` on `B` as well.
+- **`symmetric.go`** — new file parallel to `exclusive.go` and `cantoggle.go`.
+- **`symmetric_test.go`** — 12 test cases covering: non-Symmetric no-mirror, mark+add mirrors, idempotent add, remove mirrors, self-relationship, exclusive interaction, IsSymmetric round-trip, loop guard correctness, batched-add via batchForEntity, batched-remove via batchForEntity, exclusive-mirror-replaces-target (covers addIDImmediate exclusive+symmetric branch), OnAdd/OnRemove hooks fire on both sides.
+
+### Documentation
+
+- `docs/ComponentTraits.md` — Symmetric section rewritten with shipped Go API and worked example; roadmap row updated to `✅ shipped (v0.36.0)`.
+- `docs/Relationships.md` — Symmetric section replaced "Not yet ported" callout with shipped API documentation and worked example.
+- `docs/README.md` — Symmetric entries in the feature-gap list updated to shipped status.
+- `ROADMAP.md` — Phase 15.4 marked shipped; built-in entity count note updated to 19; user entities now start at index 20.
+
+### Migration Guide
+
+- Built-in entity count increases from 18 to 19. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to include `Symmetric` (19).
+- `World.Symmetric()` is now a valid built-in entity accessor. If you had user entities starting at index 19, they now start at index 20.
+
+### Non-goals (explicitly out of scope for v0.36.0)
+
+- No Transitive trait (`EcsTransitive`) — separate future phase.
+- No Reflexive trait (`EcsReflexive`) — separate future phase.
+- No `UnsetSymmetric` / unmarking — same precedent as Exclusive/CanToggle (one-way trait marking).
+- No wildcard symmetric — adding `(R, *)` does not mirror; only concrete pair targets.
+
 ## v0.35.0 — 2026-05-12 — Phase 15.3: CanToggle component trait
 
 ### Added

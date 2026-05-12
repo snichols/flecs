@@ -151,6 +151,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.exclusiveID.Index() {
 				// Bare Exclusive tag: mark entity as an exclusive relationship.
 				applyExclusivePolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.symmetricID.Index() {
+				// Bare Symmetric tag: mark entity as a symmetric relationship.
+				applySymmetricPolicy(w, entity)
 			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			c.kind = cmdSkip
@@ -228,6 +231,17 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 	// Execute ONE archetype migration only when the component set actually changes.
 	if len(addedIDs) > 0 || len(removedIDs) > 0 {
 		w.commitBatch(entity, newSig, addedIDs, removedIDs)
+		// Symmetric mirror: fire add/remove mirrors for symmetric pair changes.
+		for _, id := range addedIDs {
+			if id.IsPair() && w.symmetricPolicies[id.First()] {
+				addIDImmediate(w, id.Second(), MakePair(id.First(), entity))
+			}
+		}
+		for _, id := range removedIDs {
+			if id.IsPair() && w.symmetricPolicies[id.First()] {
+				removeIDImmediate(w, id.Second(), MakePair(id.First(), entity))
+			}
+		}
 	}
 
 	if !hasSet {

@@ -528,10 +528,41 @@ The following built-in relationships are exclusive by default: **`ChildOf`**, **
 
 ### Symmetric
 
-> **Not yet ported in Go flecs.**
-> `EcsSymmetric` makes the relationship bidirectional: adding `(R, Y)` to entity `X`
-> automatically adds `(R, X)` to entity `Y`.
-> See the [Symmetric relationships gap](README.md#feature-gap-list-candidate-follow-up-issues).
+**Shipped in v0.36.0.** Marking a relationship symmetric causes any `(R, B)` added to entity `A` to be automatically mirrored as `(R, A)` on entity `B`. Removal is mirrored the same way. Useful for inherently undirected relations such as `Friend`, `MarriedTo`, `AlliesWith`, or `Coplanar`.
+
+```go
+w := flecs.New()
+marriedTo := w.Write(func(fw *flecs.Writer) flecs.ID { return fw.NewEntity() })
+// or alternatively: flecs.SetSymmetric(w, marriedToID)
+flecs.SetSymmetric(w, marriedTo)
+
+var bob, alice flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    bob = fw.NewEntity()
+    alice = fw.NewEntity()
+    fw.AddID(bob, flecs.MakePair(marriedTo, alice))
+    // alice now automatically has (marriedTo, bob)
+})
+
+w.Read(func(fr *flecs.Reader) {
+    _ = fr.HasID(bob, flecs.MakePair(marriedTo, alice))   // true
+    _ = fr.HasID(alice, flecs.MakePair(marriedTo, bob))   // true — mirrored
+})
+```
+
+The bare-tag form is equivalent:
+
+```go
+fw.AddID(marriedTo, w.Symmetric())
+```
+
+Query whether a relationship is symmetric with `flecs.IsSymmetric(w, relID)`.
+
+**Loop guard:** the mirror is idempotent — adding `(R, B)` to `A` mirrors `(R, A)` to `B`, which would try to mirror `(R, B)` back to `A`, but `A` already has it, so the recursion short-circuits in one extra hop.
+
+**Self-pairs:** `AddID(a, MakePair(R, a))` adds a single pair; no duplication occurs.
+
+**Interaction with Exclusive:** when `R` is both symmetric and exclusive, replacing `(R, X)` with `(R, B)` on `A` also mirrors `(R, A)` to `B`; if `B` held a conflicting `(R, Y)`, the exclusive constraint replaces it with `(R, A)` on `B` as well.
 
 ### Transitive
 

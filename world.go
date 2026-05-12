@@ -66,11 +66,13 @@ type World struct {
 	deleteActionID      ID                              // built-in Delete cleanup action entity (index 15)
 	panicActionID       ID                              // built-in Panic cleanup action entity (index 16)
 	exclusiveID         ID                              // built-in Exclusive trait entity (index 17)
-	canToggleID         ID                              // built-in CanToggle trait entity (index 18; first user entity at index 19)
+	canToggleID         ID                              // built-in CanToggle trait entity (index 18)
+	symmetricID         ID                              // built-in Symmetric trait entity (index 19; first user entity at index 20)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
 	canTogglePolicies   map[ID]bool                     // component entity index → CanToggle flag
+	symmetricPolicies   map[ID]bool                     // relationship entity index → symmetric flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -108,7 +110,8 @@ type World struct {
 //   - Index 16: PanicAction built-in cleanup action entity
 //   - Index 17: Exclusive built-in trait entity
 //   - Index 18: CanToggle built-in trait entity
-//   - Index 19+: user entities (NewEntity)
+//   - Index 19: Symmetric built-in trait entity
+//   - Index 20+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -226,6 +229,12 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(canToggle))
 	w.canToggleID = canToggle
+	// Allocate the built-in Symmetric trait entity (gets index 19).
+	symmetric := w.index.Alloc()
+	rec = w.index.Get(symmetric)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(symmetric))
+	w.symmetricID = symmetric
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets

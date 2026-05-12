@@ -77,6 +77,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(posID, w.CanToggle()) form, mirroring C's
 		// ecs_add_id(world, ecs_id(Position), EcsCanToggle).
 		applyCanTogglePolicy(w, e)
+	} else if id.Index() == w.symmetricID.Index() {
+		// Bare Symmetric tag added to entity e: mark e's relationship as symmetric.
+		// This is the fw.AddID(relID, w.Symmetric()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsSymmetric).
+		applySymmetricPolicy(w, e)
 	}
 	// Exclusive pair enforcement: if adding (R, B) and the entity already has
 	// (R, A) where A != B, replace A with B in a single migration so that
@@ -89,12 +94,22 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 			for _, sigID := range rec.Table.Type() {
 				if sigID.IsPair() && uint32(sigID.First()) == relIdx && sigID.Second() != id.Second() {
 					w.migrate(e, id, sigID, nil)
+					// Symmetric mirror: if (R, b) replaced (R, x) on a, add (R, a) to b.
+					if w.symmetricPolicies[id.First()] {
+						addIDImmediate(w, id.Second(), MakePair(id.First(), e))
+					}
 					return true
 				}
 			}
 		}
 	}
 	w.migrate(e, id, 0, nil)
+	// Symmetric mirror: if (R, b) was added to a, also add (R, a) to b.
+	// The HasComponent early-return above provides the idempotence loop-guard:
+	// the recursive call re-enters here, but b already has (R, a) and returns false.
+	if id.IsPair() && w.symmetricPolicies[id.First()] {
+		addIDImmediate(w, id.Second(), MakePair(id.First(), e))
+	}
 	// Override copy hook: after adding (IsA, prefab) to an entity, walk the prefab's
 	// component chain and eagerly copy any Override-marked components into the instance.
 	if id.IsPair() && id.First().Index() == w.isAID.Index() {
@@ -162,6 +177,12 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 		return false
 	}
 	w.migrate(e, 0, id, nil)
+	// Symmetric mirror: if (R, b) was removed from a, also remove (R, a) from b.
+	// The !HasComponent early-return above provides the idempotence loop-guard:
+	// the recursive call re-enters here, but b no longer has (R, a) and returns false.
+	if id.IsPair() && w.symmetricPolicies[id.First()] {
+		removeIDImmediate(w, id.Second(), MakePair(id.First(), e))
+	}
 	return true
 }
 
