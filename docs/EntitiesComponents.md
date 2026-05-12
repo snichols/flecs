@@ -392,3 +392,4 @@ func registerMovement(w *flecs.World) {
 - [Queries](Queries.md) — query terms, AND/NOT/Optional, cached queries.
 - [ComponentTraits](ComponentTraits.md) — sparse storage, CanToggle, and other component-level customisation.
 - [ObserversManual](ObserversManual.md) — multi-subscriber reactive callbacks (complement to hooks).
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.

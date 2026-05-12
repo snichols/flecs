@@ -570,3 +570,13 @@ Pair IDs are never in the low-ID range that Flecs reserves for built-in componen
 > implementation and describe future behaviour when wildcard support lands.
 
 When a wildcard like `(Likes, *)` matches a table that has multiple `Likes` targets, the index stores the column and count for that relationship, making `(Rel, *)` scans cheap. Wildcard queries of the form `(*, Target)` require a linear scan starting from the first matching column.
+
+---
+
+## See Also
+
+- [Quickstart](Quickstart.md) — hands-on introduction covering `ChildOf` and `IsA` relationships.
+- [HierarchiesManual.md](HierarchiesManual.md) — parent/child tree traversal and named paths.
+- [PrefabsManual.md](PrefabsManual.md) — `IsA` prototype inheritance and copy-on-write override.
+- [Queries.md](Queries.md) — traversal terms (`Up`, `SelfUp`, `Cascade`) in query expressions.
+- [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.
