@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.42)
+## Shipped (through v0.43)
 
 The following features are available in the current release:
 
@@ -45,6 +45,7 @@ The following features are available in the current release:
 - **Writer ⊇ Reader at free-function boundaries** _(v0.40.0, Phase 15.8)_ — unexported `scope` interface with `scopeWorld() *World`. All read free-functions (`Get`, `Has`, `Each1`–`Each4`, `HasID`, `OwnsID`, `GetUp`, `HasUp`, `TargetUp`, `PrefabOf`, `IsEnabledID`, `IsEnabled`, etc.) now accept `scope` instead of `*Reader`. `*Writer` satisfies `scope`, so `flecs.Each2[A,B](fw, ...)` compiles inside a `Write` block without `fw.AsReader()`. `AsReader()` removed (pre-1.0 breaking change).
 - **Acyclic relationship trait** _(v0.41.0, Phase 15.9)_ — `SetAcyclic(w, relID)` / `IsAcyclic(w, relID)` / `w.Acyclic()` (index 22). Write-time cycle rejection: adding `(e, R, target)` panics if `target` can already reach `e` via `R`. Self-pairs allowed. `ChildOf` bootstrapped acyclic (prevents `EachChild` infinite recursion). Deliberate divergence from C's lookup-time guards; documented in CHANGELOG v0.41.0. Composes with Transitive (Acyclic at write time, Transitive at query time). Built-in entity count: 24; user entities now start at index 25.
 - **Final entity trait** _(v0.42.0, Phase 15.10)_ — `SetFinal(w, entityID)` / `IsFinal(scope, entityID)` / `w.Final()` (index 23). Write-time enforcement: adding `(IsA, target)` panics if target is Final; self-pairs also rejected (matching C semantics). `IsFinal` accepts `scope` interface (Phase 15.8 convention). No built-in ships Final. Built-in entity count: 25; user entities now start at index 26.
+- **OneOf relationship trait** _(v0.43.0, Phase 15.11)_ — `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)` / `w.OneOf()` (index 24). Write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent. Self-tag form (`SetOneOf(w, R, R)`) and pair form (`SetOneOf(w, R, P)`) both supported. Wildcard/Any targets exempt. Composes with Exclusive: replacement target validated before atomic migration. No built-in ships OneOf. Built-in entity count: 26; user entities now start at index 27.
 
 ## Documentation
 

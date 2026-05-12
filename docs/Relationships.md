@@ -707,6 +707,68 @@ w.Write(func(fw *flecs.Writer) {
 
 Query whether a relationship is acyclic with `flecs.IsAcyclic(w, relID)`.
 
+### OneOf
+
+**Shipped in v0.43.0.**
+
+`OneOf` constrains a relationship's target to entities that are **direct children** (`ChildOf`) of a specified parent. This is the idiomatic way to model enum-style relationships where valid values are a fixed set of named entities parented under a common namespace entity.
+
+**Enum-style pattern — Colors:**
+
+```go
+w := flecs.New()
+
+var colorRel, colors, red, green, blue, e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    colorRel = fw.NewEntity() // the relationship
+    colors   = fw.NewEntity() // the namespace / parent
+    red      = fw.NewEntity()
+    green    = fw.NewEntity()
+    blue     = fw.NewEntity()
+    e        = fw.NewEntity()
+
+    // Parent the color values under the colors namespace.
+    fw.AddID(red,   flecs.MakePair(w.ChildOf(), colors))
+    fw.AddID(green, flecs.MakePair(w.ChildOf(), colors))
+    fw.AddID(blue,  flecs.MakePair(w.ChildOf(), colors))
+})
+
+// Constrain colorRel: every (colorRel, X) pair must satisfy (ChildOf, colors) on X.
+flecs.SetOneOf(w, colorRel, colors)
+
+// Valid add — red is a child of colors.
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(e, flecs.MakePair(colorRel, red)) // OK
+})
+
+// Invalid add — panics at AddID time.
+// w.Write(func(fw *flecs.Writer) {
+//     unrelated := fw.NewEntity()
+//     fw.AddID(e, flecs.MakePair(colorRel, unrelated)) // panic: OneOf constraint violated
+// })
+```
+
+**Self-tag form** — when `SetOneOf(w, R, R)` (or `fw.AddID(R, w.OneOf())`), targets must be direct children of `R` itself:
+
+```go
+// Self-tag: targets must be children of colorRel directly.
+flecs.SetOneOf(w, colorRel, colorRel)
+// Equivalent: fw.AddID(colorRel, w.OneOf())
+```
+
+**Query the constraint:**
+
+```go
+parent, ok := flecs.IsOneOf(w, colorRel)
+// parent.Index() == colors.Index(), ok == true
+```
+
+`IsOneOf` accepts the `scope` interface, so it works inside both `Read` and `Write` blocks without `AsReader()`.
+
+**Composes with Exclusive** — combining `OneOf` and `Exclusive` on a relationship enforces both constraints: at most one target per entity, and all targets must be valid children of the parent. Replacing `(R, red)` with `(R, blue)` validates the new target before the atomic migration.
+
+**Direct check only** — the constraint checks `(ChildOf, parent)` directly on the target; it does not walk the ChildOf ancestry chain. `Wildcard` and `Any` targets are exempt.
+
 ### Traversable
 
 > **Not yet ported in Go flecs.**

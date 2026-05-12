@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.43.0 — 2026-05-12 — Phase 15.11: OneOf relationship trait
+
+### Added
+
+- **`SetOneOf(w, relID, parentID)`** — constrains `relID`'s targets to direct children of `parentID`. Passing `parentID == relID` encodes the self-tag form (target must be a direct child of the relationship entity itself). Mirrors C `EcsOneOf` (a trait entity, index 24).
+- **`IsOneOf(s scope, relID ID) (parent ID, ok bool)`** — reports whether `relID` has a OneOf constraint and returns the required parent. Accepts the `scope` interface (per Phase 15.8 convention) so it works inside both `Read` and `Write` blocks without `AsReader()`.
+- **`w.OneOf() ID`** — returns the built-in OneOf trait entity (index 24). Two bare forms: `fw.AddID(relID, w.OneOf())` (self-tag — equivalent to `SetOneOf(w, relID, relID)`) and `fw.AddID(relID, MakePair(w.OneOf(), parentID))` (pair form — equivalent to `SetOneOf(w, relID, parentID)`).
+- **Write-time enforcement** — `addIDImmediate` checks for a OneOf constraint before storing any `(R, target)` pair. Fires on both the immediate path and the deferred path (when the `Write` scope flushes). The check is a direct `(ChildOf, parent)` lookup on `target` — no transitive ancestor traversal. Wildcard and Any targets are exempt.
+- **Composes with Exclusive** — when a relationship has both `OneOf` and `Exclusive` traits, the OneOf check fires before the Exclusive atomic migration so that replacement targets are validated before the swap.
+- **`oneof_test.go`** — 8 test cases: default no-constraint, pair-form valid target succeeds, pair-form invalid target panics, self-tag form valid target succeeds, `IsOneOf` round-trip, bootstrapped relationships have no OneOf constraint, Exclusive+OneOf atomic replacement, bare-tag AddID equivalence.
+
+### Changed
+
+- Built-in entity count increases from 25 to 26. User entities now start at index 27.
+- OneOf is at index 24; Wildcard moves to index 25; Any moves to index 26.
+- `marshal.go` skip-set updated to exclude OneOf (24) from JSON serialization.
+- `TestIsAWorldCountBaseline`, `nonDataEntities` in `marshal_test.go`, and `builtinEntityCount` in `meta_test.go` updated to reflect the new count.
+
+### Breaking changes
+
+- Built-in entity count increases from 25 to 26. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to 26. User entities now start at index 27.
+
+### Deliberate divergence from C flecs
+
+The check fires only at write time (`AddID`); C also enforces OneOf at query plan construction time. Write-time enforcement gives clear early-error semantics consistent with Acyclic (Phase 15.9) and Final (Phase 15.10).
+
+### Non-goals (explicitly out of scope for v0.43.0)
+
+- No removal API for OneOf constraints (`SetOneOf` is one-shot; consistent with other trait setters).
+- No automatic parent-entity creation (the user must create the parent and its children).
+- No transitive ancestor check (direct `(ChildOf, parent)` only, matching C `ecs_has_pair` semantics).
+
+---
+
 ## v0.42.0 — 2026-05-12 — Phase 15.10: Final entity trait
 
 ### Added
