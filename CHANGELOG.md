@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.12: FAQ doc port (upcoming v0.31.0)
+## v0.31.0 — 2026-05-12 — Phase 14.12: FAQ doc port (docs port complete)
 
 This phase completes the docs-port project. Phases 14.0–14.12 spanned 13 releases (v0.19.0–v0.31.0) and ported every relevant upstream C flecs document to Go idioms, verified with compile-tested code blocks throughout.
 
