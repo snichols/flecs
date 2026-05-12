@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.9: FlecsRemoteApi doc port (upcoming v0.28.0)
+
+### Added
+
+- **`docs/FlecsRemoteApi.md`** — full Go-idiomatic port of the upstream C flecs FlecsRemoteApi manual. Leads with the simplest mount pattern (`http.ListenAndServe(":8080", flecs.NewRESTHandler(w))`), shows a custom `ServeMux` + `StripPrefix` example, and covers goroutine safety via `world.Read` / `world.Write` integration. Documents all 7 implemented endpoints (`GET /stats`, `GET /components`, `GET /components/{id}`, `GET /entities`, `GET /entities/{id}`, `GET /snapshot`, `PUT /snapshot`) with accurate request/response JSON shapes (verified against `rest.go`), curl examples, and Go client examples. Covers all unimplemented C flecs REST endpoints (entity mutation, component mutation, toggle, query execution, world dump, type-info, FlecsStats stats, command capture, FlecsExplorer, WebSocket, auth, JavaScript client) as explicit "Not yet ported in Go flecs" callouts with explanations of what the C endpoint does and why it is absent. Cross-links to [Quickstart](docs/Quickstart.md), [Systems](docs/Systems.md), and [ComponentTraits](docs/ComponentTraits.md).
+- **`docs/rest_examples_test.go`** — 8 test functions (`TestRest_*`) using `httptest` to spin up `NewRESTHandler` and verify the code patterns shown in the manual: basic setup, Stats decoding, component listing and lookup, entity listing and detail, snapshot round-trip, and custom-ServeMux mounting. Run with `go test ./docs/...`.
+- **`docs/README.md`** — FlecsRemoteApi row updated to `✅ landed / 14.9`; 6 newly discovered feature gaps appended: query execution endpoint, entity/component mutation endpoints, toggle endpoint, FlecsStats aggregated-stats module, type-info/reflection endpoint, and FlecsExplorer integration.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.9 row updated to `✅ shipped (v0.28.0)`.
+
 ## v0.27.0 — 2026-05-12 — Phase 14.8: ComponentTraits doc port
 
 ### Added

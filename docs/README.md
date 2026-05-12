@@ -22,7 +22,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [Systems.md](Systems.md) | ✅ landed / 14.6 | 14.6 |
 | [ObserversManual.md](ObserversManual.md) | ✅ landed / 14.7 | 14.7 |
 | [ComponentTraits.md](ComponentTraits.md) | ✅ landed / 14.8 | 14.8 |
-| [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending | 14.9 |
+| [FlecsRemoteApi.md](FlecsRemoteApi.md) | ✅ landed / 14.9 | 14.9 |
 | [DesignWithFlecs.md](DesignWithFlecs.md) | pending | 14.10 |
 | [Manual.md](Manual.md) | pending | 14.11 |
 | [FAQ.md](FAQ.md) | pending | 14.12 |
@@ -170,3 +170,12 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`OneOf` relationship trait** — constrains relationship targets to be children of a specified entity (useful for enum-style relationships). not yet ported in Go flecs.
 - **`With` relationship** — automatically co-adds a second component when a component is added; when added to a relationship, the co-added id mirrors the pair target. not yet ported in Go flecs.
 - **`Relationship` / `Target` / `Trait` enforcement traits** — restrict how an entity may be used in pairs (as relationship, as target, or as a trait); relax some constraints when the `Trait` marker is present. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.9 (FlecsRemoteApi port)
+
+- **Query execution endpoint** (`GET /query?expr=`) — evaluates a Flecs Query Language expression over HTTP and returns matched entities with field values. Requires the FlecsQueryLanguage DSL and `ecs_iter_to_json`; not yet ported in Go flecs.
+- **Entity / component mutation endpoints** (`PUT /entity`, `DELETE /entity`, `PUT /component`, `DELETE /component`) — create, delete, and mutate entities and components via REST. Require the reflection / meta-cursor API (`ecs_meta_cursor`); not yet ported in Go flecs.
+- **Toggle endpoint** (`PUT /toggle`) — enable/disable an entity or a per-component enable bit via REST. Requires entity disabling (`Disabled` tag) and the `CanToggle` component trait; not yet ported in Go flecs.
+- **Aggregated stats (FlecsStats module)** — `GET /stats/world` and `GET /stats/pipeline` return multi-period aggregated statistics collected by the `FlecsStats` addon. FlecsStats module not yet ported in Go flecs.
+- **Type-info / reflection endpoint** (`GET /type_info/<path>`) — returns the reflection schema for a component type. Requires the meta-cursor module (`ecs_meta_cursor`); not yet ported in Go flecs.
+- **FlecsExplorer integration** — the browser-based world inspector at `https://flecs.dev/explorer` connects via the C REST API and requires entity mutation, query execution, and type-info endpoints. Not integrated with the Go REST handler.
