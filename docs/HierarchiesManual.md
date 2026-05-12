@@ -1,7 +1,313 @@
 # Hierarchies
 
-<!-- TODO: port from /work/agents/claude/projects/SanderMertens/flecs/docs/HierarchiesManual.md (Phase 14.4) -->
+ChildOf hierarchies let you organize entities into trees — scenes, prefab structures, UI widgets, or file-system-like paths. Any entity can be the parent of any other entity. Deleting a parent recursively deletes all descendants.
 
-This manual covers ChildOf hierarchies: parent-child relationships, named paths, `EachChild`, `ParentOf`, cascade delete, and breadth-first (Cascade) query ordering for transform propagation.
+See the [Quickstart](Quickstart.md) for a hands-on introduction, [Relationships](Relationships.md) for the ChildOf pair and relationship concepts, and [Queries](Queries.md) for Cascade traversal details.
 
-See the [Quickstart](Quickstart.md) for a hands-on introduction.
+## Table of contents
+
+- [Creating hierarchies](#creating-hierarchies)
+- [Get parent and children](#get-parent-and-children)
+- [Cascade delete](#cascade-delete)
+- [Depth-first traversal](#depth-first-traversal)
+- [Breadth-first traversal](#breadth-first-traversal)
+- [Hierarchical names](#hierarchical-names)
+- [Reparenting](#reparenting)
+- [Ancestor traversal](#ancestor-traversal)
+- [Not yet ported](#not-yet-ported)
+
+---
+
+## Creating hierarchies
+
+A parent-child link is an ordinary ChildOf relationship pair. Use `MakePair(w.ChildOf(), parent)` as the pair ID and add it to the child:
+
+```go
+w := flecs.New()
+
+var spaceship, cockpit flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    spaceship = fw.NewEntity()
+    cockpit   = fw.NewEntity()
+
+    // cockpit is a child of spaceship
+    fw.AddID(cockpit, flecs.MakePair(w.ChildOf(), spaceship))
+})
+
+w.Read(func(r *flecs.Reader) {
+    if flecs.HasID(r, cockpit, flecs.MakePair(w.ChildOf(), spaceship)) {
+        // cockpit is a child of spaceship
+    }
+})
+```
+
+An entity can have **at most one ChildOf parent**. Adding a second `(ChildOf, newParent)` pair replaces the first. A parent can have any number of children.
+
+---
+
+## Get parent and children
+
+### ParentOf
+
+`Reader.ParentOf` returns the direct parent of an entity:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    parent, ok := r.ParentOf(cockpit)
+    // parent == spaceship, ok == true
+})
+```
+
+Returns `(0, false)` if the entity has no ChildOf relationship.
+
+### EachChild
+
+`Reader.EachChild` iterates over all **direct** children of a parent:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    r.EachChild(spaceship, func(child flecs.ID) bool {
+        // called once per direct child
+        return true // return false to stop early
+    })
+})
+```
+
+Only direct children are visited. To walk the entire subtree, recurse manually (see [Depth-first traversal](#depth-first-traversal)).
+
+---
+
+## Cascade delete
+
+When a parent is deleted, all of its children are deleted in **depth-last order** (deepest descendants first). This is hardcoded for ChildOf:
+
+```go
+w := flecs.New()
+
+var spaceship, cockpit, pilot flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    spaceship = fw.NewEntity()
+    cockpit   = fw.NewEntity()
+    pilot     = fw.NewEntity()
+
+    fw.AddID(cockpit, flecs.MakePair(w.ChildOf(), spaceship))
+    fw.AddID(pilot,   flecs.MakePair(w.ChildOf(), cockpit))
+})
+
+w.Write(func(fw *flecs.Writer) {
+    fw.Delete(spaceship)
+})
+
+w.Read(func(r *flecs.Reader) {
+    _ = r.IsAlive(spaceship) // false
+    _ = r.IsAlive(cockpit)   // false
+    _ = r.IsAlive(pilot)     // false
+})
+```
+
+The implementation lives in `childof.go`. Configurable cleanup policies for custom relationships are not yet ported; see [Not yet ported](#not-yet-ported).
+
+---
+
+## Depth-first traversal
+
+Traverse a subtree depth-first by recursing inside `EachChild`:
+
+```go
+var visitDepthFirst func(r *flecs.Reader, e flecs.ID, depth int)
+visitDepthFirst = func(r *flecs.Reader, e flecs.ID, depth int) {
+    r.EachChild(e, func(child flecs.ID) bool {
+        visitDepthFirst(r, child, depth+1)
+        return true
+    })
+}
+
+w.Read(func(r *flecs.Reader) {
+    visitDepthFirst(r, spaceship, 0)
+})
+```
+
+---
+
+## Breadth-first traversal
+
+Use a cached query with `Cascade(w.ChildOf())` to iterate entities in root-first order. This is the standard pattern for propagating parent transforms to children — a parent's result is always processed before its children's:
+
+```go
+type Position struct{ X, Y float32 }
+
+w := flecs.New()
+posID := flecs.RegisterComponent[Position](w)
+
+// Cascade guarantees root-first depth ordering over the ChildOf hierarchy.
+cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).Cascade(w.ChildOf()))
+
+cq.Each(func(it *flecs.QueryIter) {
+    for _, e := range it.Entities() {
+        // process e; its parent has already been processed
+        _ = e
+    }
+})
+```
+
+See [Queries — Relationship traversal](Queries.md#relationship-traversal) for `Up`, `SelfUp`, and `Cascade` term modifiers.
+
+---
+
+## Hierarchical names
+
+Entities can be given a name with `World.SetName`. Named entities form a dot-separated path that can be resolved with `Lookup` or `LookupChild`.
+
+Names may not contain `.`; that character is reserved as the path separator. Name uniqueness among siblings is not enforced — `LookupChild` returns the first match when siblings share a name.
+
+### SetName / GetName
+
+Set a name at any point; the name is stored as the built-in `Name` component:
+
+```go
+w := flecs.New()
+
+var game, level flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    game  = fw.NewEntity()
+    level = fw.NewEntity()
+    fw.AddID(level, flecs.MakePair(w.ChildOf(), game))
+})
+
+w.SetName(game,  "Game")
+w.SetName(level, "Level1")
+
+w.Read(func(r *flecs.Reader) {
+    name, ok := r.GetName(level)
+    // name == "Level1", ok == true
+})
+```
+
+### PathOf
+
+`Reader.PathOf` reconstructs the full dot-separated path from the root:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    path := r.PathOf(level)
+    // path == "Game.Level1"
+})
+```
+
+If an ancestor is unnamed, the walk stops at the first unnamed node and returns only the path segment below it.
+
+### Lookup
+
+`Reader.Lookup` resolves an absolute dot-separated path:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    e, ok := r.Lookup("Game.Level1")
+    // e == level, ok == true
+})
+```
+
+Returns `(0, false)` if any path segment is absent. An empty string or a path with empty segments (leading dot, trailing dot, consecutive dots) also returns `(0, false)`.
+
+### LookupChild
+
+`Reader.LookupChild` resolves a single name relative to a parent:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    e, ok := r.LookupChild(game, "Level1")
+    // e == level, ok == true
+})
+```
+
+Pass `0` as the parent to search the root scope — alive entities with no ChildOf relationship.
+
+> **Not yet ported:** Per-hierarchy name scoping (`ecs_set_scope` / `ecs_get_scope`) — push/pop a parent scope so that newly created entities automatically receive `(ChildOf, scope)` without explicit `AddID` calls. See [Not yet ported](#not-yet-ported).
+
+---
+
+## Reparenting
+
+To move an entity from one parent to another, remove the old ChildOf pair and add the new one:
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    // move cockpit from spaceship to station
+    fw.RemoveID(cockpit, flecs.MakePair(w.ChildOf(), spaceship))
+    fw.AddID(cockpit,    flecs.MakePair(w.ChildOf(), station))
+})
+```
+
+Children of `cockpit` follow automatically — their ChildOf pairs still point to `cockpit`; only `cockpit`'s own pair changes.
+
+---
+
+## Ancestor traversal
+
+`GetUp`, `HasUp`, and `TargetUp` walk the ChildOf chain upward from an entity, searching for a component on an ancestor. All three accept any traversal relationship, not just ChildOf — see [Relationships — Relationship traversal](Relationships.md#relationship-traversal).
+
+The component must be registered with `flecs.RegisterComponent[T](w)` before calling `GetUp[T]`.
+
+### GetUp
+
+`flecs.GetUp[T]` returns the component value from the **closest** entity in the chain (self or ancestor) that locally owns it:
+
+```go
+type Zone struct{ Name string }
+
+w := flecs.New()
+flecs.RegisterComponent[Zone](w)
+
+var region, city flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    region = fw.NewEntity()
+    flecs.Set(fw, region, Zone{Name: "NorthEast"})
+
+    city = fw.NewEntity()
+    fw.AddID(city, flecs.MakePair(w.ChildOf(), region))
+})
+
+w.Read(func(r *flecs.Reader) {
+    z, ok := flecs.GetUp[Zone](r, city, w.ChildOf())
+    // z.Name == "NorthEast", ok == true (inherited from region)
+})
+```
+
+### HasUp
+
+`flecs.HasUp` reports whether the entity or any ancestor owns the component ID:
+
+```go
+zoneID := flecs.RegisterComponent[Zone](w)
+
+w.Read(func(r *flecs.Reader) {
+    if flecs.HasUp(r, city, zoneID, w.ChildOf()) {
+        // city or one of its ancestors has Zone
+    }
+})
+```
+
+### TargetUp
+
+`flecs.TargetUp` returns the entity (self or ancestor) that directly owns the component:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    owner, ok := flecs.TargetUp(r, city, zoneID, w.ChildOf())
+    // owner == region, ok == true
+})
+```
+
+---
+
+## Not yet ported
+
+The following upstream C features are not yet implemented in Go flecs:
+
+- **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget`) — in C flecs you can choose whether deleting a relationship entity or target cascades a delete, remove, or nothing. In Go flecs, ChildOf is hardcoded to cascade-delete children; custom cleanup policies for arbitrary relationships are not yet configurable.
+
+- **`OrderedChildren` trait** — add this trait to a parent in C flecs to guarantee that `children()` iterates in creation order regardless of component mutations that would normally move children between tables. Not yet ported in Go flecs.
+
+- **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a default ChildOf parent so that newly created entities automatically become children of the current scope without an explicit `AddID` call. Not yet ported in Go flecs.
+
+- **`Parent` hierarchy storage** — C flecs provides a second, non-fragmenting storage for small structured hierarchies where children of multiple parents can share the same archetype table. Not yet ported in Go flecs; all Go flecs hierarchies use the ChildOf (fragmenting archetype) storage.

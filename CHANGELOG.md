@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.4: HierarchiesManual doc port (upcoming v0.23.0)
+
+### Added
+
+- **`docs/HierarchiesManual.md`** — full Go-idiomatic port of the upstream C flecs HierarchiesManual. Covers creating ChildOf hierarchies (`AddID` + `MakePair(w.ChildOf(), parent)`), getting parents and children (`Reader.ParentOf`, `Reader.EachChild`), cascade delete semantics (hardcoded for ChildOf, implemented in `childof.go`), depth-first traversal via recursive `EachChild`, breadth-first (Cascade) traversal with `NewCachedQueryFromTerms` + `Cascade(w.ChildOf())`, hierarchical names (`SetName`, `GetName`, `PathOf`, `Lookup`, `LookupChild`), reparenting (remove old pair, add new pair), and ancestor traversal helpers (`GetUp[T]`, `HasUp`, `TargetUp`). Unported features carry explicit `Not yet ported in Go flecs` callouts: configurable cleanup policies, `OrderedChildren` trait, entity scoping (`ecs_set_scope`), and `Parent` hierarchy storage.
+- **`docs/hierarchies_examples_test.go`** — 14 test functions (`TestHierarchies_*`) exercising every Go code block in the manual. Run with `go test ./docs/...`.
+- **`docs/README.md`** — HierarchiesManual row updated to `✅ landed / 14.4`; 2 newly discovered feature gaps appended: `OrderedChildren` trait and `Parent` hierarchy storage.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.4 row updated to `✅ shipped (v0.23.0)`.
+
 ## v0.22.0 — 2026-05-12 — Phase 14.3: Relationships doc port
 
 ### Added

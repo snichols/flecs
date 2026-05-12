@@ -17,7 +17,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [EntitiesComponents.md](EntitiesComponents.md) | ✅ landed | 14.1 |
 | [Queries.md](Queries.md) | ✅ landed | 14.2 |
 | [Relationships.md](Relationships.md) | ✅ landed | 14.3 |
-| [HierarchiesManual.md](HierarchiesManual.md) | pending | 14.4 |
+| [HierarchiesManual.md](HierarchiesManual.md) | ✅ landed | 14.4 |
 | [PrefabsManual.md](PrefabsManual.md) | pending | 14.5 |
 | [Systems.md](Systems.md) | pending | 14.6 |
 | [ObserversManual.md](ObserversManual.md) | pending | 14.7 |
@@ -123,3 +123,8 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget` with `Delete` / `Remove` actions) — controls what happens when a relationship entity or target entity is deleted. `ChildOf` is hardcoded to cascade-delete children; custom cleanup policies for arbitrary relationships are not yet configurable. not yet ported in Go flecs.
 - **PairIsTag trait** (`EcsPairIsTag`) — forces a relationship's pairs to behave as tags regardless of whether an element is a component type. The built-in `ChildOf` uses this internally. Custom relationships cannot yet opt into this trait. not yet ported in Go flecs.
 - **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a parent scope so that all subsequently created entities automatically receive a `(ChildOf, scope)` pair without explicit `AddID` calls. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.4 (HierarchiesManual port)
+
+- **`OrderedChildren` trait** — add this trait to a parent entity to guarantee that `EachChild` iterates children in creation order regardless of component mutations that would otherwise move children between archetype tables. not yet ported in Go flecs.
+- **`Parent` hierarchy storage** — a second, non-fragmenting storage for small structured hierarchies where children of multiple parents share the same archetype table. Reduces table fragmentation and memory footprint for prefab-heavy workloads. not yet ported in Go flecs.
