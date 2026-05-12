@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.20)
+## Shipped (through v0.21)
 
 The following features are available in the current release:
 
@@ -41,9 +41,9 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 
 | Phase | Doc | Status |
 |---|---|---|
-| 14.0 | Survey + `docs/` scaffold + `Quickstart.md` | ✅ shipped (v0.18.0) |
-| 14.1 | `EntitiesComponents.md` | ✅ shipped (v0.19.0) |
-| 14.2 | `Queries.md` | ✅ shipped (v0.20.0) |
+| 14.0 | Survey + `docs/` scaffold + `Quickstart.md` | ✅ shipped (v0.19.0) |
+| 14.1 | `EntitiesComponents.md` | ✅ shipped (v0.20.0) |
+| 14.2 | `Queries.md` | ✅ shipped (v0.21.0) |
 | 14.3 | `Relationships.md` | pending |
 | 14.4 | `HierarchiesManual.md` | pending |
 | 14.5 | `PrefabsManual.md` | pending |

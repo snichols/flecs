@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.2: Queries doc port
+## v0.21.0 — 2026-05-12 — Phase 14.2: Queries doc port
 
 ### Added
 
@@ -10,7 +10,7 @@
 
 ### Changed
 
-- **`ROADMAP.md`** — Phase 14.2 row updated to `✅ shipped (v0.20.0)`.
+- **`ROADMAP.md`** — Phase 14.2 row updated to `✅ shipped (v0.21.0)`; corrected off-by-one version attributions for 14.0 (v0.19.0) and 14.1 (v0.20.0).
 
 ## v0.20.0 — 2026-05-12 — Phase 14.1: EntitiesComponents doc port
 
@@ -22,7 +22,7 @@
 
 ### Changed
 
-- **`ROADMAP.md`** — Phase 14.1 row updated to `✅ shipped (v0.19.0)`.
+- **`ROADMAP.md`** — Phase 14.1 row updated to `✅ shipped (v0.20.0)`.
 
 ## v0.19.0 — 2026-05-12 — Phase 14.0: Documentation survey + Quickstart
 
