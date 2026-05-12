@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.9: FlecsRemoteApi doc port (upcoming v0.28.0)
+## v0.28.0 — 2026-05-12 — Phase 14.9: FlecsRemoteApi doc port
 
 ### Added
 
