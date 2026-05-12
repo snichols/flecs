@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-12)
+
+Phase 14.3 complete: full Go-idiomatic port of docs/Relationships.md from upstream C flecs. Created docs/relationships_examples_test.go with 19 TestRelationships_* tests covering every code block (basic pair AddID/RemoveID/HasID, multiple targets, tag pair ops, HasPair, QueryByPair, SetPair/GetPair, GetPairRef, ComponentTwice, InspectPairs, IsA basic/component-sharing/EachPrefab, ChildOf basic/EachChild-ParentOf/namespacing, GetUp/HasUp/TargetUp traversal, query Up/SelfUp/Cascade). 7 unported features with callouts: exclusive/symmetric/transitive/traversable traits, cleanup policies, PairIsTag, entity scoping. docs/README.md Relationships row → landed/14.3, 7 new gaps appended. ROADMAP.md 14.3 row → shipped (v0.22.0). CHANGELOG.md Unreleased entry added. go test ./... -race -count=1, go vet ./..., golangci-lint run ./... all clean.
+
