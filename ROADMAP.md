@@ -50,7 +50,7 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 | 14.6 | `Systems.md` | ✅ shipped (v0.25.0) |
 | 14.7 | `ObserversManual.md` | ✅ shipped (v0.26.0) |
 | 14.8 | `ComponentTraits.md` | ✅ shipped (v0.27.0) |
-| 14.9 | `FlecsRemoteApi.md` | pending |
+| 14.9 | `FlecsRemoteApi.md` | ✅ shipped (v0.28.0) |
 | 14.10 | `DesignWithFlecs.md` | pending |
 | 14.11 | `Manual.md` | pending |
 | 14.12 | `FAQ.md` | pending |
