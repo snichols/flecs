@@ -16,7 +16,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 |---|---|---|
 | [EntitiesComponents.md](EntitiesComponents.md) | ✅ landed | 14.1 |
 | [Queries.md](Queries.md) | ✅ landed | 14.2 |
-| [Relationships.md](Relationships.md) | pending | 14.3 |
+| [Relationships.md](Relationships.md) | ✅ landed | 14.3 |
 | [HierarchiesManual.md](HierarchiesManual.md) | pending | 14.4 |
 | [PrefabsManual.md](PrefabsManual.md) | pending | 14.5 |
 | [Systems.md](Systems.md) | pending | 14.6 |
@@ -113,3 +113,13 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **AndFrom / OrFrom / NotFrom operators** — expand the component list of a given entity into implicit AND / OR / NOT terms, useful with prefab type-lists. not yet ported in Go flecs.
 - **Query scopes** — `scope_open` / `scope_close` negate a sub-expression of arbitrary terms (e.g., `Position, !{ Velocity || Speed }`). not yet ported in Go flecs.
 - **Access modifiers on query terms** — `In` / `InOut` / `Out` / `None` per-term annotations used by the C scheduler for pipeline sync-point inference. Go flecs governs mutation via `Read`/`Write` world scopes; per-term annotations are not ported.
+
+### Additional gaps discovered in Phase 14.3 (Relationships port)
+
+- **Exclusive relationship trait** (`EcsExclusive`) — ensures an entity can have at most one target for a given relationship; adding a second target automatically removes the first. Useful for state machines. not yet ported in Go flecs.
+- **Symmetric relationship trait** (`EcsSymmetric`) — makes a relationship bidirectional: adding `(R, Y)` to entity `X` automatically adds `(R, X)` to entity `Y`. not yet ported in Go flecs.
+- **Transitive relationship trait** (`EcsTransitive`) — enables transitive query matching for custom relationships (if `A R B` and `B R C`, queries for `(R, C)` also match `A`). The built-in `IsA` already walks its chain in `Get`/`Has`; general transitivity for custom relationships requires this unported trait. not yet ported in Go flecs.
+- **Traversable relationship trait** (`EcsTraversable`) — formally marks a relationship as safe to traverse in queries; controls which relationships the query engine may follow when evaluating `Up`/`SelfUp`/`Cascade` terms. In Go flecs any entity can be used as a traversal relationship without explicit registration; the formal trait and its safety enforcement are not ported. not yet ported in Go flecs.
+- **Configurable cleanup policies** (`OnDelete` / `OnDeleteTarget` with `Delete` / `Remove` actions) — controls what happens when a relationship entity or target entity is deleted. `ChildOf` is hardcoded to cascade-delete children; custom cleanup policies for arbitrary relationships are not yet configurable. not yet ported in Go flecs.
+- **PairIsTag trait** (`EcsPairIsTag`) — forces a relationship's pairs to behave as tags regardless of whether an element is a component type. The built-in `ChildOf` uses this internally. Custom relationships cannot yet opt into this trait. not yet ported in Go flecs.
+- **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a parent scope so that all subsequently created entities automatically receive a `(ChildOf, scope)` pair without explicit `AddID` calls. not yet ported in Go flecs.
