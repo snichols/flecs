@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Phase 14.8: ComponentTraits doc port (upcoming v0.27.0)
+
+### Added
+
+- **`docs/ComponentTraits.md`** — full Go-idiomatic port of the upstream C flecs ComponentTraits manual. Leads with the two implemented traits: `SetInheritable[T]` / `w.SetInheritable(cid)` (auto-promotes query terms to `Self|Up(IsA)`) and the `OnInstantiate` / `Inherit` / `Override` / `DontInherit` entity ID accessors (IDs exist; full runtime behavior is partial). Covers all 20+ remaining traits from the upstream doc as explicit `Not yet ported in Go flecs` callouts with C-API sketches and Go workarounds where available. Closes with a scannable "Trait system roadmap" table listing every trait, its current status (✅ shipped / 🟡 partial / ⏳ planned), and a brief note. Cross-links to [Quickstart](Quickstart.md), [Relationships](Relationships.md), [PrefabsManual](PrefabsManual.md), [Queries](Queries.md), and the [feature-gap list](docs/README.md).
+- **`docs/component_traits_examples_test.go`** — 8 test functions (`TestComponentTraits_*`) exercising all Go code blocks in the manual: inheritable query match, inherited value from base, non-match without the flag, `w.SetInheritable(cid)` by ID, all four `OnInstantiate`/`Inherit`/`Override`/`DontInherit` IDs non-zero and distinct, `Get[T]` IsA chain walk, copy-on-write override. Run with `go test ./docs/...`.
+- **`docs/README.md`** — ComponentTraits row updated to `✅ landed / 14.8`; 9 newly discovered feature gaps appended: `Reflexive`, `Constant`, `DontFragment`, `Singleton` trait, `Union` trait, `Final`, `OneOf`, `With`, and `Relationship`/`Target`/`Trait` enforcement traits.
+
+### Changed
+
+- **`ROADMAP.md`** — Phase 14.8 row updated to `✅ shipped (v0.27.0)`.
+
 ## v0.26.0 — 2026-05-12 — Phase 14.7: ObserversManual doc port
 
 ### Added

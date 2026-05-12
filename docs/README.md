@@ -21,7 +21,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [PrefabsManual.md](PrefabsManual.md) | ✅ landed | 14.5 |
 | [Systems.md](Systems.md) | ✅ landed / 14.6 | 14.6 |
 | [ObserversManual.md](ObserversManual.md) | ✅ landed / 14.7 | 14.7 |
-| [ComponentTraits.md](ComponentTraits.md) | pending | 14.8 |
+| [ComponentTraits.md](ComponentTraits.md) | ✅ landed / 14.8 | 14.8 |
 | [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending | 14.9 |
 | [DesignWithFlecs.md](DesignWithFlecs.md) | pending | 14.10 |
 | [Manual.md](Manual.md) | pending | 14.11 |
@@ -158,3 +158,15 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Monitor observers** — `EcsMonitor` event fires when an entity starts or stops matching a query. not yet ported in Go flecs.
 - **Observer disabling** — pause an observer without removing it (analogous to system disabling). not yet ported in Go flecs.
 - **Fixed-source observer terms** — observer terms that match a component on a specific entity (not `$this`). not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.8 (ComponentTraits port)
+
+- **`Reflexive` relationship trait** — `Has(e, R, e)` is always true for a reflexive relationship (e.g. `IsA` is reflexive; `LocatedIn` is not). not yet ported in Go flecs.
+- **`Constant` component trait** — marks a component read-only after its initial write; subsequent `Set` calls would be a fatal error. not yet ported in Go flecs.
+- **`DontFragment` component trait** — opt a component into non-fragmenting sparse storage; sparse but does not create new archetype tables. not yet ported in Go flecs.
+- **`Singleton` component trait** (`EcsSingleton`) — constrains a component to a single world-global instance stored on the component entity itself; queries auto-match the component entity as source. not yet ported in Go flecs.
+- **`Union` relationship trait** — union-pair semantics: only one of several targets may be active for a given relationship on an entity; stored to minimise table fragmentation. not yet ported in Go flecs.
+- **`Final` entity trait** — prevents an entity from being used as an `IsA` target; enables query optimisation. not yet ported in Go flecs.
+- **`OneOf` relationship trait** — constrains relationship targets to be children of a specified entity (useful for enum-style relationships). not yet ported in Go flecs.
+- **`With` relationship** — automatically co-adds a second component when a component is added; when added to a relationship, the co-added id mirrors the pair target. not yet ported in Go flecs.
+- **`Relationship` / `Target` / `Trait` enforcement traits** — restrict how an entity may be used in pairs (as relationship, as target, or as a trait); relax some constraints when the `Trait` marker is present. not yet ported in Go flecs.
