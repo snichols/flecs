@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — v0.32.0 — Phase 15.0: Configurable cleanup policies
+
+### Added
+
+- **Configurable cleanup policies** — `OnDelete` and `OnDeleteTarget` trait relationships with `RemoveAction`, `DeleteAction`, and `PanicAction` action entities. Mirrors C flecs `src/on_delete.c` and `src/bootstrap.c:294–309`.
+  - `World.OnDelete() ID`, `World.OnDeleteTarget() ID` — trait relationship accessors.
+  - `World.RemoveAction() ID`, `World.DeleteAction() ID`, `World.PanicAction() ID` — action tag accessors.
+  - `SetCleanupPolicy(w, relID, trait, action)` — register a cleanup policy for a relationship or component entity.
+  - `GetCleanupPolicy(w, relID, trait) (ID, bool)` — read back a registered policy.
+  - Pair-add path: `fw.AddID(relID, MakePair(w.OnDeleteTarget(), w.DeleteAction()))` is equivalent to `SetCleanupPolicy` and is first-class.
+- **`ChildOf` cascade-delete is now policy-driven.** Bootstrap installs `(ChildOf, OnDeleteTarget, DeleteAction)` via the general mechanism. Existing `childof_test.go` behavior is preserved bit-for-bit; there is no hardcoded ChildOf branch in `deleteImmediate`.
+- **`cleanup_policies_test.go`** — 8 test cases covering: default Remove unchanged, OnDeleteTarget+Delete, OnDeleteTarget+Panic, ChildOf cascade regression (verifies general mechanism drives existing cascade), OnDelete+Delete entity-delete no-op, Delete-beats-Remove precedence, Panic propagation from World.Delete and deferred Writer.Delete, and wildcard target cascade.
+
+### Migration Guide
+
+Existing code using `ChildOf` cascade-delete is unaffected — the observable behavior is identical. The new `OnDelete` / `OnDeleteTarget` API is purely additive.
+
+Built-in entity count increases from 11 to 16. If your code hardcodes the built-in entity count (e.g., in marshal skip-sets or test baselines), update to include `OnDelete` (12), `OnDeleteTarget` (13), `RemoveAction` (14), `DeleteAction` (15), `PanicAction` (16).
+
+### Non-goals (explicitly out of scope for v0.32.0)
+
+- No observer-driven `OnDelete` / `OnDeleteTarget` event callbacks (policies only).
+- No `OnDelete` component-remove cascade on the component-remove path (only the entity-delete path is covered).
+- No auto-`(IsA, OnDeleteTarget, Panic)` bootstrap — matches C. See `docs/PrefabsManual.md` for opt-in recipe.
+
+---
+
 ## v0.31.0 — 2026-05-12 — Phase 14.12: FAQ doc port (docs port complete)
 
 This phase completes the docs-port project. Phases 14.0–14.12 spanned 13 releases (v0.19.0–v0.31.0) and ported every relevant upstream C flecs document to Go idioms, verified with compile-tested code blocks throughout.

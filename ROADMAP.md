@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.31)
+## Shipped (through v0.32)
 
 The following features are available in the current release:
 
@@ -34,6 +34,7 @@ The following features are available in the current release:
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
 - **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
+- **Configurable cleanup policies** _(v0.32.0)_ — `OnDelete` and `OnDeleteTarget` trait relationships with `RemoveAction`, `DeleteAction`, and `PanicAction`. `SetCleanupPolicy` / `GetCleanupPolicy` public API. Pair-add path (`AddID(relID, MakePair(w.OnDeleteTarget(), w.DeleteAction()))`) is first-class. `ChildOf` cascade-delete is now driven by the general mechanism (`(ChildOf, OnDeleteTarget, DeleteAction)` bootstrap). `IsA` has no default policy — opt-in recipe documented in `docs/PrefabsManual.md`.
 
 ## Documentation
 
@@ -62,6 +63,10 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 ## Future Work
 
 The following are deferred to later phases. No timeline is set; issues welcome.
+
+### Cleanup policy extensions (Phase 15.1 candidates)
+- **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).
+- **Observer-driven OnDelete / OnDeleteTarget events** — fire observer callbacks when cleanup policies trigger, matching C's `flecs_invoke_hook` path.
 
 ### Query extensions
 (all originally-planned query extensions shipped)

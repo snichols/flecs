@@ -527,13 +527,33 @@ Relationship traits are components added to relationship *entities* to change th
 
 ### Cleanup policies
 
-> **Not yet ported in Go flecs.**
-> C flecs lets you configure what happens when a relationship entity or a target
-> entity is deleted: the `OnDelete` / `OnDeleteTarget` traits with `Delete` or `Remove`
-> actions control cascading deletes. `ChildOf` is hardcoded to cascade-delete children;
-> custom cleanup policies for arbitrary relationships are not yet configurable in the
-> Go port.
-> See the [Configurable cleanup policies gap](README.md#feature-gap-list-candidate-follow-up-issues).
+**Shipped in v0.32.0.** Go flecs supports configurable cleanup policies via the `OnDelete` and `OnDeleteTarget` trait relationships.
+
+- **`OnDelete`** governs what happens to source entities when the relationship or component entity itself is deleted.
+- **`OnDeleteTarget`** governs what happens to source entities when a *target* entity is deleted.
+
+Actions: `DeleteAction` (cascade-delete sources), `PanicAction` (panic if sources exist), `RemoveAction` (default — remove the pair from sources without deleting them).
+
+`ChildOf` has `(OnDeleteTarget, DeleteAction)` registered by default in bootstrap, which is what drives the parent-cascade-delete behavior. IsA does **not** get a default `OnDeleteTarget` policy (matching C); see `docs/PrefabsManual.md` for the opt-in recipe.
+
+```go
+w := flecs.New()
+
+var likesID flecs.ID
+w.Write(func(fw *flecs.Writer) { likesID = fw.NewEntity() })
+
+// When a liked target is deleted, delete all entities that liked it.
+flecs.SetCleanupPolicy(w, likesID, w.OnDeleteTarget(), w.DeleteAction())
+
+// Or via pair-add (equivalent):
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(likesID, flecs.MakePair(w.OnDeleteTarget(), w.DeleteAction()))
+})
+
+// Read back the registered policy.
+action, ok := flecs.GetCleanupPolicy(w, likesID, w.OnDeleteTarget())
+// action == w.DeleteAction(), ok == true
+```
 
 ### PairIsTag
 

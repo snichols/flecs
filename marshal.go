@@ -99,17 +99,22 @@ func (m *marshaler) visit(e ID) error {
 // Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
 	skip := map[ID]struct{}{
-		w.ChildOf():       {},
-		w.IsA():           {},
-		w.Name():          {},
-		w.PreUpdate():     {},
-		w.OnUpdate():      {},
-		w.PostUpdate():    {},
-		w.OnFixedUpdate(): {},
-		w.OnInstantiate(): {},
-		w.Inherit():       {},
-		w.Override():      {},
-		w.DontInherit():   {},
+		w.ChildOf():        {},
+		w.IsA():            {},
+		w.Name():           {},
+		w.PreUpdate():      {},
+		w.OnUpdate():       {},
+		w.PostUpdate():     {},
+		w.OnFixedUpdate():  {},
+		w.OnInstantiate():  {},
+		w.Inherit():        {},
+		w.Override():       {},
+		w.DontInherit():    {},
+		w.OnDelete():       {},
+		w.OnDeleteTarget(): {},
+		w.RemoveAction():   {},
+		w.DeleteAction():   {},
+		w.PanicAction():    {},
 	}
 
 	var result []byte

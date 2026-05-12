@@ -307,6 +307,33 @@ The following C flecs prefab features have no equivalent in the current Go port:
 
 ---
 
+## Protecting prefabs from accidental deletion
+
+Go flecs does **not** auto-install `(OnDeleteTarget, Panic)` on `IsA` — this matches C flecs, where `EcsIsA` has no default cleanup policy either. Deleting a prefab that instances depend on simply orphans those instances (the `(IsA, prefab)` pair remains but the prefab entity is dead).
+
+If you want deleting a prefab to panic (e.g., to catch lifecycle bugs during development), install the policy explicitly:
+
+```go
+w := flecs.New()
+
+// Create a prefab.
+var vehiclePrefab flecs.ID
+w.Write(func(fw *flecs.Writer) { vehiclePrefab = fw.NewEntity() })
+
+// Guard: panics if any entity still inherits vehiclePrefab via IsA when it is deleted.
+flecs.SetCleanupPolicy(w, w.IsA(), w.OnDeleteTarget(), w.PanicAction())
+```
+
+Alternatively, install it only on specific prefab entities rather than on `IsA` globally:
+
+```go
+// Panic when vehiclePrefab itself is used as a target and someone tries to delete it.
+// Not standard flecs — use carefully; this is an opt-in safety net.
+flecs.SetCleanupPolicy(w, vehiclePrefab, w.OnDelete(), w.PanicAction())
+```
+
+---
+
 ## See Also
 
 - [Quickstart](Quickstart.md) — hands-on introduction to `IsA` prefab inheritance.
