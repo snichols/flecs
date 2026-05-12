@@ -389,3 +389,76 @@ func TestGetCleanupPolicyOverwrite(t *testing.T) {
 		t.Fatal("expected no policy after overwriting back to RemoveAction (the default)")
 	}
 }
+
+// ── Test: GetCleanupPolicy with OnDelete trait ────────────────────────────────
+//
+// GetCleanupPolicy must return the correct action when trait == OnDelete().
+// These tests cover the onDeleteID branch in GetCleanupPolicy which is distinct
+// from the onDeleteTargetID branch covered by earlier tests.
+
+func TestGetCleanupPolicyOnDeleteWithDeleteAction(t *testing.T) {
+	w := flecs.New()
+	var relID flecs.ID
+	w.Write(func(fw *flecs.Writer) { relID = fw.NewEntity() })
+
+	flecs.SetCleanupPolicy(w, relID, w.OnDelete(), w.DeleteAction())
+
+	action, ok := flecs.GetCleanupPolicy(w, relID, w.OnDelete())
+	if !ok {
+		t.Fatal("expected OnDelete+Delete policy to be registered")
+	}
+	if action != w.DeleteAction() {
+		t.Fatalf("expected DeleteAction, got %v", action)
+	}
+}
+
+func TestGetCleanupPolicyOnDeleteWithPanicAction(t *testing.T) {
+	w := flecs.New()
+	var relID flecs.ID
+	w.Write(func(fw *flecs.Writer) { relID = fw.NewEntity() })
+
+	flecs.SetCleanupPolicy(w, relID, w.OnDelete(), w.PanicAction())
+
+	action, ok := flecs.GetCleanupPolicy(w, relID, w.OnDelete())
+	if !ok {
+		t.Fatal("expected OnDelete+Panic policy to be registered")
+	}
+	if action != w.PanicAction() {
+		t.Fatalf("expected PanicAction, got %v", action)
+	}
+}
+
+func TestGetCleanupPolicyOnDeleteOverwriteToRemove(t *testing.T) {
+	w := flecs.New()
+	var relID flecs.ID
+	w.Write(func(fw *flecs.Writer) { relID = fw.NewEntity() })
+
+	flecs.SetCleanupPolicy(w, relID, w.OnDelete(), w.DeleteAction())
+	flecs.SetCleanupPolicy(w, relID, w.OnDelete(), w.RemoveAction())
+
+	_, ok := flecs.GetCleanupPolicy(w, relID, w.OnDelete())
+	if ok {
+		t.Fatal("expected no policy after overwriting OnDelete back to RemoveAction")
+	}
+}
+
+// ── Test: applyCleanupPolicy panic paths ─────────────────────────────────────
+//
+// applyCleanupPolicy panics on unknown trait. These tests cover the default
+// panic branches that guard against misuse.
+
+func TestSetCleanupPolicyUnknownTraitPanics(t *testing.T) {
+	w := flecs.New()
+	var relID, badTrait flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		badTrait = fw.NewEntity()
+	})
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for unknown trait, got none")
+		}
+	}()
+	flecs.SetCleanupPolicy(w, relID, badTrait, w.DeleteAction())
+}
