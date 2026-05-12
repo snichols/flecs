@@ -344,6 +344,41 @@ DontInherit takes precedence over Inheritable: calling both `SetInheritable[T](w
 
 ---
 
+## Sealing prefabs with Final
+
+When a concrete prefab is not meant to be a base class for other prefabs, mark it with `flecs.SetFinal` to enforce the boundary at `AddID` time:
+
+```go
+w := flecs.New()
+flecs.RegisterComponent[Health](w)
+
+var concreteFrigate flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    concreteFrigate = fw.NewEntity()
+    flecs.Set(fw, concreteFrigate, Health{Max: 500})
+})
+
+// Seal concreteFrigate — no further IsA subtyping allowed.
+flecs.SetFinal(w, concreteFrigate)
+
+// Verify at query time.
+w.Read(func(fr *flecs.Reader) {
+    fmt.Println(flecs.IsFinal(fr, concreteFrigate)) // true
+})
+
+// Attempting to subtype will panic:
+// w.Write(func(fw *flecs.Writer) {
+//     fw.AddID(someOtherPrefab, flecs.MakePair(w.IsA(), concreteFrigate))
+//     // panics: "cannot add (IsA, <id>): <id> has the Final trait"
+// })
+```
+
+`IsFinal` accepts the `scope` interface, so it works in both `Read` and `Write` blocks without `AsReader()`. The bare-tag form `fw.AddID(entityID, w.Final())` is equivalent to `SetFinal(w, entityID)`.
+
+See [ComponentTraits.md § Final](ComponentTraits.md#final) for the full API reference.
+
+---
+
 ## Not yet ported
 
 The following C flecs prefab features have no equivalent in the current Go port:
