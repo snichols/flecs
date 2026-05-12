@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.8: ComponentTraits doc port (upcoming v0.27.0)
+## v0.27.0 — 2026-05-12 — Phase 14.8: ComponentTraits doc port
 
 ### Added
 
