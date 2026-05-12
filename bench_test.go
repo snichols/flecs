@@ -1203,3 +1203,52 @@ func BenchmarkMultiThreadedSystem(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMultiThreadedDeferredSet measures throughput of per-stage deferred
+// Set commands from worker goroutines. Each worker does CPU-bound work (vec3
+// normalisation) then enqueues the result via fw.Set into its own stage queue;
+// stages are merged serially after wg.Wait.
+// Acceptance: >= 2x speedup on 4 workers vs 1 worker.
+func BenchmarkMultiThreadedDeferredSet(b *testing.B) {
+	type benchDeferVec struct{ X, Y, Z float32 }
+	for _, wc := range []int{1, 2, 4} {
+		wc := wc
+		b.Run(fmt.Sprintf("workers=%d", wc), func(b *testing.B) {
+			w := flecs.New()
+			w.SetWorkerCount(wc)
+			vecID := flecs.RegisterComponent[benchDeferVec](w)
+			const n = 100_000
+			w.Write(func(fw *flecs.Writer) {
+				for range n {
+					e := fw.NewEntity()
+					flecs.Set(fw, e, benchDeferVec{X: 1, Y: 2, Z: 3})
+				}
+			})
+			cq := flecs.NewCachedQuery(w, vecID)
+			sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
+				fw := it.Writer()
+				for it.Next() {
+					vecs := flecs.Field[benchDeferVec](it, vecID)
+					entities := it.Entities()
+					for i, e := range entities {
+						x, y, z := vecs[i].X, vecs[i].Y, vecs[i].Z
+						// CPU-bound: 64 iterations of vec3 normalization per entity so
+						// the parallel phase clearly dominates the serial flush phase.
+						for k := 0; k < 64; k++ {
+							mag2 := x*x + y*y + z*z + 1
+							x = x/mag2 + 1
+							y = y/mag2 + 1
+							z = z/mag2 + 1
+						}
+						flecs.Set(fw, e, benchDeferVec{X: x, Y: y, Z: z})
+					}
+				}
+			})
+			sys.SetMultiThreaded(true)
+			b.ResetTimer()
+			for range b.N {
+				w.Progress(0)
+			}
+		})
+	}
+}

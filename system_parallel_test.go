@@ -192,8 +192,9 @@ func TestMultiThreadedSystemEmptyWorkers(t *testing.T) {
 }
 
 // TestMultiThreadedSystemWithDeferredMutations verifies that workers calling
-// w.Delete from inside the iter loop are safe (mutex-protected defer queue)
-// and all deletes are applied correctly after the phase.
+// it.Writer().Delete from inside the iter loop route mutations to their own
+// per-stage queue (no contention) and all deletes are applied correctly after
+// the stage-merge at wg.Wait.
 func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 	w := flecs.New()
 	w.SetWorkerCount(4)
@@ -211,9 +212,10 @@ func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 
 	cq := flecs.NewCachedQuery(w, posID)
 	sys := flecs.NewSystem(w, cq, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
 		for it.Next() {
 			for _, e := range it.Entities() {
-				w.Delete(e) // deferred via mutex-protected queue
+				fw.Delete(e) // routes to this worker's per-stage queue
 			}
 		}
 	})
@@ -221,7 +223,7 @@ func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 
 	w.Progress(0)
 
-	// All entities must be dead after the Defer block flushes.
+	// All entities must be dead after per-stage queues are merged.
 	for _, e := range entities {
 		if w.IsAlive(e) {
 			t.Fatalf("entity %v should be dead after deferred Delete from multi-threaded worker", e)

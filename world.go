@@ -37,38 +37,37 @@ type Table = table.Table
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	mu               sync.RWMutex // guards Read/Write scopes
-	writeCapability  Writer       // cached Writer; &writeCapability avoids per-Write allocation
-	readCapability   Reader       // cached Reader; &readCapability avoids per-Read allocation
-	index            *entityindex.Index
-	registry         *component.Registry
-	tables           map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty            *table.Table                    // canonical empty-signature table for new entities
-	compIndex        *componentindex.Index           // reverse map: component ID → tables containing it
-	observers        map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	cachedQueries    []*CachedQuery                  // lazily allocated; notified on new table creation
-	systems          []*System                       // lazily allocated; compacted in NewSystem
-	childOfID        ID                              // built-in ChildOf relationship entity (index 1)
-	isAID            ID                              // built-in IsA relationship entity (index 2)
-	nameID           ID                              // built-in Name component entity (index 3)
-	preUpdateID      ID                              // built-in PreUpdate phase entity (index 4)
-	onUpdateID       ID                              // built-in OnUpdate phase entity (index 5)
-	postUpdateID     ID                              // built-in PostUpdate phase entity (index 6)
-	onFixedUpdateID  ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
-	exclusiveAccess  atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
-	exclusiveThread  string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	deferMu          sync.Mutex                      // guards deferDepth and deferred; never held during system fn invocation
-	deferDepth       int                             // nesting counter; 0 means "apply immediately"
-	deferred         *cmdQueue                       // tagged-union cmd queue; flushed when deferDepth reaches 0
-	workerCount      int                             // number of persistent goroutines in the worker pool; 0 = serial
-	workerCh         chan func()                     // job channel; nil when workerCount == 0
-	inProgress       bool                            // true while Progress is executing
-	time             float32                         // total accumulated simulation time
-	frameCount       uint64                          // number of Progress calls
-	fixedTimestep    float32                         // fixed step size; 0 means disabled
-	fixedAccumulator float32                         // internal accumulator for fixed-step dispatch
-	lastFramePhases  [4]PhaseStats                   // per-phase timing from the most recent Progress call
-	logger           *slog.Logger                    // optional structured logger; nil means no logging
+	mu                 sync.RWMutex // guards Read/Write scopes
+	writeCapability    Writer       // cached Writer; &writeCapability avoids per-Write allocation
+	readCapability     Reader       // cached Reader; &readCapability avoids per-Read allocation
+	index              *entityindex.Index
+	registry           *component.Registry
+	tables             map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty              *table.Table                    // canonical empty-signature table for new entities
+	compIndex          *componentindex.Index           // reverse map: component ID → tables containing it
+	observers          map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	cachedQueries      []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems            []*System                       // lazily allocated; compacted in NewSystem
+	childOfID          ID                              // built-in ChildOf relationship entity (index 1)
+	isAID              ID                              // built-in IsA relationship entity (index 2)
+	nameID             ID                              // built-in Name component entity (index 3)
+	preUpdateID        ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID         ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID       ID                              // built-in PostUpdate phase entity (index 6)
+	onFixedUpdateID    ID                              // built-in OnFixedUpdate phase entity (index 7; first user entity at index 8)
+	exclusiveAccess    atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread    string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
+	stages             []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
+	workerStageWriters []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
+	workerCount        int                             // number of persistent goroutines in the worker pool; 0 = serial
+	workerCh           chan func()                     // job channel; nil when workerCount == 0
+	inProgress         bool                            // true while Progress is executing
+	time               float32                         // total accumulated simulation time
+	frameCount         uint64                          // number of Progress calls
+	fixedTimestep      float32                         // fixed step size; 0 means disabled
+	fixedAccumulator   float32                         // internal accumulator for fixed-step dispatch
+	lastFramePhases    [4]PhaseStats                   // per-phase timing from the most recent Progress call
+	logger             *slog.Logger                    // optional structured logger; nil means no logging
 }
 
 // New initializes and returns an empty World.
@@ -89,7 +88,6 @@ func New() *World {
 		registry:  component.NewRegistry(),
 		tables:    make(map[string]*table.Table),
 		compIndex: componentindex.New(),
-		deferred:  acquireCmdQueue(),
 	}
 	w.empty = table.New([]ID{}, []*component.TypeInfo{})
 	w.tables[sigKey(nil)] = w.empty
@@ -135,8 +133,12 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(onFixedUpdate))
 	w.onFixedUpdateID = onFixedUpdate
+	// Initialize stage 0 (main stage) and bind the cached write capability to it.
+	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
+	w.stages = []*stage{s0}
 	// Initialize cached capability pointers — these avoid per-call heap allocation.
 	w.writeCapability.Reader.world = w
+	w.writeCapability.stage = s0
 	w.readCapability.world = w
 	return w
 }
@@ -208,8 +210,30 @@ func (w *World) SetWorkerCount(n int) {
 		close(w.workerCh)
 		w.workerCh = nil
 	}
+	// Release any excess worker stages (indices n+1 and beyond).
+	for i := n + 1; i < len(w.stages); i++ {
+		releaseCmdQueue(w.stages[i].queue)
+		w.stages[i].queue = nil
+	}
+	if n+1 < len(w.stages) {
+		w.stages = w.stages[:n+1]
+	}
 	w.workerCount = n
 	if n > 0 {
+		// Grow stages table to hold n worker stages (indices 1..n).
+		for len(w.stages) <= n {
+			id := len(w.stages)
+			s := &stage{id: id, queue: acquireCmdQueue(), world: w, deferDepth: 1}
+			w.stages = append(w.stages, s)
+		}
+		// Build the cached per-worker Writers (index i → stages[i+1]).
+		w.workerStageWriters = make([]Writer, n)
+		for i := 0; i < n; i++ {
+			w.workerStageWriters[i] = Writer{
+				Reader: Reader{world: w},
+				stage:  w.stages[i+1],
+			}
+		}
 		ch := make(chan func(), 2*n)
 		w.workerCh = ch
 		for range n {
@@ -284,17 +308,14 @@ func (w *World) deleteOne(e ID) bool {
 // A cycle guard (seen map) prevents infinite loops for self-referential hierarchies.
 func (w *World) Delete(e ID) bool {
 	w.checkExclusiveAccessWrite()
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	s0 := w.stages[0]
+	if s0.deferDepth > 0 {
 		if !w.index.IsAlive(e) {
-			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred.append(cmd{kind: cmdDelete, entity: e})
-		w.deferMu.Unlock()
+		s0.queue.append(cmd{kind: cmdDelete, entity: e})
 		return true
 	}
-	w.deferMu.Unlock()
 	return deleteImmediate(w, e)
 }
 
@@ -373,22 +394,20 @@ func RegisterComponent[T any](w *World) ID {
 // setOnWorld writes value v as component T on entity e.
 // Internal helper called by Writer.Set and the legacy World-based paths.
 func setOnWorld[T any](w *World, e ID, v T) {
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	s0 := w.stages[0]
+	if s0.deferDepth > 0 {
 		cid := RegisterComponent[T](w)
 		info, _ := component.LookupByType[T](w.registry)
 		if info.Size > 0 {
-			off, buf := w.deferred.arena.alloc(int(info.Size), int(info.Align))
+			off, buf := s0.queue.arena.alloc(int(info.Size), int(info.Align))
 			copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), info.Size))
-			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: cid,
+			s0.queue.append(cmd{kind: cmdSetByID, entity: e, id: cid,
 				valueOff: off, valueSize: uint32(info.Size)})
 		} else {
-			w.deferred.append(cmd{kind: cmdSetByID, entity: e, id: cid})
+			s0.queue.append(cmd{kind: cmdSetByID, entity: e, id: cid})
 		}
-		w.deferMu.Unlock()
 		return
 	}
-	w.deferMu.Unlock()
 	setImmediate[T](w, e, v)
 }
 
@@ -450,23 +469,19 @@ func ownsOnWorld[T any](w *World, e ID) bool {
 // removeOnWorld removes component T from entity e.
 // Internal helper; does not check exclusive access.
 func removeOnWorld[T any](w *World, e ID) bool {
-	w.deferMu.Lock()
-	if w.deferDepth > 0 {
+	s0 := w.stages[0]
+	if s0.deferDepth > 0 {
 		info, ok := component.LookupByType[T](w.registry)
 		if !ok || info.Component == 0 {
-			w.deferMu.Unlock()
 			return false
 		}
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
-			w.deferMu.Unlock()
 			return false
 		}
-		w.deferred.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
-		w.deferMu.Unlock()
+		s0.queue.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
 		return true
 	}
-	w.deferMu.Unlock()
 	return removeImmediate[T](w, e)
 }
 
@@ -793,24 +808,17 @@ func (w *World) Read(fn func(*Reader)) {
 // only the outermost Write flushes. Write from a different goroutine while
 // exclusive access is held panics with ErrExclusiveAccessViolation.
 func (w *World) Write(fn func(*Writer)) {
+	s0 := w.stages[0]
 	id := currentGoid()
 	owner := w.exclusiveAccess.Load()
 	if owner == id {
 		// Nested Write from same goroutine — increment depth and run without re-locking.
-		w.deferMu.Lock()
-		w.deferDepth++
-		w.deferMu.Unlock()
+		s0.deferDepth++
 		defer func() {
-			w.deferMu.Lock()
-			w.deferDepth--
-			depth := w.deferDepth
-			var q *cmdQueue
-			if depth == 0 {
-				q = w.deferred
-				w.deferred = acquireCmdQueue()
-			}
-			w.deferMu.Unlock()
-			if q != nil {
+			s0.deferDepth--
+			if s0.deferDepth == 0 {
+				q := s0.queue
+				s0.queue = acquireCmdQueue()
 				q.flush(w)
 				releaseCmdQueue(q)
 			}
@@ -823,20 +831,12 @@ func (w *World) Write(fn func(*Writer)) {
 	}
 	w.mu.Lock()
 	w.ExclusiveAccessBegin("Write")
-	w.deferMu.Lock()
-	w.deferDepth++
-	w.deferMu.Unlock()
+	s0.deferDepth++
 	defer func() {
-		w.deferMu.Lock()
-		w.deferDepth--
-		depth := w.deferDepth
-		var q *cmdQueue
-		if depth == 0 {
-			q = w.deferred
-			w.deferred = acquireCmdQueue()
-		}
-		w.deferMu.Unlock()
-		if q != nil {
+		s0.deferDepth--
+		if s0.deferDepth == 0 {
+			q := s0.queue
+			s0.queue = acquireCmdQueue()
 			q.flush(w)
 			releaseCmdQueue(q)
 		}
@@ -852,25 +852,19 @@ func (w *World) Write(fn func(*Writer)) {
 // access. Worker goroutines that call mutators inside a system callback rely
 // on deferScope not checking goroutine ownership.
 func (w *World) deferScope(fn func()) {
-	w.deferMu.Lock()
-	w.deferDepth++
-	w.deferMu.Unlock()
+	s0 := w.stages[0]
+	s0.deferDepth++
 	defer func() {
-		w.deferMu.Lock()
-		if w.deferDepth <= 0 {
-			w.deferMu.Unlock()
+		if s0.deferDepth <= 0 {
 			panic("flecs: deferScope: depth underflow")
 		}
-		w.deferDepth--
-		if w.deferDepth > 0 {
-			w.deferMu.Unlock()
-			return
+		s0.deferDepth--
+		if s0.deferDepth == 0 {
+			q := s0.queue
+			s0.queue = acquireCmdQueue()
+			q.flush(w)
+			releaseCmdQueue(q)
 		}
-		q := w.deferred
-		w.deferred = acquireCmdQueue()
-		w.deferMu.Unlock()
-		q.flush(w)
-		releaseCmdQueue(q)
 	}()
 	fn()
 }

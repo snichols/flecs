@@ -360,9 +360,13 @@
 //
 // In-place updates (mutating Field[T] slice elements directly) scale linearly
 // because workers never touch the same memory. Deferred structural mutations
-// (Set, Delete, AddID from inside the loop) are safe but contend on the single
-// mutex-protected defer queue; expect sub-linear scaling for those paths until
-// Phase 11.0 (per-stage command queues, task #40) ships.
+// (Set, Delete, AddID from inside the loop via [QueryIter.Writer]) are also
+// lock-free on the hot path: each worker goroutine writes into its own
+// per-stage command queue with no synchronization. After wg.Wait(), the main
+// goroutine merges stages in ascending id order (stage 1, 2, …, N, then
+// stage 0). Within each stage, per-entity FIFO coalescing is preserved; there
+// is no cross-stage coalescing. Hook callbacks fired during the merge always
+// execute on the main goroutine and receive the stage-0 Writer.
 //
 // # Stats and Observability
 //

@@ -242,10 +242,11 @@ type QueryIter struct {
 	cached          bool
 	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table
 	// multi-threaded dispatch clipping (zero workerTotal = no clipping, full table)
-	workerIdx   int // 0-based index of this worker
-	workerTotal int // total worker count; 0 = no clipping
-	wFirst      int // first row for this worker in the current table
-	wCount      int // row count for this worker in the current table
+	workerIdx    int     // 0-based index of this worker
+	workerTotal  int     // total worker count; 0 = no clipping
+	wFirst       int     // first row for this worker in the current table
+	wCount       int     // row count for this worker in the current table
+	workerWriter *Writer // per-worker Writer bound to the worker's stage; set by the dispatcher
 }
 
 // Next advances to the next matching table. Returns true when positioned on a
@@ -372,9 +373,15 @@ func (it *QueryIter) Query() *Query { return it.q }
 func (it *QueryIter) Reader() *Reader { return &it.world.readCapability }
 
 // Writer returns a *Writer capability backed by the iterator's world.
-// Valid for the duration of the enclosing Write scope.
-// Phase 12.1 will bind this to a per-worker stage instead.
-func (it *QueryIter) Writer() *Writer { return &it.world.writeCapability }
+// In multi-threaded dispatch each worker iterator carries its own per-stage
+// Writer (set by the dispatcher); for all other iterators this falls back to
+// the world's main-stage Writer.
+func (it *QueryIter) Writer() *Writer {
+	if it.workerWriter != nil {
+		return it.workerWriter
+	}
+	return &it.world.writeCapability
+}
 
 // clippedCopy returns a shallow copy of it restricted to worker workerIdx of
 // workerTotal. Each copy independently iterates the same table list but sees

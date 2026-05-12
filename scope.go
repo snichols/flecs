@@ -2,7 +2,11 @@ package flecs
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
+	"unsafe"
 
+	"github.com/snichols/flecs/internal/component"
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
@@ -26,6 +30,7 @@ type Reader struct {
 // All structural mutations are queued in a defer scope and flushed when fn returns.
 type Writer struct {
 	Reader
+	stage *stage // routes mutations to this stage's command queue
 }
 
 // AsReader returns the embedded *Reader so callers can pass it to read-only
@@ -239,22 +244,65 @@ func (fw *Writer) RemoveID(e ID, id ID) bool {
 
 // Delete removes entity e and all entities related to it via (ChildOf, e) pairs.
 func (fw *Writer) Delete(e ID) bool {
-	return fw.world.Delete(e)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		return deleteImmediate(fw.world, e)
+	}
+	if !fw.world.index.IsAlive(e) {
+		return false
+	}
+	s.queue.append(cmd{kind: cmdDelete, entity: e})
+	return true
 }
 
 // SetName sets the Name component on entity e.
 func (fw *Writer) SetName(e ID, name string) {
-	fw.world.SetName(e, name)
+	Set[Name](fw, e, Name{Value: name})
 }
 
 // SetByID writes value v as the component identified by id on entity e.
 func (fw *Writer) SetByID(e ID, id ID, v any) {
-	fw.world.SetByID(e, id, v)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		setByIDImmediate(fw.world, e, id, v)
+		return
+	}
+	info, ok := fw.world.registry.LookupByID(id)
+	if !ok {
+		panic(fmt.Sprintf("flecs: SetByID: component id %d is not registered", uint64(id)))
+	}
+	if reflect.TypeOf(v) != info.Type {
+		panic(fmt.Sprintf("flecs: SetByID: type mismatch for component %s (id=%d); expected %s, got %s",
+			info.Name, uint64(id), info.Type, reflect.TypeOf(v)))
+	}
+	if info.Size > 0 {
+		pv := reflect.New(info.Type)
+		pv.Elem().Set(reflect.ValueOf(v))
+		off, buf := s.queue.arena.alloc(int(info.Size), int(info.Align))
+		copy(buf, unsafe.Slice((*byte)(pv.UnsafePointer()), info.Size))
+		s.queue.append(cmd{kind: cmdSetByID, entity: e, id: id,
+			valueOff: off, valueSize: uint32(info.Size)})
+	} else {
+		s.queue.append(cmd{kind: cmdSetByID, entity: e, id: id})
+	}
 }
 
 // SetPairByID sets the pair (rel, tgt) on entity e with the dynamic value v.
 func (fw *Writer) SetPairByID(e, rel, tgt ID, v any) {
-	fw.world.SetPairByID(e, rel, tgt, v)
+	if v == nil {
+		panic("flecs: SetPairByID: v must not be nil")
+	}
+	pairID := MakePair(rel, tgt)
+	vType := reflect.TypeOf(v)
+	if existing, ok := fw.world.registry.LookupByID(pairID); ok {
+		if existing.Type != vType {
+			panic(fmt.Sprintf("flecs: SetPairByID: pair (rel=%d, tgt=%d) is already registered with type %s, cannot set with type %s",
+				uint64(rel), uint64(tgt), existing.Type, vType))
+		}
+	} else {
+		component.RegisterPairDataByType(fw.world.registry, pairID, vType)
+	}
+	fw.SetByID(e, pairID, v)
 }
 
 // ── Free functions (Reader-based reads) ──────────────────────────────────────
@@ -312,27 +360,90 @@ func OwnsID(r *Reader, e ID, id ID) bool {
 // Set writes value v as component T on entity e.
 // If T is not yet registered, it is auto-registered.
 func Set[T any](fw *Writer, e ID, v T) {
-	setOnWorld[T](fw.world, e, v)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		setImmediate[T](fw.world, e, v)
+		return
+	}
+	cid := RegisterComponent[T](fw.world)
+	info, _ := component.LookupByType[T](fw.world.registry)
+	if info.Size > 0 {
+		off, buf := s.queue.arena.alloc(int(info.Size), int(info.Align))
+		copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), info.Size))
+		s.queue.append(cmd{kind: cmdSetByID, entity: e, id: cid,
+			valueOff: off, valueSize: uint32(info.Size)})
+	} else {
+		s.queue.append(cmd{kind: cmdSetByID, entity: e, id: cid})
+	}
 }
 
 // Remove removes component T from entity e.
 func Remove[T any](fw *Writer, e ID) bool {
-	return removeOnWorld[T](fw.world, e)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		return removeImmediate[T](fw.world, e)
+	}
+	info, ok := component.LookupByType[T](fw.world.registry)
+	if !ok || info.Component == 0 {
+		return false
+	}
+	rec := fw.world.index.Get(e)
+	if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
+		return false
+	}
+	s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
+	return true
 }
 
 // SetPair sets the pair (rel, tgt) on entity e with typed data value v.
 func SetPair[T any](fw *Writer, e ID, rel ID, tgt ID, v T) {
-	setPairOnWorld[T](fw.world, e, rel, tgt, v)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		setPairImmediate[T](fw.world, e, rel, tgt, v)
+		return
+	}
+	pairID := MakePair(rel, tgt)
+	pairInfo := component.RegisterPairData[T](fw.world.registry, pairID)
+	if pairInfo.Size > 0 {
+		off, buf := s.queue.arena.alloc(int(pairInfo.Size), int(pairInfo.Align))
+		copy(buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), pairInfo.Size))
+		s.queue.append(cmd{kind: cmdSetPair, entity: e, id: pairID,
+			valueOff: off, valueSize: uint32(pairInfo.Size)})
+	} else {
+		s.queue.append(cmd{kind: cmdSetPair, entity: e, id: pairID})
+	}
 }
 
 // AddID adds the component or tag identified by id to entity e.
 func AddID(fw *Writer, e ID, e2 ID) bool {
-	return addIDOnWorld(fw.world, e, e2)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		return addIDImmediate(fw.world, e, e2)
+	}
+	rec := fw.world.index.Get(e)
+	if rec == nil {
+		panic("flecs: AddID called on dead entity")
+	}
+	if rec.Table != nil && rec.Table.HasComponent(e2) {
+		return false
+	}
+	fw.world.registry.EnsureID(e2)
+	s.queue.append(cmd{kind: cmdAddID, entity: e, id: e2})
+	return true
 }
 
 // RemoveID removes the component or tag identified by id from entity e.
 func RemoveID(fw *Writer, e ID, id ID) bool {
-	return removeIDOnWorld(fw.world, e, id)
+	s := fw.stage
+	if s.deferDepth == 0 {
+		return removeIDImmediate(fw.world, e, id)
+	}
+	rec := fw.world.index.Get(e)
+	if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {
+		return false
+	}
+	s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
+	return true
 }
 
 // ── Traversal free functions on Reader ───────────────────────────────────────

@@ -67,29 +67,24 @@ func ReaderEachTableForCount(w *World, componentID ID, stopAfter int) int {
 	return count
 }
 
-// DeferBeginForTest increments deferDepth. For defer-behavior tests only.
+// DeferBeginForTest increments stages[0].deferDepth. For defer-behavior tests only.
 func DeferBeginForTest(w *World) {
-	w.deferMu.Lock()
-	w.deferDepth++
-	w.deferMu.Unlock()
+	w.stages[0].deferDepth++
 }
 
-// DeferEndForTest decrements deferDepth and flushes if depth reaches zero.
+// DeferEndForTest decrements stages[0].deferDepth and flushes if depth reaches zero.
 // Panics if called without a matching DeferBeginForTest.
 func DeferEndForTest(w *World) {
-	w.deferMu.Lock()
-	if w.deferDepth <= 0 {
-		w.deferMu.Unlock()
+	s0 := w.stages[0]
+	if s0.deferDepth <= 0 {
 		panic("flecs: DeferEndForTest called without matching DeferBeginForTest")
 	}
-	w.deferDepth--
-	if w.deferDepth > 0 {
-		w.deferMu.Unlock()
+	s0.deferDepth--
+	if s0.deferDepth > 0 {
 		return
 	}
-	q := w.deferred
-	w.deferred = acquireCmdQueue()
-	w.deferMu.Unlock()
+	q := s0.queue
+	s0.queue = acquireCmdQueue()
 	q.flush(w)
 	releaseCmdQueue(q)
 }
