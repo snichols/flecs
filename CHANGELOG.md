@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.0: Documentation survey + Quickstart
+## v0.19.0 — 2026-05-12 — Phase 14.0: Documentation survey + Quickstart
 
 ### Added
 
