@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 23 built-in entities plus all registered component entities.
+// the 24 built-in entities plus all registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
 		w.ChildOf(): {}, w.IsA(): {}, w.Name(): {},
@@ -48,7 +48,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.OnDelete(): {}, w.OnDeleteTarget(): {},
 		w.RemoveAction(): {}, w.DeleteAction(): {}, w.PanicAction(): {},
 		w.Exclusive(): {}, w.CanToggle(): {}, w.Symmetric(): {}, w.Transitive(): {},
-		w.Reflexive(): {}, w.Wildcard(): {}, w.Any(): {},
+		w.Reflexive(): {}, w.Acyclic(): {}, w.Wildcard(): {}, w.Any(): {},
 	}
 	for _, cid := range w.Components() {
 		skip[cid] = struct{}{}
@@ -665,22 +665,29 @@ func TestMarshalTopologicalOrder(t *testing.T) {
 	}
 }
 
+// TestMarshalCycleDetection verifies that ChildOf cycles are rejected at write
+// time (ChildOf is bootstrapped as Acyclic in v0.41.0). The cycle can no longer
+// be stored, so MarshalJSON's cycle-detection code is now defence-in-depth for
+// corrupted data; the primary guard is at AddID.
 func TestMarshalCycleDetection(t *testing.T) {
 	w := flecs.New()
-	w.Write(func(fw *flecs.Writer) {
-		a := fw.NewEntity()
-		b := fw.NewEntity()
-		// A and B are each other's ChildOf parent — a mutual cycle.
-		flecs.AddID(fw, a, flecs.MakePair(w.ChildOf(), b))
-		flecs.AddID(fw, b, flecs.MakePair(w.ChildOf(), a))
-	})
-
-	_, err := w.MarshalJSON()
-	if err == nil {
-		t.Fatal("expected cycle error, got nil")
-	}
-	if !strings.Contains(err.Error(), "cycle") {
-		t.Fatalf("error should mention 'cycle': %v", err)
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		w.Write(func(fw *flecs.Writer) {
+			a := fw.NewEntity()
+			b := fw.NewEntity()
+			// A→B is fine; B→A must panic because ChildOf is Acyclic.
+			flecs.AddID(fw, a, flecs.MakePair(w.ChildOf(), b))
+			flecs.AddID(fw, b, flecs.MakePair(w.ChildOf(), a))
+		})
+	}()
+	if !panicked {
+		t.Fatal("expected panic when constructing a ChildOf cycle (ChildOf is bootstrapped as Acyclic)")
 	}
 }
 

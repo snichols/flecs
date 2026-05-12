@@ -166,11 +166,37 @@ The following sections describe traits that exist in C flecs but are not yet por
 
 ### Acyclic
 
-**What it does:** Adding `Acyclic` to a relationship tells the storage that the relationship cannot contain cycles. Both `ChildOf` and `IsA` are implicitly acyclic. When `Acyclic` is set, the engine can detect and error on accidental cycles during development.
+**Shipped in v0.41.0.**
 
-**Workaround:** No general mechanism. `ChildOf` and `IsA` are hardcoded to be traversed safely; custom relationships have no cycle detection.
+**What it does:** Marking a relationship `Acyclic` prevents cycles from being stored. When a pair `(e, R, target)` is added, the engine walks the `R` chain upward from `target`; if `e` is reachable, the add panics with a clear message. `ChildOf` is bootstrapped acyclic, so mutual parent/child cycles are rejected at write time — fixing a correctness gap that could cause `EachChild` to recurse infinitely.
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#feature-gap-list): *Transitive relationships / Traversable relationship trait*.
+Self-pairs `(e, R, e)` are allowed; Acyclic does not reject them. For self-pairs to be implicitly true without storage, combine with [Reflexive](#reflexive).
+
+**Deliberate divergence from C flecs:** C guards cycles at lookup/traversal time (via `ECS_MAX_RECURSION` and per-function depth caps). The Go port enforces at `AddID` time so that `EachChild` and similar recursors never encounter an infinite chain. This is documented in CHANGELOG v0.41.0.
+
+**Go API:**
+
+```go
+myRelID := fw.NewEntity()
+
+// Register the relationship as acyclic (either form is equivalent):
+flecs.SetAcyclic(w, myRelID)
+// or:
+fw.AddID(myRelID, w.Acyclic())
+
+// Safe add — no cycle:
+fw.AddID(a, flecs.MakePair(myRelID, b))
+fw.AddID(b, flecs.MakePair(myRelID, c))
+
+// This would panic: c → b → a, adding (c, R, a) completes the cycle.
+// fw.AddID(c, flecs.MakePair(myRelID, a)) // panics
+
+// Check the flag:
+flecs.IsAcyclic(w, myRelID) // → true
+
+// ChildOf is bootstrapped acyclic — this panics:
+// fw.AddID(parent, flecs.MakePair(w.ChildOf(), child)) // when child is already ChildOf parent
+```
 
 ---
 
@@ -642,7 +668,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Inherit** (target) | `EcsInherit` | ✅ shipped (v0.33.0) | `w.Inherit()` action for `SetInstantiatePolicy`; query-time via `SetInheritable[T]`; pair-add equivalent |
 | **Override** (target) | `EcsOverride` | ✅ shipped (v0.33.0) | Eager copy from prefab at `(IsA, prefab)` add time; multi-level chain; pre-set value wins |
 | **DontInherit** (target) | `EcsDontInherit` | ✅ shipped (v0.33.0) | Suppresses `Has`/`Get` IsA walk and query auto-promotion; takes precedence over Inheritable |
-| **Acyclic** | `EcsAcyclic` | ⏳ planned | No cycle detection for custom relationships |
+| **Acyclic** | `EcsAcyclic` | ✅ shipped (v0.41.0) | `SetAcyclic(w, relID)` / `IsAcyclic(w, relID)`; `w.Acyclic()` bare-tag form; write-time cycle rejection on AddID; `ChildOf` bootstrapped acyclic; deliberate divergence from C (write-time vs. lookup-time guards) |
 | **CanToggle** | `EcsCanToggle` | ✅ shipped (v0.35.0) | `SetCanToggle(w, cid)` / `IsCanToggle`; `w.CanToggle()` bare-tag form; `Each1`/`Each2`/`Each3`/`Each4` skip disabled rows; `EnableID`/`DisableID`/`IsEnabledID` + typed generics |
 | **OnDelete** | `EcsOnDelete` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDelete(), action)` / `GetCleanupPolicy`; actions: `RemoveAction`, `DeleteAction`, `PanicAction` |
 | **OnDeleteTarget** | `EcsOnDeleteTarget` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDeleteTarget(), action)`; `ChildOf` bootstrapped with `DeleteAction`; `IsA` has no default (opt-in) |

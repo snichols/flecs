@@ -154,6 +154,13 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.symmetricID.Index() {
 				// Bare Symmetric tag: mark entity as a symmetric relationship.
 				applySymmetricPolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.acyclicID.Index() {
+				// Bare Acyclic tag: mark entity as an acyclic relationship.
+				applyAcyclicPolicy(w, entity)
+			}
+			// Acyclic cycle check on pair adds (deferred path).
+			if c.id.IsPair() && w.acyclicPolicies[ID(c.id.First().Index())] {
+				checkAcyclic(w, entity, c.id.First(), c.id.Second())
 			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			c.kind = cmdSkip

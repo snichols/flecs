@@ -120,6 +120,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.Symmetric():      {},
 		w.Transitive():     {},
 		w.Reflexive():      {},
+		w.Acyclic():        {},
 		w.Wildcard():       {},
 		w.Any():            {},
 	}
