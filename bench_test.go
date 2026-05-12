@@ -1252,3 +1252,39 @@ func BenchmarkMultiThreadedDeferredSet(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkQueryUpTraversal measures the per-table cost of resolving an Up(IsA)
+// traversal term. N entities each inherit Position from a single prefab; the
+// query matches them via Up and reads the shared value with FieldShared.
+//
+// Compare against BenchmarkQueryIter (TraverseSelf) to observe the overhead
+// added by the up-walk: the difference is primarily the walkUp call per table.
+func BenchmarkQueryUpTraversal(b *testing.B) {
+	const n = 10_000
+	w := flecs.New()
+	posID := flecs.RegisterComponent[benchPos](w)
+
+	var prefab flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, benchPos{X: 1, Y: 2})
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+		}
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+	b.ResetTimer()
+	for range b.N {
+		count := 0
+		q.Each(func(it *flecs.QueryIter) {
+			p, _ := flecs.FieldShared[benchPos](it, posID)
+			count += it.Count()
+			_ = p
+		})
+		if count == 0 {
+			b.Fatal("no entities matched")
+		}
+	}
+}

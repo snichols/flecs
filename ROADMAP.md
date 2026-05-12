@@ -29,6 +29,7 @@ The following features are available in the current release:
 - **Scoped capability API — Reader / Writer** _(v0.15)_ — `world.Read(func(*Reader))` opens a concurrent-read window (RLock); `world.Write(func(*Writer))` opens an exclusive write scope that manages the deferred command queue. Hook and observer callbacks receive a `*Writer` for safe in-callback mutation. The legacy `Defer`/`DeferBegin`/`DeferEnd`/`Readonly`/`ReadonlyBegin`/`ReadonlyEnd` methods are removed. Faithful port of C flecs `ecs_readonly_begin`/`ecs_readonly_end` semantics: reads during a `Read` scope are lock-free; writes are buffered and flushed on scope close. REST handler GETs use `world.Read` automatically.
 - **Exclusive-access ownership assertion** — always-on goroutine-safety check. `World.ExclusiveAccessBegin(name)` claims the world for the calling goroutine; any subsequent mutation or read from another goroutine panics with `ErrExclusiveAccessViolation`. `ExclusiveAccessEnd(lockWorld bool)` releases the claim (optionally entering a write-locked state where all goroutines receive a panic on mutation but reads still pass). Goroutine ID via `github.com/petermattis/goid`; common-case overhead is one `atomic.Load` per public method. No build tag — the check is on in every build. `world.Read` / `world.Write` integrate this check automatically.
 - **Ancestor traversal helpers** — `GetUp[T]`, `HasUp`, `TargetUp` walk any relationship (ChildOf, IsA, custom) with cycle detection and depth limit.
+- **Query-term traversal modifiers** — `With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)` inline traversal in `NewQueryFromTerms` / `NewCachedQueryFromTerms`; `IsFieldSelf` / `FieldShared[T]` accessors disambiguate local vs. inherited values. Cascade guarantees root-first table iteration order in cached queries.
 - **Introspection (meta) API** — `Components`, `ComponentInfo`, `EntityComponents`, `EachEntity`, `AliveEntities` for runtime inspection without exposing internal storage.
 - **Dynamic value access** — `GetByID` and `SetByID` for component reads/writes when the type is only known at runtime; honors Defer + hooks; type-safe writes.
 - **JSON serialization** — `World.MarshalJSON` / `World.UnmarshalJSON` round-trip entities, names, non-pair components, ChildOf hierarchies, IsA prefabs, and custom pair components (tag-only and data-bearing). Format v1 is additive and stable. `SetPairByID` auto-registers pair data types from a `reflect.Type`.
@@ -38,7 +39,6 @@ The following features are available in the current release:
 The following are deferred to later phases. No timeline is set; issues welcome.
 
 ### Query extensions
-- Query-term traversal modifiers (`up(rel)` inline in `NewQueryFromTerms`; the explicit `GetUp`/`HasUp`/`TargetUp` helpers cover most use cases)
 - Query-time IsA inheritance (match entities whose prefab has a component)
 
 ### Addons

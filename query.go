@@ -9,6 +9,38 @@ import (
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
+// TraverseFlags controls how a query term resolves the component through relationships.
+//
+// The default (TraverseSelf) matches only entities whose own archetype table contains
+// the term's component. TraverseUp, TraverseSelfUp, and TraverseCascade add ancestor
+// traversal at query-match time.
+//
+// Limitation (all traversal modes): if an ancestor gains or loses the component AFTER
+// a CachedQuery is built, the cache is not automatically updated. Rebuild the query to
+// reflect structural changes to the ancestry chain.
+type TraverseFlags int
+
+const (
+	// TraverseSelf matches only entities whose own archetype table contains the
+	// component. This is the default for all terms constructed with With/Without/Maybe/Or.
+	TraverseSelf TraverseFlags = 0
+
+	// TraverseUp matches entities whose nearest ancestor via Trav owns the component.
+	// The entity's own table need not contain the component.
+	// Use FieldShared[T] to read the inherited value; IsFieldSelf returns false.
+	TraverseUp TraverseFlags = 1
+
+	// TraverseSelfUp matches entities that own the component locally (Self path) OR
+	// inherit it via Trav (Up path). Self takes precedence when both apply.
+	// Use IsFieldSelf to determine which path was taken for the current table.
+	TraverseSelfUp TraverseFlags = 2
+
+	// TraverseCascade matches like TraverseSelfUp and additionally guarantees that
+	// matched tables are iterated in ascending depth order in the Trav hierarchy
+	// (root-first). Only valid in NewCachedQueryFromTerms; NewQueryFromTerms panics.
+	TraverseCascade TraverseFlags = 3
+)
+
 // TermKind enumerates how a query term participates in matching.
 //
 //   - TermAnd: the table's signature must include the term's ID.
@@ -53,28 +85,58 @@ func (k TermKind) String() string {
 	}
 }
 
-// Term is a structured query term combining a component/pair/tag ID with a TermKind.
+// Term is a structured query term combining a component/pair/tag ID with a TermKind
+// and optional traversal modifier.
+//
+// The zero value is a valid TermAnd/TraverseSelf term with a zero ID (not useful on
+// its own; always construct via With/Without/Maybe/Or and their chained methods).
 type Term struct {
-	ID   ID
-	Kind TermKind
+	ID       ID
+	Kind     TermKind
+	Trav     ID            // traversal relationship (non-zero for Up/SelfUp/Cascade terms)
+	Traverse TraverseFlags // traversal mode; default TraverseSelf (0) = local-only match
 }
 
 // With returns a TermAnd term: matched tables must contain id.
-func With(id ID) Term { return Term{id, TermAnd} }
+func With(id ID) Term { return Term{ID: id, Kind: TermAnd} }
 
 // Without returns a TermNot term: matched tables must NOT contain id.
-func Without(id ID) Term { return Term{id, TermNot} }
+func Without(id ID) Term { return Term{ID: id, Kind: TermNot} }
 
 // Maybe returns a TermOptional term: matching is unaffected; id may or may not
 // be present in matched tables. Use FieldMaybe to access the column when present.
-func Maybe(id ID) Term { return Term{id, TermOptional} }
+func Maybe(id ID) Term { return Term{ID: id, Kind: TermOptional} }
 
 // Or returns a TermOr term that contributes to an OR-group. Adjacent Or terms
 // in the query's term slice form a single group (broken by any non-Or term); a
 // table matches the group if it contains at least one of the group's IDs.
 // An OR-group of size 1 is degenerate but allowed (behaves like With).
 // Use FieldMaybe — not Field — to access Or-group columns per entity.
-func Or(id ID) Term { return Term{id, TermOr} }
+func Or(id ID) Term { return Term{ID: id, Kind: TermOr} }
+
+// Self returns a copy of the term with TraverseSelf semantics. This is the
+// default and is provided for readability and symmetry with Up/SelfUp/Cascade.
+func (t Term) Self() Term { t.Traverse = TraverseSelf; t.Trav = 0; return t }
+
+// Up returns a copy of the term with TraverseUp semantics: matched tables must
+// have entities whose nearest ancestor via rel owns the component (the entity's
+// own table need not contain it). Use FieldShared[T] to read the inherited value.
+//
+// The canonical relationships are w.IsA() (prefab inheritance) and w.ChildOf()
+// (parent-child hierarchy). Any custom traversable relationship is accepted.
+func (t Term) Up(rel ID) Term { t.Traverse = TraverseUp; t.Trav = rel; return t }
+
+// SelfUp returns a copy of the term with TraverseSelfUp semantics: the entity's
+// own table is checked first; if the component is absent, the ancestor chain via
+// rel is walked. Self takes precedence when both apply. Use IsFieldSelf to
+// determine which path was taken for the current table.
+func (t Term) SelfUp(rel ID) Term { t.Traverse = TraverseSelfUp; t.Trav = rel; return t }
+
+// Cascade returns a copy of the term with TraverseCascade semantics: matches
+// like SelfUp but guarantees that the matched tables are iterated in ascending
+// depth order in the rel hierarchy (root-first, then children). Only valid in
+// NewCachedQueryFromTerms; NewQueryFromTerms panics if a Cascade term is present.
+func (t Term) Cascade(rel ID) Term { t.Traverse = TraverseCascade; t.Trav = rel; return t }
 
 // Query holds a structured list of query terms used to match archetype tables.
 // Terms are stored sorted: TermAnd first (by ID), then TermNot (by ID), then
@@ -154,6 +216,11 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 	if w == nil {
 		panic("flecs: NewQueryFromTerms: world must not be nil")
 	}
+	for _, t := range terms {
+		if t.Traverse == TraverseCascade {
+			panic("flecs: NewQueryFromTerms: cascade requires a cached query; use NewCachedQueryFromTerms")
+		}
+	}
 	cp, andIDs, orGroups := validateAndSortTerms("flecs: NewQueryFromTerms", terms)
 	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups}
 }
@@ -175,6 +242,22 @@ func (q *Query) TermsFull() []Term {
 	return cp
 }
 
+// findUpSource locates the nearest ancestor of the entities in table t via
+// relationship rel that locally owns component termID. It starts from the first
+// (rel, target) pair in t's archetype signature — the entity itself is not
+// checked (pure Up semantics). Returns (ancestorEntity, true) on success.
+func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
+	relIdx := rel.Index()
+	target, ok := firstPairTarget(t.Type(), relIdx)
+	if !ok {
+		return 0, false // no parent in this table's archetype
+	}
+	return walkUp(w, target, rel, func(cur ID) bool {
+		rec := w.index.Get(cur)
+		return rec != nil && rec.Table != nil && rec.Table.HasComponent(termID)
+	})
+}
+
 // Iter starts a fresh iteration over all archetype tables matching the query.
 //
 // Seed strategy: pick the TermAnd term whose component-index entry has the
@@ -183,14 +266,16 @@ func (q *Query) TermsFull() []Term {
 // terms do not affect matching. This is O(smallest-set × terms) — optimal for
 // sparse queries.
 //
-// The seed table list is materialised once via TablesFor (one allocation).
+// The seed table list is materialised once via TablesFor (one allocation) when a
+// TraverseSelf TermAnd term exists; otherwise all world tables are used as candidates
+// so that Up/SelfUp traversal can find non-locally-owned components.
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
-	// Select seed: TermAnd term with the fewest tables in the component index.
+	// Prefer a TraverseSelf TermAnd seed (fewest tables in the component index).
 	seedIdx := -1
 	minCount := 0
 	for i, term := range q.terms {
-		if term.Kind != TermAnd {
+		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
 		}
 		c := q.w.compIndex.Count(term.ID)
@@ -199,9 +284,16 @@ func (q *Query) Iter() *QueryIter {
 			seedIdx = i
 		}
 	}
-	// seedIdx is always valid: NewQuery/NewQueryFromTerms guarantee >= 1 TermAnd.
-	seedID := q.terms[seedIdx].ID
-	candidates := q.w.TablesFor(seedID)
+	var candidates []*table.Table
+	if seedIdx >= 0 {
+		candidates = q.w.TablesFor(q.terms[seedIdx].ID)
+	} else {
+		// All And terms use traversal; must test every table so Up matches are found.
+		candidates = make([]*table.Table, 0, len(q.w.tables))
+		for _, t := range q.w.tables {
+			candidates = append(candidates, t)
+		}
+	}
 	return &QueryIter{
 		q:          q,
 		world:      q.w,
@@ -241,6 +333,11 @@ type QueryIter struct {
 	// every candidate is evaluated against the term list.
 	cached          bool
 	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table
+	// traversal source maps: component ID → resolved source entity.
+	// 0 = self-matched (entity's own table owns the component).
+	// non-zero = ancestor entity that owns the component (Up match).
+	upSources       map[ID]ID   // per-table source map, updated by matchesTable or loaded from cache
+	tableSourcesRef []map[ID]ID // for cached iters: parallel to candidates; nil for Self-only queries
 	// multi-threaded dispatch clipping (zero workerTotal = no clipping, full table)
 	workerIdx    int     // 0-based index of this worker
 	workerTotal  int     // total worker count; 0 = no clipping
@@ -266,6 +363,10 @@ func (it *QueryIter) Next() bool {
 		if !it.cached && !it.matchesTable(t) {
 			continue
 		}
+		// For cached iters, load the pre-computed per-table traversal sources.
+		if it.cached && it.tableSourcesRef != nil && it.pos < len(it.tableSourcesRef) {
+			it.upSources = it.tableSourcesRef[it.pos]
+		}
 		// Compute this worker's row slice when clipping is active.
 		if it.workerTotal > 0 {
 			n := t.Count()
@@ -286,13 +387,47 @@ func (it *QueryIter) Next() bool {
 }
 
 // matchesTable returns true if t satisfies all TermAnd, TermNot, and OR-group
-// terms. TermOptional terms are ignored during matching.
+// terms. TermOptional terms are ignored during matching. For traversal And terms
+// (TraverseUp, TraverseSelfUp), the ancestor chain is walked via findUpSource;
+// resolved sources are stored in it.upSources for use by IsFieldSelf/FieldShared.
 func (it *QueryIter) matchesTable(t *table.Table) bool {
+	// Reset traversal sources from any previous table.
+	for k := range it.upSources {
+		delete(it.upSources, k)
+	}
 	for _, term := range it.terms {
 		switch term.Kind {
 		case TermAnd:
-			if !t.HasComponent(term.ID) {
-				return false
+			switch term.Traverse {
+			case TraverseSelf:
+				if !t.HasComponent(term.ID) {
+					return false
+				}
+			case TraverseUp:
+				src, ok := findUpSource(it.world, t, term.ID, term.Trav)
+				if !ok {
+					return false
+				}
+				if it.upSources == nil {
+					it.upSources = make(map[ID]ID)
+				}
+				it.upSources[term.ID] = src
+			case TraverseSelfUp, TraverseCascade:
+				if t.HasComponent(term.ID) {
+					if it.upSources == nil {
+						it.upSources = make(map[ID]ID)
+					}
+					it.upSources[term.ID] = 0 // self-matched
+				} else {
+					src, ok := findUpSource(it.world, t, term.ID, term.Trav)
+					if !ok {
+						return false
+					}
+					if it.upSources == nil {
+						it.upSources = make(map[ID]ID)
+					}
+					it.upSources[term.ID] = src
+				}
 			}
 		case TermNot:
 			if t.HasComponent(term.ID) {
@@ -421,6 +556,13 @@ func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
 func Field[T any](it *QueryIter, id ID) []T {
 	tbl := it.Table() // panics if not positioned
 	if !tbl.HasComponent(id) {
+		// Check if this is a traversal term matched via an ancestor (Up path).
+		for _, term := range it.terms {
+			if term.ID == id && term.Traverse != TraverseSelf {
+				panic(fmt.Sprintf("flecs: Field[%s]: id %d was matched via Up (component lives on an ancestor); use FieldShared[T] to read the inherited value",
+					reflect.TypeFor[T](), id))
+			}
+		}
 		panic(fmt.Sprintf("flecs: Field[%s]: component id %d is not in the current table's signature",
 			reflect.TypeFor[T](), id))
 	}
@@ -490,6 +632,75 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 		return full[:it.Count()], true
 	}
 	panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not in this query's term list",
+		reflect.TypeFor[T](), id))
+}
+
+// IsFieldSelf reports whether the component id in the current iterator table is
+// owned locally by the matched entities (true) or was resolved from an ancestor
+// via Up traversal (false). Always true for TraverseSelf terms.
+//
+// Panics if id is not in this query's term list.
+func IsFieldSelf(it *QueryIter, id ID) bool {
+	for _, term := range it.terms {
+		if term.ID != id {
+			continue
+		}
+		if term.Traverse == TraverseSelf {
+			return true
+		}
+		// upSources[id] == 0 means self-matched; non-zero means ancestor entity.
+		// A nil map lookup returns the zero value (0), which also means self.
+		return it.upSources[id] == 0
+	}
+	panic(fmt.Sprintf("flecs: IsFieldSelf: id %d is not in this query's term list", id))
+}
+
+// FieldShared returns the inherited component value for a traversal term (Up,
+// SelfUp, or Cascade) that was resolved from an ancestor. Returns (zero, false)
+// when the term was matched via Self for the current table — use Field[T] instead.
+//
+// The returned value is a copy of the ancestor's component slot and is valid only
+// until the next it.Next() call (consistent with Field[T] aliasing rules).
+//
+// Panics if id is a TraverseSelf term (programming error; use Field[T]) or if id
+// is not in this query's term list.
+func FieldShared[T any](it *QueryIter, id ID) (T, bool) {
+	var zero T
+	for _, term := range it.terms {
+		if term.ID != id {
+			continue
+		}
+		if term.Traverse == TraverseSelf {
+			panic(fmt.Sprintf("flecs: FieldShared[%s]: id %d uses TraverseSelf semantics; use Field[T] for locally-owned components",
+				reflect.TypeFor[T](), id))
+		}
+		// upSources[id] == 0 means self-matched; non-zero means ancestor entity.
+		// A nil map lookup returns 0 (zero value), so a nil map also means self.
+		src := it.upSources[id]
+		if src == 0 {
+			return zero, false // self-matched; use Field[T]
+		}
+		rec := it.world.index.Get(src)
+		if rec == nil || rec.Table == nil {
+			return zero, false
+		}
+		_, typ, _ := rec.Table.ColumnBasePtr(id)
+		if typ == nil {
+			// Tag component: no data, but component is present on the ancestor.
+			return zero, true
+		}
+		want := reflect.TypeFor[T]()
+		if typ != want {
+			panic(fmt.Sprintf("flecs: FieldShared[%s]: column for id %d holds %s, not %s",
+				want, id, typ, want))
+		}
+		ptr := rec.Table.Get(int(rec.Row), id)
+		if ptr == nil {
+			return zero, true
+		}
+		return *(*T)(ptr), true
+	}
+	panic(fmt.Sprintf("flecs: FieldShared[%s]: id %d is not in this query's term list",
 		reflect.TypeFor[T](), id))
 }
 

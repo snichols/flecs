@@ -125,6 +125,45 @@
 // terms are rejected. Duplicate IDs across terms also panic at construction.
 // An Or term with a zero/invalid ID panics. Duplicate IDs within one OR-group panic.
 //
+// # Query Traversal Modifiers
+//
+// Terms can traverse relationships at query-match time via chained builder methods
+// on [Term]: [Term.Up], [Term.SelfUp], and [Term.Cascade]. This allows queries to
+// find entities that inherit a component through an IsA prefab or ChildOf hierarchy
+// without calling [GetUp] or [HasUp] in an iteration loop.
+//
+// Example — match instances that inherit Position from a prefab:
+//
+//	type Position struct{ X, Y float32 }
+//
+//	posID := flecs.RegisterComponent[Position](w)
+//
+//	var prefab, child flecs.ID
+//	w.Write(func(fw *flecs.Writer) {
+//	    prefab = fw.NewEntity()
+//	    flecs.Set(fw, prefab, Position{X: 10, Y: 20})
+//
+//	    child = fw.NewEntity()
+//	    flecs.AddID(fw, child, flecs.MakePair(w.IsA(), prefab))
+//	    // child has no local Position; it inherits from prefab.
+//	})
+//
+//	// Up(IsA): match entities whose ancestor via IsA owns Position.
+//	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
+//	q.Each(func(it *flecs.QueryIter) {
+//	    p, ok := flecs.FieldShared[Position](it, posID) // returns prefab's value
+//	    _ = flecs.IsFieldSelf(it, posID)                // false: value is inherited
+//	    _, _ = p, ok
+//	})
+//
+// [Term.SelfUp] checks the entity first, then walks up; [IsFieldSelf] distinguishes
+// which path was taken. [Term.Cascade] (cached queries only) orders matched tables
+// from root to leaf, enabling parent-before-child system execution.
+//
+// Note: if a prefab or parent gains or loses the traversal component AFTER a
+// [CachedQuery] is built, the cache is NOT automatically updated. Rebuild the
+// query to reflect structural ancestry changes.
+//
 // # Deferred Mutation
 //
 // [World.Write] opens an exclusive read/write scope. All structural mutations

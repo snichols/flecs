@@ -6,6 +6,40 @@ import (
 	"github.com/snichols/flecs/internal/storage/table"
 )
 
+// tableRelDepth returns the depth of table t in the rel relationship hierarchy.
+// A table with no (rel, *) pair in its signature has depth 0 (root). Each hop
+// up the chain increments the depth by one.
+func tableRelDepth(w *World, t *table.Table, rel ID) int {
+	relIdx := rel.Index()
+	target, ok := firstPairTarget(t.Type(), relIdx)
+	if !ok {
+		return 0
+	}
+	depth := 1
+	seen := make(map[ID]struct{})
+	current := target
+	for depth < maxTraversalDepth {
+		if !w.index.IsAlive(current) {
+			break
+		}
+		rec := w.index.Get(current)
+		if rec == nil || rec.Table == nil {
+			break
+		}
+		next, ok := firstPairTarget(rec.Table.Type(), relIdx)
+		if !ok {
+			break
+		}
+		if _, visited := seen[next]; visited {
+			break
+		}
+		seen[next] = struct{}{}
+		current = next
+		depth++
+	}
+	return depth
+}
+
 // CachedQuery is a persistent query handle whose matching table set is built
 // once at construction and maintained incrementally as new tables are created
 // by entity migrations. Callers amortize the cost of repeatedly running the
@@ -65,7 +99,12 @@ type CachedQuery struct {
 	andIDs   []ID           // pre-extracted And-term IDs; returned by Terms() for backward compat
 	orGroups [][]ID         // each inner slice is one OR-group; tables must match all groups
 	tables   []*table.Table // pre-filtered match set; grown by tryMatchTable, never shrunk
-	removed  bool           // set by Close; deferred-removal model (see observer.go)
+	// tableUpSources is parallel to tables. Each entry is a map from traversal
+	// term component ID to resolved source entity (0 = self, non-zero = ancestor).
+	// Nil for queries with no traversal terms.
+	tableUpSources  []map[ID]ID
+	cascadeTermTrav ID   // traversal relationship for the Cascade term; 0 if none
+	removed         bool // set by Close; deferred-removal model (see observer.go)
 	// Change detection state (Phase 9.5). Not goroutine-safe.
 	lastChangeCounts map[*table.Table]uint64 // last seen ChangeCount per table; nil before first Changed() call
 	tablesAdded      bool                    // set by tryMatchTable when a new table is appended
@@ -141,11 +180,32 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 // must be the pre-extracted And-term IDs; orGroups must be the pre-built OR-groups
 // (nil for queries with no TermOr terms).
 func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID) *CachedQuery {
-	cq := &CachedQuery{w: w, terms: terms, andIDs: andIDs, orGroups: orGroups, tables: make([]*table.Table, 0)}
+	// Detect the Cascade term's traversal relationship (if any).
+	var cascadeTermTrav ID
+	for _, t := range terms {
+		if t.Traverse == TraverseCascade {
+			cascadeTermTrav = t.Trav
+			break
+		}
+	}
 
-	// Initial population: check every existing table.
+	cq := &CachedQuery{
+		w:               w,
+		terms:           terms,
+		andIDs:          andIDs,
+		orGroups:        orGroups,
+		tables:          make([]*table.Table, 0),
+		cascadeTermTrav: cascadeTermTrav,
+	}
+
+	// Initial population: check every existing table (unordered during bulk load).
 	for _, t := range w.tables {
 		cq.tryMatchTable(t)
+	}
+
+	// Sort once after initial population when Cascade ordering is requested.
+	if cascadeTermTrav != 0 {
+		cq.sortByCascadeDepth()
 	}
 
 	// Register with the world, pruning removed entries (amortized compaction).
@@ -157,6 +217,33 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 	}
 	w.cachedQueries = append(live, cq)
 	return cq
+}
+
+// sortByCascadeDepth sorts cq.tables (and the parallel cq.tableUpSources) in
+// ascending order of their depth in the cq.cascadeTermTrav hierarchy (root first).
+func (cq *CachedQuery) sortByCascadeDepth() {
+	n := len(cq.tables)
+	if n <= 1 {
+		return
+	}
+	type entry struct {
+		t       *table.Table
+		sources map[ID]ID
+	}
+	entries := make([]entry, n)
+	for i := range n {
+		entries[i] = entry{cq.tables[i], cq.tableUpSources[i]}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return tableRelDepth(cq.w, entries[i].t, cq.cascadeTermTrav) <
+			tableRelDepth(cq.w, entries[j].t, cq.cascadeTermTrav)
+	})
+	for i, e := range entries {
+		cq.tables[i] = e.t
+		if cq.tableUpSources != nil {
+			cq.tableUpSources[i] = e.sources
+		}
+	}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -199,12 +286,13 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		return &QueryIter{pos: -1}
 	}
 	return &QueryIter{
-		world:      cq.w,
-		terms:      cq.terms,
-		orGroups:   cq.orGroups,
-		candidates: cq.tables,
-		pos:        -1,
-		cached:     true,
+		world:           cq.w,
+		terms:           cq.terms,
+		orGroups:        cq.orGroups,
+		candidates:      cq.tables,
+		pos:             -1,
+		cached:          true,
+		tableSourcesRef: cq.tableUpSources,
 	}
 }
 
@@ -274,19 +362,20 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	if cq.removed {
 		return
 	}
+	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).
 	for _, term := range cq.terms {
 		switch term.Kind {
 		case TermAnd:
-			if !t.HasComponent(term.ID) {
+			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
 				return
 			}
 		case TermNot:
 			if t.HasComponent(term.ID) {
 				return
 			}
-			// TermOptional, TermOr: handled separately below.
 		}
 	}
+	// Phase 2: Check OR groups.
 	for _, group := range cq.orGroups {
 		matched := false
 		for _, id := range group {
@@ -299,6 +388,40 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 			return
 		}
 	}
+	// Phase 3: Check traversal And terms; compute per-term resolved sources.
+	var sources map[ID]ID
+	for _, term := range cq.terms {
+		if term.Kind != TermAnd {
+			continue
+		}
+		switch term.Traverse {
+		case TraverseUp:
+			src, ok := findUpSource(cq.w, t, term.ID, term.Trav)
+			if !ok {
+				return
+			}
+			if sources == nil {
+				sources = make(map[ID]ID)
+			}
+			sources[term.ID] = src
+		case TraverseSelfUp, TraverseCascade:
+			if t.HasComponent(term.ID) {
+				if sources == nil {
+					sources = make(map[ID]ID)
+				}
+				sources[term.ID] = 0 // self-matched
+			} else {
+				src, ok := findUpSource(cq.w, t, term.ID, term.Trav)
+				if !ok {
+					return
+				}
+				if sources == nil {
+					sources = make(map[ID]ID)
+				}
+				sources[term.ID] = src
+			}
+		}
+	}
 	// Dedup: defensive guard against duplicate calls.
 	for _, existing := range cq.tables {
 		if existing == t {
@@ -306,6 +429,7 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		}
 	}
 	cq.tables = append(cq.tables, t)
+	cq.tableUpSources = append(cq.tableUpSources, sources)
 	cq.tablesAdded = true
 }
 

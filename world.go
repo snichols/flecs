@@ -676,7 +676,12 @@ func (w *World) eachAlive(fn func(ID)) {
 func (w *World) notifyTableCreated(t *table.Table) {
 	for _, cq := range w.cachedQueries {
 		if !cq.removed {
+			prevLen := len(cq.tables)
 			cq.tryMatchTable(t)
+			// Re-sort when Cascade is active and a new table was accepted.
+			if cq.cascadeTermTrav != 0 && len(cq.tables) > prevLen {
+				cq.sortByCascadeDepth()
+			}
 		}
 	}
 	if w.logger != nil {
