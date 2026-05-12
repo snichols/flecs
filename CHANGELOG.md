@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.10: DesignWithFlecs doc port (upcoming v0.29.0)
+## v0.29.0 — 2026-05-12 — Phase 14.10: DesignWithFlecs doc port
 
 ### Added
 
