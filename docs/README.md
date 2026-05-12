@@ -20,7 +20,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 | [HierarchiesManual.md](HierarchiesManual.md) | ✅ landed | 14.4 |
 | [PrefabsManual.md](PrefabsManual.md) | ✅ landed | 14.5 |
 | [Systems.md](Systems.md) | ✅ landed / 14.6 | 14.6 |
-| [ObserversManual.md](ObserversManual.md) | pending | 14.7 |
+| [ObserversManual.md](ObserversManual.md) | ✅ landed / 14.7 | 14.7 |
 | [ComponentTraits.md](ComponentTraits.md) | pending | 14.8 |
 | [FlecsRemoteApi.md](FlecsRemoteApi.md) | pending | 14.9 |
 | [DesignWithFlecs.md](DesignWithFlecs.md) | pending | 14.10 |
@@ -145,3 +145,16 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Single-system `Run` out-of-pipeline** — `ecs_run` invokes one system synchronously outside the normal pipeline. not yet ported in Go flecs.
 - **`RunWorker` / explicit thread dispatch** — `ecs_run_worker` for manual entity-range partitioning outside the pipeline. not yet ported in Go flecs.
 - **Pipeline introspection** — iterate the ordered system list in a pipeline to inspect execution order at runtime. not yet ported in Go flecs.
+
+### Additional gaps discovered in Phase 14.7 (ObserversManual port)
+
+- **`OnReplace` hook** — fires when `Set` overwrites an existing component value; receives both the old and new value. not yet ported in Go flecs.
+- **`OnDelete` / `OnDeleteTarget` events** — C flecs fires `OnDelete` when a component entity is deleted and `OnDeleteTarget` when a pair target is deleted. not yet ported in Go flecs.
+- **`OnTableEmpty` / `OnTableFill` events** — fire when an archetype table transitions between empty and non-empty. not yet ported in Go flecs.
+- **Custom events** — create arbitrary event entities and emit them with `ecs_emit`; Go flecs supports only the three built-in events (`EventOnAdd`, `EventOnSet`, `EventOnRemove`). not yet ported in Go flecs.
+- **Term-set observer filters (multi-term observers)** — C observers can match a query with multiple terms (e.g., "fire when Position is set but only if entity also has Velocity"). Go flecs observers subscribe to a single component at a time. not yet ported in Go flecs.
+- **Yield-on-create** — `yield_existing` flag retroactively fires an observer for entities already matching the query at registration time. not yet ported in Go flecs.
+- **Observer propagation / forwarding** — events propagate along relationship edges (e.g., `OnSet(Position)` on a parent notifies children inheriting `Position`). not yet ported in Go flecs.
+- **Monitor observers** — `EcsMonitor` event fires when an entity starts or stops matching a query. not yet ported in Go flecs.
+- **Observer disabling** — pause an observer without removing it (analogous to system disabling). not yet ported in Go flecs.
+- **Fixed-source observer terms** — observer terms that match a component on a specific entity (not `$this`). not yet ported in Go flecs.
