@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase 14.11: Manual doc port (upcoming v0.30.0)
+## v0.30.0 — 2026-05-12 — Phase 14.11: Manual doc port
 
 ### Added
 
