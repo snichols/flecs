@@ -2,3 +2,7 @@
 
 Phase 14.4 complete: full Go-idiomatic port of docs/HierarchiesManual.md from upstream C flecs. Created docs/hierarchies_examples_test.go with 14 TestHierarchies_* tests covering every code block (create parent/child, ParentOf, EachChild, cascade delete, depth-first traversal, breadth-first Cascade query, SetName/GetName, PathOf, Lookup, LookupChild, reparenting, GetUp, HasUp, TargetUp). 4 unported features with callouts: OrderedChildren trait, configurable cleanup policies, entity scoping (ecs_set_scope), Parent hierarchy storage. docs/README.md HierarchiesManual row → landed/14.4, 2 new gaps appended. ROADMAP.md 14.4 row → shipped (v0.23.0). CHANGELOG.md Unreleased entry added. go test ./... -race -count=1, go vet ./..., golangci-lint run ./... all clean.
 
+## iterate iteration 2 (2026-05-12)
+
+Added reverse cross-link from docs/Relationships.md ChildOf section to docs/HierarchiesManual.md, satisfying the bidirectional cross-link requirement. All other Phase 14.4 requirements were already complete. go test ./... -race -count=1 passes clean.
+
