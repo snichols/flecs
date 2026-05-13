@@ -537,41 +537,71 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(myRelID, a)))
 
 ### Singleton
 
-**What it does:** A singleton component can only be added to the entity that represents the component itself (i.e., the component entity is also the storage entity). Queries for a singleton component automatically use the component entity as their source rather than `$this`. This provides a convenient world-global component without requiring a dedicated entity ID.
+**What it does (Go semantic — deliberately different from C):** Marks a component so that at most one entity in the world may hold it at any time. Useful for global-state-as-component patterns: `TimeOfDay`, `GameSettings`, `PlayerInput`, etc.
 
-**What the C API looks like:**
+> **Semantic divergence from C:** C's `EcsSingleton` enforces "component may only be added to the entity that represents the component itself" (must-be-self). The Go semantic is "at most one entity may hold this component" (at-most-one-holder). The Go interpretation is more useful for application code because it decouples the component definition entity from the holding entity. See [CHANGELOG.md](../CHANGELOG.md) for migration guidance.
 
-```c
-// C — not available in Go flecs
-ecs_add_id(world, ecs_id(TimeOfDay), EcsSingleton);
-ecs_singleton_set(world, TimeOfDay, {.value = 0});
-// Queries for TimeOfDay automatically match the singleton
-```
-
-**Workaround in Go flecs:** Use a dedicated entity to store the singleton component, and use a fixed-source query term via `With(id).Up(rel)` pointing at that entity. Because fixed-source query terms are also not fully implemented, the simplest workaround is to store the singleton on a well-known entity and retrieve it by entity ID:
+**API:**
 
 ```go
-// Approximate singleton pattern in Go flecs
-type TimeOfDay struct{ Value float32 }
+// Mark a component as singleton (at most one holder at a time).
+flecs.SetSingleton(w, positionID)
+// or bare-tag form:
+fw.AddID(positionID, w.Singleton())
 
-w := flecs.New()
-flecs.RegisterComponent[TimeOfDay](w)
+// Check the trait.
+flecs.IsSingleton(scope, positionID) // bool
 
-var clockEntity flecs.ID
-w.Write(func(fw *flecs.Writer) {
-    clockEntity = fw.NewEntity()
-    flecs.Set(fw, clockEntity, TimeOfDay{Value: 0})
-})
+// Query the current holder (zero value + false if no holder).
+holder, ok := flecs.SingletonEntity(scope, positionID)
 
-// Retrieve by known entity ID — no query needed
-w.Read(func(r *flecs.Reader) {
-    tod, ok := flecs.Get[TimeOfDay](r, clockEntity)
-    _ = tod
-    _ = ok
-})
+// Typed accessor: read via Singleton[T](scope).
+ptr, ok := flecs.Singleton[TimeOfDay](fr)   // *TimeOfDay, bool
+
+// Typed writer: ensure T is singleton and set it on entity e.
+flecs.WriteSingleton(fw, clockEntity, TimeOfDay{Value: 0})
 ```
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#feature-gap-list): *Singleton API shortcuts*.
+**Enforcement:** Adding the singleton component to a second entity panics at write time (both the current holder and the attempted new holder are named in the panic message). Enforcement fires in both immediate and deferred (Write-scope) paths.
+
+**Slot lifecycle:** Removing the component (via `Remove[T]` or `RemoveID`) or deleting the holding entity releases the slot, allowing a different entity to take it.
+
+**Example:**
+
+```go
+type TimeOfDay struct{ Hour float32 }
+
+w := flecs.New()
+todID := flecs.RegisterComponent[TimeOfDay](w)
+flecs.SetSingleton(w, todID) // mark as singleton
+
+var clock flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    clock = fw.NewEntity()
+    flecs.WriteSingleton(fw, clock, TimeOfDay{Hour: 6})
+})
+
+w.Read(func(fr *flecs.Reader) {
+    ptr, ok := flecs.Singleton[TimeOfDay](fr)
+    if ok {
+        fmt.Printf("Hour: %.0f\n", ptr.Hour) // Hour: 6
+    }
+    holder, _ := flecs.SingletonEntity(fr, todID)
+    fmt.Println(holder == clock) // true
+})
+
+// Adding to a second entity panics:
+// w.Write(func(fw *flecs.Writer) {
+//     e2 := fw.NewEntity()
+//     flecs.Set(fw, e2, TimeOfDay{Hour: 12}) // panic!
+// })
+```
+
+**Non-goals:**
+- No automatic creation of the holding entity — the caller creates it explicitly.
+- No serialization of the runtime instance map (`singletonInstances`) in v1 marshal. The singleton policy on the component entity (stored as a pair in the entity graph) round-trips automatically; the holding entity's component data round-trips as normal entity data.
+
+> ✅ **Shipped in v0.44.0.** Built-in entity at index 25 (`w.Singleton()`). `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`.
 
 ---
 
@@ -744,7 +774,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
 | **Relationship** | `EcsRelationship` | ⏳ planned | No usage-as-relationship constraint |
-| **Singleton** | `EcsSingleton` | ⏳ planned | No first-class singleton component; workaround via dedicated entity |
+| **Singleton** | `EcsSingleton` | ✅ shipped (v0.44.0) | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity(scope, compID)` / `Singleton[T](scope)` / `WriteSingleton[T](fw, e, v)`; `w.Singleton()` bare-tag form; at-most-one-holder (Go semantic differs from C must-be-self); write-time panic names both entities; slot released on Remove or entity delete; no built-in ships Singleton |
 | **Sparse** | `EcsSparse` | ⏳ planned | All components use archetype SoA storage |
 | **Symmetric** | `EcsSymmetric` | ✅ shipped (v0.36.0) | `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)`; `w.Symmetric()` bare-tag form; mirror fires on add and remove; loop-guard via `HasComponent` idempotence; composes with `Exclusive` |
 | **Target** | `EcsTarget` | ⏳ planned | No usage-as-target constraint |

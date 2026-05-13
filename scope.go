@@ -394,6 +394,36 @@ func OwnsID(s scope, e ID, id ID) bool {
 	return rec.Table != nil && rec.Table.HasComponent(id)
 }
 
+// Singleton returns a pointer to component T on the entity currently holding
+// it as a singleton, plus true. Returns (nil, false) if T is not registered,
+// not marked Singleton, or no entity holds it.
+// The pointer is only valid for the duration of the enclosing scope.
+func Singleton[T any](s scope) (*T, bool) {
+	w := s.scopeWorld()
+	cid := RegisterComponent[T](w)
+	if !w.singletonPolicies[ID(cid.Index())] {
+		return nil, false
+	}
+	holder, ok := w.singletonInstances[ID(cid.Index())]
+	if !ok {
+		return nil, false
+	}
+	ptr := GetRef[T](s, holder)
+	if ptr == nil {
+		return nil, false
+	}
+	return ptr, true
+}
+
+// WriteSingleton writes value v as component T on the explicit holding entity e.
+// Registers T if not yet registered, marks T as Singleton (idempotent), then
+// calls Set[T](fw, e, v). Panics if a different entity already holds T.
+func WriteSingleton[T any](fw *Writer, e ID, v T) {
+	cid := RegisterComponent[T](fw.world)
+	applySingletonPolicy(fw.world, cid)
+	Set[T](fw, e, v)
+}
+
 // ── Free functions (Writer-based writes) ─────────────────────────────────────
 
 // Set writes value v as component T on entity e.

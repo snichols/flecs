@@ -157,6 +157,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.acyclicID.Index() {
 				// Bare Acyclic tag: mark entity as an acyclic relationship.
 				applyAcyclicPolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.singletonID.Index() {
+				// Bare Singleton tag: mark entity as a singleton component.
+				applySingletonPolicy(w, entity)
 			}
 			// Acyclic cycle check on pair adds (deferred path).
 			if c.id.IsPair() && w.acyclicPolicies[ID(c.id.First().Index())] {
@@ -235,6 +238,26 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		w.registry.EnsureID(id)
 	}
 
+	// Singleton enforcement for removed IDs: release slots before migration.
+	for _, id := range removedIDs {
+		if !id.IsPair() && w.singletonPolicies[ID(id.Index())] {
+			if existing, ok := w.singletonInstances[ID(id.Index())]; ok && existing.Index() == entity.Index() {
+				delete(w.singletonInstances, ID(id.Index()))
+			}
+		} else if id.IsPair() && w.singletonPolicies[ID(id.First().Index())] {
+			if existing, ok := w.singletonInstances[ID(id.First().Index())]; ok && existing.Index() == entity.Index() {
+				delete(w.singletonInstances, ID(id.First().Index()))
+			}
+		}
+	}
+	// Singleton enforcement for added IDs: check or record holder.
+	for _, id := range addedIDs {
+		if !id.IsPair() && w.singletonPolicies[ID(id.Index())] {
+			checkSingleton(w, id, entity)
+		} else if id.IsPair() && w.singletonPolicies[ID(id.First().Index())] {
+			checkSingleton(w, id.First(), entity)
+		}
+	}
 	// Execute ONE archetype migration only when the component set actually changes.
 	if len(addedIDs) > 0 || len(removedIDs) > 0 {
 		w.commitBatch(entity, newSig, addedIDs, removedIDs)

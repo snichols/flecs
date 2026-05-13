@@ -372,28 +372,38 @@ w.Write(func(fw *flecs.Writer) {
 
 ### Singletons
 
-> **Not yet ported in Go flecs** — there is no dedicated singleton API (`world.set<T>()` / `world.get<T>()` style). Singletons are conceptually a component stored on its own component entity. As a workaround, retrieve the component entity ID with `RegisterComponent[T]` and operate on that entity directly:
->
-> ```go
-> type TimeOfDay struct{ Value float32 }
->
-> w := flecs.New()
-> todID := flecs.RegisterComponent[TimeOfDay](w)
->
-> // Set singleton
-> w.Write(func(fw *flecs.Writer) {
->     flecs.Set(fw, todID, TimeOfDay{Value: 0.5})
-> })
->
-> // Get singleton
-> w.Read(func(r *flecs.Reader) {
->     t, ok := flecs.Get[TimeOfDay](r, todID)
->     _ = t  // TimeOfDay{Value: 0.5}
->     _ = ok // true
-> })
-> ```
->
-> A dedicated `world.Singleton[T]()` API is a candidate follow-up. See the [feature-gap list](README.md).
+**Shipped in v0.44.0** — the Singleton trait constrains a component to at most one holder entity in the world at any time.
+
+> **Semantic note:** Go's Singleton semantic ("at most one holder") differs from C's `EcsSingleton` ("component may only be added to itself"). The Go interpretation is more useful for application code. See [ComponentTraits.md](ComponentTraits.md#singleton) for the full divergence note.
+
+```go
+type TimeOfDay struct{ Hour float32 }
+
+w := flecs.New()
+todID := flecs.RegisterComponent[TimeOfDay](w)
+flecs.SetSingleton(w, todID)
+
+var clock flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    clock = fw.NewEntity()
+    flecs.WriteSingleton(fw, clock, TimeOfDay{Hour: 6})
+})
+
+// Read via typed accessor
+w.Read(func(fr *flecs.Reader) {
+    ptr, ok := flecs.Singleton[TimeOfDay](fr) // *TimeOfDay, bool
+    _ = ptr
+    _ = ok
+})
+
+// Adding to a second entity panics with a message naming both entities
+// w.Write(func(fw *flecs.Writer) {
+//     e2 := fw.NewEntity()
+//     flecs.Set(fw, e2, TimeOfDay{Hour: 12}) // panic!
+// })
+```
+
+The singleton slot is released when the component is removed (via `Remove[T]` or `RemoveID`) or when the holding entity is deleted.
 
 ### Component Disabling
 

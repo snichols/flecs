@@ -85,7 +85,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — **shipped in v0.38.0** via `w.Wildcard()`, `w.Any()`, `MatchedTarget`, `MatchedID`, `FieldByMatch`. See [`docs/Queries.md`](Queries.md#wildcard-and-any-query-terms-phase-156-v0380).
 - **World snapshots** (beyond JSON serialization) — not ported.
 - **Entity scoping** (`ecs_set_scope` / push-pop) — not ported.
-- **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — achievable via `RegisterComponent` + entity ID; no dedicated API.
+- **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — **shipped in v0.44.0** via `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`. Go semantic: at most one holder (vs. C must-be-self). See [ComponentTraits.md#singleton](ComponentTraits.md#singleton).
 - **Timer addon** (independent rate control per system) — partial (`timer.go` exists; full addon API pending).
 - **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only.
 
@@ -162,7 +162,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 - **`Constant` component trait** — marks a component read-only after its initial write; subsequent `Set` calls would be a fatal error. not yet ported in Go flecs.
 - **`DontFragment` component trait** — opt a component into non-fragmenting sparse storage; sparse but does not create new archetype tables. not yet ported in Go flecs.
-- **`Singleton` component trait** (`EcsSingleton`) — constrains a component to a single world-global instance stored on the component entity itself; queries auto-match the component entity as source. not yet ported in Go flecs.
+- **`Singleton` component trait** (`EcsSingleton`) — **shipped in v0.44.0** via `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`. At-most-one-holder semantic (deliberately different from C must-be-self). See [ComponentTraits.md § Singleton](ComponentTraits.md#singleton).
 - **`Union` relationship trait** — union-pair semantics: only one of several targets may be active for a given relationship on an entity; stored to minimise table fragmentation. not yet ported in Go flecs.
 - **`Final` entity trait** — **shipped in v0.42.0** via `SetFinal(w, entityID)` / `IsFinal(scope, entityID)` / `w.Final()`. Write-time enforcement: adding `(IsA, target)` panics if target is Final. See [ComponentTraits.md § Final](ComponentTraits.md#final) and [PrefabsManual.md § Sealing prefabs with Final](PrefabsManual.md#sealing-prefabs-with-final).
 - **`OneOf` relationship trait** — constrains relationship targets to be children of a specified entity (useful for enum-style relationships). **Shipped in v0.43.0** via `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)` / `w.OneOf()`. Write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent. See [ComponentTraits.md § OneOf](ComponentTraits.md#oneof).

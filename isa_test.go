@@ -658,11 +658,11 @@ func TestIsATagInheritance(t *testing.T) {
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
 // RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle, Symmetric,
-// Transitive, Reflexive, Acyclic, Final, OneOf, Wildcard, Any) before any user entities.
+// Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, Wildcard, Any) before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 26 {
-		t.Fatalf("fresh World.Count(): want 26 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Wildcard + Any), got %d", base)
+	if base != 27 {
+		t.Fatalf("fresh World.Count(): want 27 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + Wildcard + Any), got %d", base)
 	}
 }

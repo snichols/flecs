@@ -269,6 +269,11 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 		}
 		return
 	}
+	// Singleton enforcement: if this component is a singleton and a different
+	// entity already holds it, panic before migrating.
+	if w.singletonPolicies[ID(id.Index())] {
+		checkSingleton(w, id, e)
+	}
 	w.migrate(e, id, 0, srcPtr)
 	// OnAdd fired inside migrate; fire OnSet now that the slot is written.
 	rec = w.index.Get(e)

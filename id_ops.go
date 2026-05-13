@@ -113,6 +113,10 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// must be direct children of e itself. This is the fw.AddID(relID, w.OneOf())
 		// form, mirroring C's ecs_add_id(world, MyRel, EcsOneOf).
 		applyOneOfPolicy(w, e, e)
+	} else if id.Index() == w.singletonID.Index() {
+		// Bare Singleton tag added to component entity e: mark e as a singleton.
+		// This is the fw.AddID(componentID, w.Singleton()) form.
+		applySingletonPolicy(w, e)
 	}
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a
@@ -152,6 +156,14 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 				}
 			}
 		}
+	}
+	// Singleton enforcement: if componentID (or the First() of a pair) is marked
+	// as a singleton, at most one entity may hold it. checkSingleton records or
+	// validates the holder; it panics if a different entity already holds it.
+	if !id.IsPair() && w.singletonPolicies[ID(id.Index())] {
+		checkSingleton(w, id, e)
+	} else if id.IsPair() && w.singletonPolicies[ID(id.First().Index())] {
+		checkSingleton(w, id.First(), e)
 	}
 	w.migrate(e, id, 0, nil)
 	// Symmetric mirror: if (R, b) was added to a, also add (R, a) to b.
@@ -225,6 +237,17 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 	}
 	if rec.Table == nil || !rec.Table.HasComponent(id) {
 		return false
+	}
+	// Singleton slot release: when a singleton component is removed from its
+	// holder, clear the instance record so a new entity may take the slot.
+	if !id.IsPair() && w.singletonPolicies[ID(id.Index())] {
+		if existing, ok := w.singletonInstances[ID(id.Index())]; ok && existing.Index() == e.Index() {
+			delete(w.singletonInstances, ID(id.Index()))
+		}
+	} else if id.IsPair() && w.singletonPolicies[ID(id.First().Index())] {
+		if existing, ok := w.singletonInstances[ID(id.First().Index())]; ok && existing.Index() == e.Index() {
+			delete(w.singletonInstances, ID(id.First().Index()))
+		}
 	}
 	w.migrate(e, 0, id, nil)
 	// Symmetric mirror: if (R, b) was removed from a, also remove (R, a) from b.
