@@ -229,6 +229,8 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
 | Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
+| Singleton component trait _(v0.44.0)_ | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]` — at-most-one-holder enforcement (Go semantic; differs from C must-be-self) |
+| WriteOnce component trait _(v0.45.0)_ | `SetWriteOnce(w, compID)` / `IsWriteOnce(scope, compID)` — panics on second Set; Remove clears tracking; formerly `Constant` (renamed to avoid collision with upstream `EcsConstant`) |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |

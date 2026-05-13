@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.43)
+## Shipped (through v0.45.0)
 
 The following features are available in the current release:
 
@@ -47,6 +47,7 @@ The following features are available in the current release:
 - **Final entity trait** _(v0.42.0, Phase 15.10)_ — `SetFinal(w, entityID)` / `IsFinal(scope, entityID)` / `w.Final()` (index 23). Write-time enforcement: adding `(IsA, target)` panics if target is Final; self-pairs also rejected (matching C semantics). `IsFinal` accepts `scope` interface (Phase 15.8 convention). No built-in ships Final. Built-in entity count: 25; user entities now start at index 26.
 - **OneOf relationship trait** _(v0.43.0, Phase 15.11)_ — `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)` / `w.OneOf()` (index 24). Write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent. Self-tag form (`SetOneOf(w, R, R)`) and pair form (`SetOneOf(w, R, P)`) both supported. Wildcard/Any targets exempt. Composes with Exclusive: replacement target validated before atomic migration. No built-in ships OneOf. Built-in entity count: 26; user entities now start at index 27.
 - **Singleton component trait** _(v0.44.0, Phase 15.12)_ — `SetSingleton(w, componentID)` / `IsSingleton(scope, componentID)` / `SingletonEntity(scope, componentID)` / `Singleton[T](scope)` / `WriteSingleton[T](fw, e, v)` / `w.Singleton()` (index 25). At-most-one-holder enforcement (deliberately different from C must-be-self; always-on vs. C's debug-only guard). Write-time panic names both the current holder and the attempted new holder. Slot released on Remove or entity delete. No built-in ships Singleton. Built-in entity count: 27; user entities now start at index 28.
+- **WriteOnce component trait** _(v0.45.0, Phase 15.13)_ — `SetWriteOnce(w, componentID)` / `IsWriteOnce(scope, componentID)` / `w.WriteOnce()` (index 26). Per-(entity, component) first-write tracking: first Set records the slot; second Set panics naming the entity and component. `Add` is not a trigger — only value-writing Set calls count. Remove clears tracking (fresh Add + Set cycle starts over). Pair-form: WriteOnce on relationship R governs each (R, T) slot independently. Non-component target panics at trait-application time. No upstream C counterpart. Previously called `Constant` in the Phase 14.8 gap analysis; renamed to avoid collision with upstream `EcsConstant` (enum-value tag in meta addon). Built-in entity count: 28; user entities now start at index 29.
 
 ## Documentation
 

@@ -117,6 +117,10 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// Bare Singleton tag added to component entity e: mark e as a singleton.
 		// This is the fw.AddID(componentID, w.Singleton()) form.
 		applySingletonPolicy(w, e)
+	} else if id.Index() == w.writeOnceID.Index() {
+		// Bare WriteOnce tag added to component entity e: mark e as write-once.
+		// This is the fw.AddID(componentID, w.WriteOnce()) form.
+		applyWriteOncePolicy(w, e)
 	}
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a
@@ -249,6 +253,9 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 			delete(w.singletonInstances, ID(id.First().Index()))
 		}
 	}
+	// WriteOnce tracking clear: Remove resets the per-(entity, component) write
+	// slot so a subsequent Add + Set cycle starts fresh.
+	clearWriteOnceTracking(w, e, id)
 	w.migrate(e, 0, id, nil)
 	// Symmetric mirror: if (R, b) was removed from a, also remove (R, a) from b.
 	// The !HasComponent early-return above provides the idempotence loop-guard:

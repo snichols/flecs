@@ -405,6 +405,33 @@ w.Read(func(fr *flecs.Reader) {
 
 The singleton slot is released when the component is removed (via `Remove[T]` or `RemoveID`) or when the holding entity is deleted.
 
+### WriteOnce
+
+**Shipped in v0.45.0** — the `WriteOnce` trait prevents value rewrites after the first `Set` on a given (entity, component) pair.
+
+> **Renamed from `Constant`**: Previously called `Constant` in the Phase 14.8 gap analysis; renamed to avoid a future collision with upstream `EcsConstant` (an enum-value tag in the meta addon).
+
+```go
+type Config struct{ MaxPlayers int }
+
+w := flecs.New()
+cfgID := flecs.RegisterComponent[Config](w)
+flecs.SetWriteOnce(w, cfgID)
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    flecs.Set(fw, e, Config{MaxPlayers: 4}) // first write — OK
+})
+
+// Second write panics: "WriteOnce component ... already written"
+// w.Write(func(fw *flecs.Writer) {
+//     flecs.Set(fw, e, Config{MaxPlayers: 8}) // panic!
+// })
+```
+
+`Remove` clears the per-(entity, component) tracking so a fresh `Add + Set` cycle starts over. `WriteOnce` does not block `Remove`. Raw-pointer access via `FieldByMatch[T]` or `Each[T]` is unchecked by design.
+
 ### Component Disabling
 
 **Shipped in v0.35.0** — components can be individually disabled on an entity using the `CanToggle` trait. Disabling prevents the entity from matching queries on that component without removing it; the component value is preserved and the entity stays in its archetype table.

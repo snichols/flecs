@@ -262,6 +262,9 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 	}
 	t := rec.Table
 	if t != nil && t.HasComponent(id) {
+		if srcPtr != nil { // value write (not a tag): enforce WriteOnce
+			checkAndSetWriteOnce(w, e, id)
+		}
 		t.Set(int(rec.Row), id, srcPtr)
 		w.fireOnSet(info, id, e, t.Get(int(rec.Row), id))
 		if srcPtr != nil { // not a tag; a column was written
@@ -273,6 +276,10 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 	// entity already holds it, panic before migrating.
 	if w.singletonPolicies[ID(id.Index())] {
 		checkSingleton(w, id, e)
+	}
+	// WriteOnce first-write tracking: record the slot before migration.
+	if srcPtr != nil {
+		checkAndSetWriteOnce(w, e, id)
 	}
 	w.migrate(e, id, 0, srcPtr)
 	// OnAdd fired inside migrate; fire OnSet now that the slot is written.
