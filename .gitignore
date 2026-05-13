@@ -4,6 +4,10 @@ coverage.txt
 coverage.html
 cover.html
 cover.out
+*_cover.html
+*_cover.out
+*_coverage.html
+*_coverage.out
 
 # Compiled test binaries
 *.test
