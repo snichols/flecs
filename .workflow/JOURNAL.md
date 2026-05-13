@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-13)
+
+Implemented WriteOnce component trait (Phase 15.13, v0.45.0): w.WriteOnce() at index 26 (Wildcard→27, Any→28, user→29+); SetWriteOnce/IsWriteOnce/applyWriteOncePolicy/checkAndSetWriteOnce/clearWriteOnceTracking; write-time at-most-one-write enforcement in setImmediateByPtr (immediate path) and cmdModified dispatch (coalesced deferred path); bare-tag handling in addIDImmediate and batchForEntity; clearWriteOnceTracking in removeIDImmediate; deleteOne clears hasBeenSet slots for deleted entity; writeonce_test.go with 11 cases covering all required scenarios; builtinEntityCount bumped 27→28; marshal skip-set updated; docs updated across ComponentTraits.md (Constant→WriteOnce shipped v0.45.0), EntitiesComponents.md, README.md, CHANGELOG.md, ROADMAP.md; go vet + golangci-lint clean; all tests pass race -count=3; coverage 95.0%.
+
