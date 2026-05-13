@@ -81,8 +81,9 @@ type World struct {
 	traitID              ID                              // built-in Trait usage-constraint trait entity (index 30)
 	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
 	withID               ID                              // built-in With trait entity (index 32)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 33; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 34; _; first user entity at index 35)
+	orderedChildrenID    ID                              // built-in OrderedChildren trait entity (index 33)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 34; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 35; _; first user entity at index 36)
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -103,6 +104,7 @@ type World struct {
 	targetPolicies       map[ID]bool                     // entity index → Target usage-constraint flag
 	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
 	pairIsTagPolicies    map[ID]bool                     // relationship entity index → PairIsTag flag
+	orderedChildren      map[ID]*orderedChildList        // keyed by parent entity index; non-nil entry means ordered
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -154,9 +156,10 @@ type World struct {
 //   - Index 30: Trait built-in usage-constraint trait entity
 //   - Index 31: PairIsTag built-in relationship trait entity
 //   - Index 32: With built-in relationship trait entity
-//   - Index 33: Wildcard built-in query-term sentinel (*)
-//   - Index 34: Any built-in query-term sentinel (_)
-//   - Index 35+: user entities (NewEntity)
+//   - Index 33: OrderedChildren built-in trait entity
+//   - Index 34: Wildcard built-in query-term sentinel (*)
+//   - Index 35: Any built-in query-term sentinel (_)
+//   - Index 36+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -358,13 +361,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(with))
 	w.withID = with
-	// Allocate the built-in Wildcard query-term sentinel (gets index 33).
+	// Allocate the built-in OrderedChildren trait entity (gets index 33).
+	orderedChildren := w.index.Alloc()
+	rec = w.index.Get(orderedChildren)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(orderedChildren))
+	w.orderedChildrenID = orderedChildren
+	// Allocate the built-in Wildcard query-term sentinel (gets index 34).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 34).
+	// Allocate the built-in Any query-term sentinel (gets index 35).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -635,6 +644,16 @@ func (w *World) deleteOne(e ID) bool {
 	for key := range w.writeOnceHasBeenSet {
 		if key.entity == e.Index() {
 			delete(w.writeOnceHasBeenSet, key)
+		}
+	}
+	// Clean up ordered-children state. If e was an ordered parent, drop its list.
+	// Also remove e from any other parent's ordered list it appears in.
+	// Cascade-deleted children reach this path via deleteOne, so this covers them too.
+	// Mirrors upstream src/on_delete.c:211-214.
+	if w.orderedChildren != nil {
+		delete(w.orderedChildren, ID(e.Index()))
+		for _, list := range w.orderedChildren {
+			removeFromOrderedList(list, e)
 		}
 	}
 	freed := w.index.Free(e)

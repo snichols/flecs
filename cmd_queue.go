@@ -179,6 +179,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 				// Bare With tag: no side-map to update — With co-add metadata lives
 				// in (With, Y) pair storage on the entity itself.
 				_ = entity
+			} else if !c.id.IsPair() && w.orderedChildrenID != 0 && c.id.Index() == w.orderedChildrenID.Index() {
+				// Bare OrderedChildren tag: apply ordered-children policy to entity,
+				// snapshotting any children already committed to their tables at this
+				// point in the flush.
+				applyOrderedChildrenPolicy(w, entity)
 			}
 			// Usage-constraint enforcement on deferred path (mirrors immediate path
 			// in id_ops.go). Panics at coalesce time, not at queue submission.
@@ -297,6 +302,29 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		for _, id := range removedIDs {
 			if id.IsPair() && w.symmetricPolicies[id.First()] {
 				removeIDImmediate(w, id.Second(), MakePair(id.First(), entity))
+			}
+		}
+		// OrderedChildren deferred hooks: after the single archetype migration,
+		// update ordered-children lists for any (ChildOf, parent) add/remove changes.
+		// Mirrors the symmetric pattern above. Handles new-child, re-parent, and
+		// orphan cases in a single pass. Pattern mirrors the Symmetric mirror at
+		// cmd_queue.go:292-301.
+		if w.orderedChildren != nil {
+			for _, id := range removedIDs {
+				if id.IsPair() && id.First().Index() == w.childOfID.Index() {
+					parent := id.Second()
+					if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+						removeFromOrderedList(list, entity)
+					}
+				}
+			}
+			for _, id := range addedIDs {
+				if id.IsPair() && id.First().Index() == w.childOfID.Index() {
+					parent := id.Second()
+					if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+						list.entries = append(list.entries, entity)
+					}
+				}
 			}
 		}
 	}

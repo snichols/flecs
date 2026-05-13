@@ -14,10 +14,27 @@ func (w *World) ChildOf() ID { return w.childOfID }
 //
 // fn returns false to stop iteration early.
 //
-// Behavior is undefined if fn calls Delete, AddID, RemoveID, or Set during
-// iteration; any of those operations may mutate the table being iterated.
+// If parent has the [OrderedChildren] trait, children are visited in insertion
+// order. The list is snapshotted at iteration start, so adds or removes
+// performed inside fn do not affect the current iteration but are visible on
+// the next EachChild call. This matches the safe-iteration pattern used
+// elsewhere in flecs (mirrors upstream ecs_children in src/each.c:110-141).
+//
+// Without OrderedChildren, the existing archetype-derived iteration order is
+// preserved unchanged.
 func (w *World) EachChild(parent ID, fn func(child ID) bool) {
 	w.checkExclusiveAccessRead()
+	if w.orderedChildren != nil {
+		if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+			snapshot := append([]ID(nil), list.entries...)
+			for _, child := range snapshot {
+				if !fn(child) {
+					return
+				}
+			}
+			return
+		}
+	}
 	pairID := MakePair(w.childOfID, parent)
 	w.compIndex.Each(pairID, func(t *table.Table) bool {
 		for _, child := range t.Entities() {

@@ -16,12 +16,13 @@ type jsonWorld struct {
 
 // jsonEntity is the JSON representation of a single entity.
 type jsonEntity struct {
-	Serial     int                        `json:"serial"`
-	Name       string                     `json:"name,omitempty"`
-	Parent     int                        `json:"parent,omitempty"`
-	Prefabs    []int                      `json:"prefabs,omitempty"`
-	Pairs      []jsonPair                 `json:"pairs,omitempty"`
-	Components map[string]json.RawMessage `json:"components,omitempty"`
+	Serial          int                        `json:"serial"`
+	Name            string                     `json:"name,omitempty"`
+	Parent          int                        `json:"parent,omitempty"`
+	Prefabs         []int                      `json:"prefabs,omitempty"`
+	Pairs           []jsonPair                 `json:"pairs,omitempty"`
+	Components      map[string]json.RawMessage `json:"components,omitempty"`
+	OrderedChildren bool                       `json:"ordered_children,omitempty"`
 }
 
 // jsonPair is the JSON representation of a single custom pair on an entity.
@@ -99,40 +100,41 @@ func (m *marshaler) visit(e ID) error {
 // Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
 	skip := map[ID]struct{}{
-		w.ChildOf():        {},
-		w.IsA():            {},
-		w.Name():           {},
-		w.PreUpdate():      {},
-		w.OnUpdate():       {},
-		w.PostUpdate():     {},
-		w.OnFixedUpdate():  {},
-		w.OnInstantiate():  {},
-		w.Inherit():        {},
-		w.Override():       {},
-		w.DontInherit():    {},
-		w.OnDelete():       {},
-		w.OnDeleteTarget(): {},
-		w.RemoveAction():   {},
-		w.DeleteAction():   {},
-		w.PanicAction():    {},
-		w.Exclusive():      {},
-		w.CanToggle():      {},
-		w.Symmetric():      {},
-		w.Transitive():     {},
-		w.Reflexive():      {},
-		w.Acyclic():        {},
-		w.Final():          {},
-		w.OneOf():          {},
-		w.Singleton():      {},
-		w.WriteOnce():      {},
-		w.Traversable():    {},
-		w.Relationship():   {},
-		w.Target():         {},
-		w.Trait():          {},
-		w.PairIsTag():      {},
-		w.With():           {},
-		w.Wildcard():       {},
-		w.Any():            {},
+		w.ChildOf():         {},
+		w.IsA():             {},
+		w.Name():            {},
+		w.PreUpdate():       {},
+		w.OnUpdate():        {},
+		w.PostUpdate():      {},
+		w.OnFixedUpdate():   {},
+		w.OnInstantiate():   {},
+		w.Inherit():         {},
+		w.Override():        {},
+		w.DontInherit():     {},
+		w.OnDelete():        {},
+		w.OnDeleteTarget():  {},
+		w.RemoveAction():    {},
+		w.DeleteAction():    {},
+		w.PanicAction():     {},
+		w.Exclusive():       {},
+		w.CanToggle():       {},
+		w.Symmetric():       {},
+		w.Transitive():      {},
+		w.Reflexive():       {},
+		w.Acyclic():         {},
+		w.Final():           {},
+		w.OneOf():           {},
+		w.Singleton():       {},
+		w.WriteOnce():       {},
+		w.Traversable():     {},
+		w.Relationship():    {},
+		w.Target():          {},
+		w.Trait():           {},
+		w.PairIsTag():       {},
+		w.With():            {},
+		w.OrderedChildren(): {},
+		w.Wildcard():        {},
+		w.Any():             {},
 	}
 
 	var result []byte
@@ -202,6 +204,12 @@ func (w *World) MarshalJSON() ([]byte, error) {
 
 			if name, ok := fr.GetName(e); ok {
 				je.Name = name
+			}
+
+			if w.orderedChildren != nil {
+				if _, ok := w.orderedChildren[ID(e.Index())]; ok {
+					je.OrderedChildren = true
+				}
 			}
 
 			if p, ok := fr.ParentOf(e); ok {
@@ -360,6 +368,12 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			e := serialToID[je.Serial]
 			if je.Name != "" {
 				fw.SetName(e, je.Name)
+			}
+			// OrderedChildren trait replay: initialize the ordered list before children
+			// are added so the child-add hook (addIDImmediate) can append them in order.
+			// JSON is in topo order so parents are processed before their children.
+			if je.OrderedChildren {
+				applyOrderedChildrenPolicy(w, e)
 			}
 			if je.Parent > 0 {
 				parentID, ok := serialToID[je.Parent]

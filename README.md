@@ -233,6 +233,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | WriteOnce component trait _(v0.45.0)_ | `SetWriteOnce(w, compID)` / `IsWriteOnce(scope, compID)` — panics on second Set; Remove clears tracking; formerly `Constant` (renamed to avoid collision with upstream `EcsConstant`) |
 | Traversable relationship trait _(v0.46.0)_ | `SetTraversable(w, relID)` / `IsTraversable(scope, relID)` — query-time enforcement: non-traversable `.Up()`/`.SelfUp()`/`.Cascade()` panics at construction; implies Acyclic; `ChildOf` + `IsA` bootstrapped Traversable |
 | Relationship / Target / Trait usage constraints _(v0.47.0)_ | `SetRelationship(w, id)` / `SetTarget(w, id)` / `SetTrait(w, id)` — write-time enforcement: bare-tag add or wrong-slot pair add panics; `Trait` exempts entity from `Relationship`'s no-target-slot check; built-ins bootstrapped |
+| OrderedChildren trait _(v0.50.0)_ | `SetOrderedChildren(w, parentID)` / `IsOrderedChildren(scope, parentID)` — opt-in per parent; `EachChild` returns children in insertion order; in-callback snapshot; JSON round-trip |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |

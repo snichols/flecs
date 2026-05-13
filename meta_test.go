@@ -15,8 +15,8 @@ import (
 // PanicAction(16), Exclusive(17), CanToggle(18), Symmetric(19), Transitive(20),
 // Reflexive(21), Acyclic(22), Final(23), OneOf(24), Singleton(25), WriteOnce(26),
 // Traversable(27), Relationship(28), Target(29), Trait(30), PairIsTag(31),
-// With(32), Wildcard(33), Any(34).
-const builtinEntityCount = 34
+// With(32), OrderedChildren(33), Wildcard(34), Any(35).
+const builtinEntityCount = 35
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

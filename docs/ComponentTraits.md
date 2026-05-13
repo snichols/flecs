@@ -496,9 +496,19 @@ _ = ok
 
 **What it does:** The `OrderedChildren` trait guarantees that `EachChild` iterates children in insertion order, even when component mutations move children between archetype tables.
 
-**Workaround:** In Go flecs, `EachChild` iterates children in the order they appear in their archetype tables. For most workloads this is insertion order, but it is not guaranteed when children have different component compositions and are moved between tables.
+**Shipped in v0.50.0.** Call `flecs.SetOrderedChildren(w, parentID)` or the bare-tag form `fw.AddID(parentID, w.OrderedChildren())` to opt a parent into ordered iteration. Once set, `EachChild` (and `Reader.EachChild`) returns children in insertion order, snapshotting the list at iteration start so in-callback mutations are safe. If the parent already has children when the trait is applied, those children are snapshotted in their current archetype order. Removing a child, re-parenting, or deleting a child updates the ordered list immediately. The trait is opt-in per parent; unordered parents continue to use the archetype-derived path. `IsOrderedChildren(scope, parentID)` queries the trait. JSON marshal/unmarshal preserves the trait via the `ordered_children` field.
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-144-hierarchiesmanual-port): *`OrderedChildren` trait*.
+```go
+w.Write(func(fw *flecs.Writer) {
+    parent := fw.NewEntity()
+    flecs.SetOrderedChildren(w, parent)
+    c1 := fw.NewEntity()
+    flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+    c2 := fw.NewEntity()
+    flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+})
+// EachChild visits c1 then c2 in insertion order.
+```
 
 ---
 
@@ -921,7 +931,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Exclusive** | `EcsExclusive` | ✅ shipped (v0.34.0) | `SetExclusive(w, relID)` / `IsExclusive(w, relID)`; `w.Exclusive()` bare-tag form; `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive |
 | **Final** | `EcsFinal` | ✅ shipped (v0.42.0) | `SetFinal(w, entityID)` / `IsFinal(scope, entityID)`; `w.Final()` bare-tag form; write-time enforcement: adding `(IsA, target)` panics if target is Final; no built-in ships Final; self-pair `(IsA, e)` also rejected when e is Final |
 | **OneOf** | `EcsOneOf` | ✅ shipped (v0.43.0) | `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)`; `w.OneOf()` bare-tag and pair forms; write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent; Wildcard/Any exempt; no built-in ships OneOf |
-| **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
+| **OrderedChildren** | `EcsOrderedChildren` | ✅ shipped (v0.50.0) | `SetOrderedChildren(w, parentID)` / `IsOrderedChildren(scope, parentID)`; `w.OrderedChildren()` bare-tag form; `EachChild` and `Reader.EachChild` iterate in insertion order; opt-in per parent; safe in-callback snapshot; JSON round-trip via `ordered_children` field |
 | **PairIsTag** | `EcsPairIsTag` | ✅ shipped (v0.48.0) | `SetPairIsTag(w, relID)` / `IsPairIsTag(scope, relID)`; `w.PairIsTag()` bare-tag form; write-time enforcement: `SetPair[T]`/`SetPairByID` panic on PairIsTag relationship; set-after-use trap panics; `IsPairIsTag` accepts pair IDs; `IsA` and `ChildOf` bootstrapped |
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
 | **Relationship** | `EcsRelationship` | ✅ shipped (v0.47.0) | `SetRelationship(w, id)` / `IsRelationship(scope, id)`; `w.Relationship()` bare-tag form; write-time enforcement: bare-tag add panics; pair target-slot add panics unless target has `Trait`; `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped |
