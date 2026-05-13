@@ -510,18 +510,19 @@ _ = order
 
 ### Custom traversal relationships
 
-Any entity can be used as a traversal relationship — no special registration is required in Go flecs:
+Custom traversal relationships must be registered as Traversable with `SetTraversable` before use. The built-in `ChildOf` and `IsA` are always Traversable:
 
 ```go
 type Mass struct{ Value float32 }
 
 w := flecs.New()
 
-// Any entity works as a custom traversal relationship.
+// Custom traversal relationships must be marked Traversable first.
 var containedBy flecs.ID
 w.Write(func(fw *flecs.Writer) {
     containedBy = fw.NewEntity()
 })
+flecs.SetTraversable(w, containedBy) // required since v0.46.0
 
 massID := flecs.RegisterComponent[Mass](w)
 

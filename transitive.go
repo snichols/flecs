@@ -61,6 +61,11 @@ func applyTransitivePolicy(w *World, relID ID) {
 		w.transitivePolicies = make(map[ID]bool)
 	}
 	w.transitivePolicies[ID(relID.Index())] = true
+	// Note: C bootstrap.c:1299 has (EcsTransitive, EcsWith, EcsTraversable), implying
+	// that transitive relationships are also traversable (and therefore acyclic).
+	// Go flecs defers this implication: SetTransitive does NOT call SetTraversable,
+	// to avoid breaking existing tests that rely on cycle-safe transitive traversal.
+	// A follow-up phase will add this implication and update the cycle-safety tests.
 }
 
 // transitiveWalk performs a DFS from start, following all (rel, X) pairs on

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.46.0 — 2026-05-13 — Phase 15.14: Traversable relationship trait
+
+### Added
+
+- **`SetTraversable(w, relID)`** — marks `relID` as a traversable relationship, permitting its use in query terms with `.Up(rel)`, `.SelfUp(rel)`, or `.Cascade(rel)` modifiers. Also marks `relID` as Acyclic (Traversable implies Acyclic, mirroring C `bootstrap.c:1295-1296`).
+- **`IsTraversable(s scope, relID ID) bool`** — reports whether `relID` has been marked Traversable. Accepts `scope` (per Phase 15.8 convention) so it works inside `Read` and `Write` blocks.
+- **`w.Traversable() ID`** — returns the built-in Traversable trait entity (index 27). Bare-tag form: `fw.AddID(relID, w.Traversable())` is equivalent to `SetTraversable(w, relID)`.
+- **Query-time enforcement** — `validateAndSortTerms` (shared by `NewQueryFromTerms` and `NewCachedQueryFromTerms`) now validates that any term with a non-zero `Trav` uses a relationship registered as Traversable. Non-compliant terms panic with a message naming both the traversal modifier (`.Up()`, `.SelfUp()`, or `.Cascade()`) and the relationship. Mirrors C `query/validator.c:639-647`.
+- **`traversable_test.go`** — 12 test cases: SetTraversable+Up succeeds; non-traversable Up/SelfUp/Cascade panics each naming the correct modifier; IsTraversable bootstrap for IsA+ChildOf; vanilla entity returns false; Traversable implies IsAcyclic; idempotence and bare-tag equivalence; deferred path via Write block; pair-form Trav panics (pairs not valid traversal relationships); SetTransitive alone does not imply Traversable in this phase; TraverseSelf guard skips check; scope in Write/Read blocks.
+
+### Changed
+
+- **`ChildOf` and `IsA` bootstrapped Traversable** — both relationships now register as Traversable at world creation, mirroring C `bootstrap.c:1063,1315-1316`. Existing queries that traverse `ChildOf` or `IsA` continue to work without change.
+- **`IsA` is now Acyclic (behavior change)** — as a side effect of being bootstrapped Traversable, `IsA` is also now Acyclic for the first time in Go flecs. Write-time cycle rejection (`checkAcyclic`) now also applies to `(IsA, *)` pairs. Previously, IsA cycles were caught only at traversal time by `walkUp`'s seen-map guard. Code that deliberately created IsA cycles (e.g. `TestIsATwoEntityCycleTerminates`) now panics at the cycle-creating `AddID` call.
+- **Built-in entity reindex** — Traversable inserted at index 27; Wildcard shifts 27→28; Any shifts 28→29; user entities now start at index 30.
+- **`Transitive → Traversable` implication deferred** — C `bootstrap.c:1299` has `(EcsTransitive, EcsWith, EcsTraversable)`, making all transitive relationships also traversable (and therefore acyclic). Go flecs defers this implication to a follow-up phase to preserve the existing cycle-safety behavior in `transitiveWalk`. Users who need to traverse a transitive relationship with `.Up(R)` must call `SetTraversable(w, R)` explicitly.
+- **Pair-form traversal** — `term.Trav` must be a single entity ID. Passing a pair ID (e.g. `MakePair(R, w.Wildcard())`) to `.Up()` will always fail the Traversable check because the check operates on `t.Trav.Index()`, which for a pair encodes the target's index, not the relationship's. This matches C's convention that `term->trav` is always a single entity.
+
 ## v0.45.0 — 2026-05-13 — Phase 15.13: WriteOnce component trait
 
 ### Added

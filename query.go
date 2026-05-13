@@ -921,6 +921,32 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		applyInheritablePromotion(w, &cp[i])
 	}
 
+	// Traversable enforcement: any term whose Trav is non-zero requires the
+	// traversal relationship to be registered as Traversable. Mirrors C
+	// query/validator.c:639-647. The check is unconditional on depth (if
+	// term.Trav != 0, we require Traversable regardless of depth).
+	for _, t := range cp {
+		if t.Trav == 0 {
+			continue
+		}
+		if t.Traverse == TraverseSelf || t.Traverse == TraverseExplicitSelf {
+			continue
+		}
+		if !w.traversablePolicies[ID(t.Trav.Index())] {
+			modifier := ".Up()"
+			switch t.Traverse {
+			case TraverseSelfUp:
+				modifier = ".SelfUp()"
+			case TraverseCascade:
+				modifier = ".Cascade()"
+			}
+			panic(fmt.Sprintf(
+				"%s: cannot use non-traversable relationship %v with %s; call SetTraversable(w, relID) first",
+				caller, t.Trav, modifier,
+			))
+		}
+	}
+
 	// Extract And-term IDs (already sorted). Reflect possible promotion changes.
 	andIDs := make([]ID, len(andTerms))
 	for i, t := range andTerms {

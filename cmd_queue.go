@@ -163,6 +163,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.writeOnceID.Index() {
 				// Bare WriteOnce tag: mark entity as a write-once component.
 				applyWriteOncePolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.traversableID.Index() {
+				// Bare Traversable tag: mark entity as a traversable relationship.
+				applyTraversablePolicy(w, entity)
 			}
 			// Acyclic cycle check on pair adds (deferred path).
 			if c.id.IsPair() && w.acyclicPolicies[ID(c.id.First().Index())] {
