@@ -720,10 +720,13 @@ func TestWith_Accessor(t *testing.T) {
 
 func TestWith_BuiltinIndexShift(t *testing.T) {
 	w := flecs.New()
-	if w.Wildcard().Index() != 33 {
-		t.Errorf("Wildcard index: want 33, got %d", w.Wildcard().Index())
+	if w.OrderedChildren().Index() != 33 {
+		t.Errorf("OrderedChildren index: want 33, got %d", w.OrderedChildren().Index())
 	}
-	if w.Any().Index() != 34 {
-		t.Errorf("Any index: want 34, got %d", w.Any().Index())
+	if w.Wildcard().Index() != 34 {
+		t.Errorf("Wildcard index: want 34, got %d", w.Wildcard().Index())
+	}
+	if w.Any().Index() != 35 {
+		t.Errorf("Any index: want 35, got %d", w.Any().Index())
 	}
 }

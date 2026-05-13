@@ -147,6 +147,12 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// The presence of the bare With tag on e itself is allowed for completeness
 		// but the semantics are driven by pair-form (With, coAdd) storage.
 		_ = e
+	} else if w.orderedChildrenID != 0 && id.Index() == w.orderedChildrenID.Index() {
+		// Bare OrderedChildren tag added to entity e: initialize the per-parent
+		// ordered list and snapshot any existing (ChildOf, e) children into it.
+		// This is the fw.AddID(parentID, w.OrderedChildren()) form, mirroring C's
+		// flecs_register_ordered_children observer in src/bootstrap.c:604-630.
+		applyOrderedChildrenPolicy(w, e)
 	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
@@ -182,6 +188,20 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 			for _, sigID := range rec.Table.Type() {
 				if sigID.IsPair() && uint32(sigID.First()) == relIdx && sigID.Second() != id.Second() {
 					w.migrate(e, id, sigID, nil)
+					// OrderedChildren re-parent hooks: run after migrate so table state is stable.
+					// If (ChildOf, oldParent) → (ChildOf, newParent), update both ordered lists.
+					// Mirrors upstream flecs_ordered_children_reparent/unparent called from
+					// component_actions.c:126,141.
+					if id.First().Index() == w.childOfID.Index() && w.orderedChildren != nil {
+						oldParent := sigID.Second()
+						if list, ok := w.orderedChildren[ID(oldParent.Index())]; ok {
+							removeFromOrderedList(list, e)
+						}
+						newParent := id.Second()
+						if list, ok := w.orderedChildren[ID(newParent.Index())]; ok {
+							list.entries = append(list.entries, e)
+						}
+					}
 					// Symmetric mirror: if (R, b) replaced (R, x) on a, add (R, a) to b.
 					if w.symmetricPolicies[id.First()] {
 						addIDImmediate(w, id.Second(), MakePair(id.First(), e))
@@ -202,6 +222,16 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		checkSingleton(w, id.First(), e)
 	}
 	w.migrate(e, id, 0, nil)
+	// OrderedChildren child-add hook: if (ChildOf, parent) was added and parent is
+	// ordered, append e to the parent's list. Runs after migrate so table state is
+	// consistent. Mirrors upstream flecs_ordered_children_reparent in
+	// src/storage/ordered_children.c:127-145 (called from component_actions.c:126).
+	if id.IsPair() && id.First().Index() == w.childOfID.Index() && w.orderedChildren != nil {
+		parent := id.Second()
+		if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+			list.entries = append(list.entries, e)
+		}
+	}
 	// Symmetric mirror: if (R, b) was added to a, also add (R, a) to b.
 	// The HasComponent early-return above provides the idempotence loop-guard:
 	// the recursive call re-enters here, but b already has (R, a) and returns false.
@@ -294,6 +324,16 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 	// slot so a subsequent Add + Set cycle starts fresh.
 	clearWriteOnceTracking(w, e, id)
 	w.migrate(e, 0, id, nil)
+	// OrderedChildren child-remove hook: if (ChildOf, parent) was removed and parent
+	// is ordered, remove e from the parent's list. Runs after migrate so table state
+	// is consistent. Mirrors upstream flecs_ordered_children_unparent in
+	// src/storage/ordered_children.c:147-155 (called from component_actions.c:141).
+	if id.IsPair() && id.First().Index() == w.childOfID.Index() && w.orderedChildren != nil {
+		parent := id.Second()
+		if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+			removeFromOrderedList(list, e)
+		}
+	}
 	// Symmetric mirror: if (R, b) was removed from a, also remove (R, a) from b.
 	// The !HasComponent early-return above provides the idempotence loop-guard:
 	// the recursive call re-enters here, but b no longer has (R, a) and returns false.

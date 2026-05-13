@@ -12,6 +12,7 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction, [Relationships]
 - [Depth-first traversal](#depth-first-traversal)
 - [Breadth-first traversal](#breadth-first-traversal)
 - [Hierarchical names](#hierarchical-names)
+- [OrderedChildren](#orderedchildren)
 - [Reparenting](#reparenting)
 - [Ancestor traversal](#ancestor-traversal)
 - [Not yet ported](#not-yet-ported)
@@ -228,6 +229,30 @@ Pass `0` as the parent to search the root scope — alive entities with no Child
 
 ---
 
+## OrderedChildren
+
+By default, `EachChild` iterates children in archetype-derived order, which can change when children gain or lose components (moving them between tables). Use the `OrderedChildren` trait to lock a parent into insertion-order iteration.
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    parent := fw.NewEntity()
+    flecs.SetOrderedChildren(w, parent) // or: flecs.AddID(fw, parent, w.OrderedChildren())
+    c1 := fw.NewEntity()
+    flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+    c2 := fw.NewEntity()
+    flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+})
+// EachChild always yields c1, c2 — regardless of future component changes on c1/c2.
+```
+
+`SetOrderedChildren` is opt-in per parent. After it is applied, any child added, removed, or re-parented updates the ordered list immediately. The iteration list is snapshotted at the start of each `EachChild` call so mutations inside the callback are safe.
+
+If a parent already has children when `SetOrderedChildren` is called, those children are captured in their current archetype order.
+
+Check whether a parent is ordered with `flecs.IsOrderedChildren(scope, parentID)`. JSON marshal/unmarshal preserves the trait transparently.
+
+---
+
 ## Reparenting
 
 To move an entity from one parent to another, remove the old ChildOf pair and add the new one:
@@ -305,8 +330,6 @@ w.Read(func(r *flecs.Reader) {
 ## Not yet ported
 
 The following upstream C features are not yet implemented in Go flecs:
-
-- **`OrderedChildren` trait** — add this trait to a parent in C flecs to guarantee that `children()` iterates in creation order regardless of component mutations that would normally move children between tables. Not yet ported in Go flecs.
 
 - **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a default ChildOf parent so that newly created entities automatically become children of the current scope without an explicit `AddID` call. Not yet ported in Go flecs.
 

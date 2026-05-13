@@ -116,9 +116,22 @@ func (r *Reader) ParentOf(e ID) (ID, bool) {
 }
 
 // EachChild calls fn for every direct child of parent.
+// If parent has the [OrderedChildren] trait, children are visited in insertion order.
 func (r *Reader) EachChild(parent ID, fn func(ID) bool) {
-	pairID := MakePair(r.world.childOfID, parent)
-	r.world.compIndex.Each(pairID, func(t *table.Table) bool {
+	w := r.world
+	if w.orderedChildren != nil {
+		if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
+			snapshot := append([]ID(nil), list.entries...)
+			for _, child := range snapshot {
+				if !fn(child) {
+					return
+				}
+			}
+			return
+		}
+	}
+	pairID := MakePair(w.childOfID, parent)
+	w.compIndex.Each(pairID, func(t *table.Table) bool {
 		for _, child := range t.Entities() {
 			if !fn(child) {
 				return false

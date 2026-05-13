@@ -127,7 +127,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.4 (HierarchiesManual port)
 
-- **`OrderedChildren` trait** — add this trait to a parent entity to guarantee that `EachChild` iterates children in creation order regardless of component mutations that would otherwise move children between archetype tables. not yet ported in Go flecs.
+- **`OrderedChildren` trait** — **shipped in v0.50.0**. `SetOrderedChildren(w, parentID)` / `IsOrderedChildren(scope, parentID)` / `w.OrderedChildren()`. Opt-in per parent; `EachChild` and `Reader.EachChild` iterate in insertion order. JSON round-trip via `ordered_children` field. See [HierarchiesManual.md § OrderedChildren](HierarchiesManual.md#orderedchildren).
 - **`Parent` hierarchy storage** — a second, non-fragmenting storage for small structured hierarchies where children of multiple parents share the same archetype table. Reduces table fragmentation and memory footprint for prefab-heavy workloads. not yet ported in Go flecs.
 
 ### Additional gaps discovered in Phase 14.5 (PrefabsManual port)

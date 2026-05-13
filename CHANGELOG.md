@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.50.0 — 2026-05-13 — Phase 15.18: OrderedChildren trait
+
+### Added
+
+- **`SetOrderedChildren(w *World, parent ID)`** — marks `parent` as an ordered-children parent so that `EachChild` (and `Reader.EachChild`) iterates direct children in insertion order regardless of archetype-table reshuffling. Opt-in per parent; calling twice is a no-op. If the parent already has children when the trait is applied, those children are snapshotted in their current archetype order.
+- **`IsOrderedChildren(s scope, parent ID) bool`** — reports whether `parent` has been marked with `OrderedChildren`. Accepts `scope` so it works inside both `Read` and `Write` blocks (per Phase 15.8 convention).
+- **`w.OrderedChildren() ID`** — returns the built-in `OrderedChildren` trait entity (index 33). Bare-tag form: `fw.AddID(parentID, w.OrderedChildren())` is equivalent to `SetOrderedChildren(w, parentID)`.
+- **Insertion-order iteration** — `EachChild` and `Reader.EachChild` snapshot the ordered list at iteration start, so mutations inside the callback (add/remove children) do not affect the current iteration but are visible on the next call. Unordered parents continue to use the existing archetype-derived path.
+- **Hook sites** — ordered list is maintained on: child add (`addIDImmediate` and `batchForEntity` deferred path), child remove (`removeIDImmediate`), re-parent (exclusive pair replacement in `addIDImmediate`), and entity delete (`deleteOne` cleans up both the parent map entry and any child appearances).
+- **`ordered_children_test.go`** — 18 test cases covering: basic insertion order, trait-absent fallthrough, remove-middle, re-parent both ordered, re-parent src-ordered/dest-unordered, re-parent src-unordered/dest-ordered, delete child, delete parent, deferred add, idempotence/round-trip, `Reader.EachChild` from Read block, stress (100 children with random interleaving), set-after-children-exist, iteration-during-mutation, marshal round-trip, bare-tag form, built-in index, deferred bare-tag.
+- **Marshal/unmarshal support** — `MarshalJSON` adds `"ordered_children": true` to any entity in `w.orderedChildren`. `UnmarshalJSON` calls `applyOrderedChildrenPolicy` for such entities before adding children, so the child-add hook restores the list in the correct order.
+
+### Changed
+
+- **Built-in entity reindex** — `OrderedChildren` inserted at index 33; `Wildcard` shifts 33→34; `Any` shifts 34→35; user entities now start at index 36.
+- **`Reader.EachChild`** — updated to check the `orderedChildren` map before falling through to the archetype-derived path, matching the `World.EachChild` behavior.
+
 ## v0.49.0 — 2026-05-13 — Phase 15.17: With relationship trait
 
 ### Added
