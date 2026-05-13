@@ -104,7 +104,7 @@ type World struct {
 	targetPolicies       map[ID]bool                     // entity index → Target usage-constraint flag
 	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
 	pairIsTagPolicies    map[ID]bool                     // relationship entity index → PairIsTag flag
-	orderedChildren      map[ID]*orderedChildList         // keyed by parent entity index; non-nil entry means ordered
+	orderedChildren      map[ID]*orderedChildList        // keyed by parent entity index; non-nil entry means ordered
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages

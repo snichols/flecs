@@ -657,3 +657,127 @@ func TestOrderedChildren_DeferredBareTag(t *testing.T) {
 		t.Errorf("deferred bare-tag: want 2 children, got %d", len(got))
 	}
 }
+
+// TestOrderedChildren_BatchedDeferredAdd verifies the ordered-children hook
+// inside batchForEntity fires correctly when an entity gains (ChildOf, parent)
+// as one of two or more commands in the same Write block (which forces the
+// coalescer path rather than the single-dispatch path).
+func TestOrderedChildren_BatchedDeferredAdd(t *testing.T) {
+	w := flecs.New()
+	var parent, child, extraTag flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		flecs.SetOrderedChildren(w, parent)
+		extraTag = fw.NewEntity() // bare tag entity
+	})
+
+	w.Write(func(fw *flecs.Writer) {
+		child = fw.NewEntity()
+		// Two commands for child — triggers batchForEntity:
+		flecs.AddID(fw, child, extraTag)                            // command 1
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent)) // command 2
+	})
+
+	got := collectChildren(w, parent)
+	if len(got) != 1 || got[0] != child {
+		t.Errorf("batched deferred add: want [child], got %v", got)
+	}
+}
+
+// TestOrderedChildren_BatchedDeferredRemove verifies the ordered-children hook
+// inside batchForEntity fires for the remove path when an entity has 2+
+// commands including a (ChildOf, parent) removal.
+func TestOrderedChildren_BatchedDeferredRemove(t *testing.T) {
+	w := flecs.New()
+	var parent, child, extraTag flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		flecs.SetOrderedChildren(w, parent)
+		extraTag = fw.NewEntity()
+		child = fw.NewEntity()
+		// Single command — goes via dispatch→addIDImmediate (expected normal path).
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), parent))
+	})
+
+	// Verify child is in list after first block.
+	if got := collectChildren(w, parent); len(got) != 1 || got[0] != child {
+		t.Fatalf("setup: want [child], got %v", got)
+	}
+
+	// Two commands for child in same Write block — forces batchForEntity:
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, child, flecs.MakePair(w.ChildOf(), parent)) // command 1
+		flecs.AddID(fw, child, extraTag)                               // command 2
+	})
+
+	got := collectChildren(w, parent)
+	if len(got) != 0 {
+		t.Errorf("batched deferred remove: want 0, got %d (%v)", len(got), got)
+	}
+}
+
+// TestOrderedChildren_WorldEachChildOrdered verifies that calling w.EachChild
+// directly (not through a Reader) respects the ordered-children list.
+// This covers the ordered path in childof.go that is bypassed when using
+// r.EachChild (Reader).
+func TestOrderedChildren_WorldEachChildOrdered(t *testing.T) {
+	w := flecs.New()
+	var parent, c1, c2, c3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		flecs.SetOrderedChildren(w, parent)
+		c1 = fw.NewEntity()
+		flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+		c2 = fw.NewEntity()
+		flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+		c3 = fw.NewEntity()
+		flecs.AddID(fw, c3, flecs.MakePair(w.ChildOf(), parent))
+	})
+
+	var got []flecs.ID
+	w.EachChild(parent, func(child flecs.ID) bool {
+		got = append(got, child)
+		return true
+	})
+	want := []flecs.ID{c1, c2, c3}
+	if len(got) != len(want) {
+		t.Fatalf("w.EachChild ordered: len want %d, got %d", len(want), len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("w.EachChild ordered [%d]: want %v, got %v", i, want[i], got[i])
+		}
+	}
+}
+
+// TestOrderedChildren_WorldEachChildEarlyStop verifies that calling w.EachChild
+// directly with an early-stop callback (fn returns false) halts iteration.
+// This covers the early-return branch inside the ordered path in childof.go.
+func TestOrderedChildren_WorldEachChildEarlyStop(t *testing.T) {
+	w := flecs.New()
+	var parent, c1, c2, c3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		flecs.SetOrderedChildren(w, parent)
+		c1 = fw.NewEntity()
+		flecs.AddID(fw, c1, flecs.MakePair(w.ChildOf(), parent))
+		c2 = fw.NewEntity()
+		flecs.AddID(fw, c2, flecs.MakePair(w.ChildOf(), parent))
+		c3 = fw.NewEntity()
+		flecs.AddID(fw, c3, flecs.MakePair(w.ChildOf(), parent))
+	})
+
+	var got []flecs.ID
+	w.EachChild(parent, func(child flecs.ID) bool {
+		got = append(got, child)
+		return child != c2 // stop after c2
+	})
+	// Should see c1 and c2 only.
+	if len(got) != 2 {
+		t.Fatalf("w.EachChild early-stop: want 2, got %d", len(got))
+	}
+	if got[0] != c1 || got[1] != c2 {
+		t.Errorf("w.EachChild early-stop: want [c1,c2], got %v", got)
+	}
+	_ = c3 // c3 must not be visited
+}

@@ -87,9 +87,7 @@ func applyOrderedChildrenPolicy(w *World, parent ID) {
 	list := &orderedChildList{}
 	pairID := MakePair(w.childOfID, parent)
 	w.compIndex.Each(pairID, func(t *table.Table) bool {
-		for _, child := range t.Entities() {
-			list.entries = append(list.entries, child)
-		}
+		list.entries = append(list.entries, t.Entities()...)
 		return true
 	})
 	w.orderedChildren[key] = list
