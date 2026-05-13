@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.47.0 — 2026-05-13 — Phase 15.15: Relationship/Target/Trait usage constraints
+
+### Added
+
+- **`SetRelationship(w, id)`** — marks `id` as a Relationship-constrained entity: it may only appear as the relationship (first element) of a pair. Attempting to add it as a plain tag or as a pair target panics with a message naming the entity and the violated constraint.
+- **`SetTarget(w, id)`** — marks `id` as a Target-constrained entity: it may only appear as the target (second element) of a pair.
+- **`SetTrait(w, id)`** — marks `id` as a Trait entity, exempting it from `Relationship`'s no-target-slot check. This allows patterns like `(SomeRel, ChildOf)` where a `Relationship`-marked entity appears in the target slot.
+- **`IsRelationship(s scope, id ID) bool`** / **`IsTarget(s scope, id ID) bool`** / **`IsTrait(s scope, id ID) bool`** — query functions for each constraint marker; accept `scope` (per Phase 15.8 convention) so they work inside `Read` and `Write` blocks.
+- **`w.Relationship() ID`** / **`w.Target() ID`** / **`w.Trait() ID`** — bare-tag accessors for the three built-in constraint entities (indices 28, 29, 30 respectively).
+- **Write-time enforcement** — `checkUsageConstraints` fires on both the immediate path (`addIDImmediate`) and the deferred-coalesce path (`batchForEntity`), ensuring panics are consistent regardless of how the add was submitted.
+- **`usage_constraints_test.go`** — 15 test cases: Relationship/Target/Trait bare-tag panics; pair slot panics; Trait-exemption success; built-in bootstrap checks (IsA/ChildOf/OnDelete/OnDeleteTarget/OnInstantiate → Relationship; Override/Inherit/DontInherit → Target; IsA/ChildOf → Trait); deferred-path panics at coalesce time; idempotence; composition with Exclusive/Traversable/Transitive; component-on-Target panic; self-pair panic.
+
+### Changed
+
+- **Built-in entity reindex** — Relationship/Target/Trait inserted at indices 28/29/30; Wildcard shifts 28→31; Any shifts 29→32; user entities now start at index 33.
+- **Built-in bootstrap** — `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` are bootstrapped `Relationship`; `Override`, `Inherit`, `DontInherit` are bootstrapped `Target`; `IsA` and `ChildOf` are bootstrapped `Trait`. Note: `RemoveAction`, `DeleteAction`, `PanicAction` are **not** marked Target (matches upstream).
+- **Wildcard and Any not constrained** — consistent with the upstream `!ecs_id_is_wildcard(rel)` guard in `component_index.c:396`, Wildcard and Any are not bootstrapped with either marker. Query patterns like `(R, *)` continue to work without special-casing.
+
 ## v0.46.0 — 2026-05-13 — Phase 15.14: Traversable relationship trait
 
 ### Added
