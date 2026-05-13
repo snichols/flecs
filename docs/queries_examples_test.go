@@ -632,18 +632,19 @@ func TestQueries_Traversal_Cascade(t *testing.T) {
 }
 
 // TestQueries_CustomTraversalRelationship verifies the custom traversal relationship snippet.
-// In Go flecs any entity can be used as a traversal relationship — no registration needed.
+// Custom traversal relationships must be registered with SetTraversable before use.
 func TestQueries_CustomTraversalRelationship(t *testing.T) {
 	type Mass struct{ Value float32 }
 
 	w := flecs.New()
 	massID := flecs.RegisterComponent[Mass](w)
 
-	// Any entity works as a custom traversal relationship in Go flecs.
+	// Custom traversal relationships must be marked Traversable before use in queries.
 	var containedBy flecs.ID
 	w.Write(func(fw *flecs.Writer) {
 		containedBy = fw.NewEntity()
 	})
+	flecs.SetTraversable(w, containedBy)
 
 	var container, item flecs.ID
 	w.Write(func(fw *flecs.Writer) {

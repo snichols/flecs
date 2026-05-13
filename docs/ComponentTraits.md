@@ -728,9 +728,37 @@ q.Each(func(it *flecs.QueryIter) {
 
 ### Traversable
 
-**What it does:** Formally marks a relationship as safe to traverse in queries (`Up`, `SelfUp`, `Cascade` flags). In C flecs only `Traversable` relationships can be used for query traversal; adding this also implies `Acyclic`. In Go flecs, any entity can currently be used as a traversal relationship without explicit registration.
+**Shipped in v0.46.0.**
 
-> **Not yet ported in Go flecs** (the formal constraint is not enforced). See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-143-relationships-port): *Traversable relationship trait*.
+**What it does:** Formally marks a relationship as safe to traverse in queries (`Up`, `SelfUp`, `Cascade` modifiers). Only relationships registered as Traversable may be used as traversal targets; attempting to use a non-traversable relationship panics at query construction time with a message naming both the modifier and the relationship. Adding Traversable to a relationship also implies Acyclic (mirroring C `bootstrap.c:1295-1296`), so write-time cycle rejection applies to all traversable relationships.
+
+`ChildOf` and `IsA` are bootstrapped Traversable at world creation. Existing code that traverses these built-in relationships continues to work without change.
+
+**Pair-form traversal note:** `term.Trav` must be a single entity ID, not a pair. Passing a pair ID (e.g. `MakePair(R, w.Wildcard())`) to `.Up()` will always fail the Traversable check because the check operates on the raw `Index()` of `t.Trav`, which for a pair encodes the target's index rather than the relationship's index. This matches C's convention that `term->trav` is always a single entity. See `traversable_test.go:TestTraversable_PairFormTravPanics` for the documented behavior.
+
+**DependsOn** — Go flecs lacks a `DependsOn` built-in entity. Bootstrapping `DependsOn` as Traversable (as C `bootstrap.c:1316` does) is deferred to a follow-up phase alongside a full `DependsOn` port.
+
+**Transitive → Traversable implication** — C `bootstrap.c:1299` makes all Transitive relationships also Traversable. Go flecs defers this implication to a follow-up phase to avoid breaking the existing cycle-safety tests in `transitive_test.go`. Users who need to traverse a transitive relationship with `.Up(R)` must call `SetTraversable(w, R)` explicitly in addition to `SetTransitive(w, R)`.
+
+```go
+// Mark a custom relationship as traversable.
+flecs.SetTraversable(w, containedByID)
+
+// Or via bare-tag form:
+fw.AddID(containedByID, w.Traversable())
+
+// Now usable in traversal queries:
+q := flecs.NewQueryFromTerms(w, flecs.With(massID).Up(containedByID))
+
+// Traversable also implies Acyclic:
+flecs.IsAcyclic(w, containedByID) // → true
+
+// ChildOf and IsA are bootstrapped Traversable:
+flecs.IsTraversable(fr, w.ChildOf()) // → true
+flecs.IsTraversable(fr, w.IsA())    // → true
+```
+
+**Behavior change in v0.46.0:** IsA is now Acyclic for the first time in Go flecs (as a side effect of being bootstrapped Traversable). Write-time cycle rejection now also applies to `(IsA, *)` cycles; previously, these were caught only at traversal time by `walkUp`'s seen-map guard.
 
 ---
 
@@ -809,7 +837,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Target** | `EcsTarget` | ⏳ planned | No usage-as-target constraint |
 | **Trait** | `EcsTrait` | ⏳ planned | No first-class trait marker |
 | **Transitive** | `EcsTransitive` | ✅ shipped (v0.37.0) | `SetTransitive(w, relID)` / `IsTransitive(w, relID)`; `w.Transitive()` bare-tag form; lazy walk at query time with cycle detection and depth limit; cached query re-evaluates on table-create |
-| **Traversable** | `EcsTraversable` | ⏳ planned | Any entity can be used for traversal; no formal enforcement |
+| **Traversable** | `EcsTraversable` | ✅ shipped (v0.46.0) | `SetTraversable(w, relID)` / `IsTraversable(scope, relID)`; `w.Traversable()` bare-tag form; query-time enforcement: non-traversable `Up`/`SelfUp`/`Cascade` terms panic at construction; Traversable implies Acyclic; `ChildOf` + `IsA` bootstrapped Traversable; `IsA` now Acyclic as behavior change (see changelog) |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
 | **With** | `EcsWith` | ⏳ planned | No automatic co-addition; use `OnAdd` hook as workaround |
 
@@ -821,8 +849,8 @@ The table below is the canonical reference for trait-system planning. Check the 
 
 | Sentinel | Index | Semantics |
 |---|---|---|
-| `w.Wildcard()` | 21 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
-| `w.Any()` | 22 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
+| `w.Wildcard()` | 28 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
+| `w.Any()` | 29 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
 
 Both sentinels work in target and relationship positions. See [`docs/Queries.md`](Queries.md) § *Wildcard and Any query terms* for the full API.
 

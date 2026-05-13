@@ -121,6 +121,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// Bare WriteOnce tag added to component entity e: mark e as write-once.
 		// This is the fw.AddID(componentID, w.WriteOnce()) form.
 		applyWriteOncePolicy(w, e)
+	} else if id.Index() == w.traversableID.Index() {
+		// Bare Traversable tag added to entity e: mark e as a traversable relationship.
+		// This is the fw.AddID(relID, w.Traversable()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsTraversable).
+		applyTraversablePolicy(w, e)
 	}
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a

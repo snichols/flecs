@@ -1659,30 +1659,27 @@ func TestQueryUp_DeadAncestor(t *testing.T) {
 	}
 }
 
-// TestQueryUp_CycleSafety: pathological cycle via IsA; matcher terminates within
-// maxTraversalDepth without panicking.
-func TestQueryUp_CycleSafety(t *testing.T) {
+// TestQueryUp_IsACycleRejectedAtWrite: since v0.46.0 IsA is Traversable (implies
+// Acyclic), so creating a two-entity IsA cycle panics at write time rather than
+// at traversal time. Previously this test verified cycle-safe termination of the
+// Up matcher; now the cycle itself is impossible to create.
+func TestQueryUp_IsACycleRejectedAtWrite(t *testing.T) {
 	w := flecs.New()
-	posID := flecs.RegisterComponent[Position](w)
 
-	var a, b flecs.ID
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when creating IsA cycle (Acyclic enforcement), got none")
+		}
+	}()
+
 	w.Write(func(fw *flecs.Writer) {
-		a = fw.NewEntity()
-		b = fw.NewEntity()
+		a := fw.NewEntity()
+		b := fw.NewEntity()
 		flecs.AddID(fw, a, flecs.MakePair(w.IsA(), b))
+		// Creating the reverse edge must panic.
 		flecs.AddID(fw, b, flecs.MakePair(w.IsA(), a))
-		// Neither has Position.
 	})
-
-	q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.IsA()))
-
-	var visited []flecs.ID
-	q.Each(func(it *flecs.QueryIter) {
-		visited = append(visited, it.Entities()...)
-	})
-	if len(visited) != 0 {
-		t.Errorf("want 0 matches (cycle, no Position anywhere), got %v", visited)
-	}
 }
 
 // TestQueryCascade_OrdersByDepth: three-level ChildOf chain (root, mid, leaf), each

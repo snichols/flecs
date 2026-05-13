@@ -75,8 +75,9 @@ type World struct {
 	oneOfID             ID                              // built-in OneOf trait entity (index 24)
 	singletonID         ID                              // built-in Singleton trait entity (index 25)
 	writeOnceID         ID                              // built-in WriteOnce trait entity (index 26)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 27; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 28; _; first user entity at index 29)
+	traversableID       ID                              // built-in Traversable trait entity (index 27)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 28; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 29; _; first user entity at index 30)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
@@ -91,6 +92,7 @@ type World struct {
 	singletonInstances  map[ID]ID                       // component entity index → entity currently holding it
 	writeOncePolicies   map[ID]bool                     // component entity index → writeOnce flag
 	writeOnceHasBeenSet map[writeOnceKey]bool           // per-(entity-index, component-ID) first-write tracking
+	traversablePolicies map[ID]bool                     // relationship entity index → traversable flag
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -136,9 +138,10 @@ type World struct {
 //   - Index 24: OneOf built-in trait entity
 //   - Index 25: Singleton built-in trait entity
 //   - Index 26: WriteOnce built-in trait entity
-//   - Index 27: Wildcard built-in query-term sentinel (*)
-//   - Index 28: Any built-in query-term sentinel (_)
-//   - Index 29+: user entities (NewEntity)
+//   - Index 27: Traversable built-in trait entity
+//   - Index 28: Wildcard built-in query-term sentinel (*)
+//   - Index 29: Any built-in query-term sentinel (_)
+//   - Index 30+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -304,13 +307,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(writeOnce))
 	w.writeOnceID = writeOnce
-	// Allocate the built-in Wildcard query-term sentinel (gets index 27).
+	// Allocate the built-in Traversable trait entity (gets index 27).
+	traversable := w.index.Alloc()
+	rec = w.index.Get(traversable)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(traversable))
+	w.traversableID = traversable
+	// Allocate the built-in Wildcard query-term sentinel (gets index 28).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 28).
+	// Allocate the built-in Any query-term sentinel (gets index 29).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -333,10 +342,12 @@ func New() *World {
 	// This makes HasID(a, MakePair(IsA, a)) return true for any alive entity a
 	// (deliberate divergence from C ecs_has_id; documented in CHANGELOG).
 	applyReflexivePolicy(w, w.isAID)
-	// Bootstrap ChildOf as acyclic, matching C src/bootstrap.c:1011.
-	// Write-time cycle rejection (deliberate divergence from C which guards at
-	// lookup/traversal time; documented in CHANGELOG v0.41.0).
-	applyAcyclicPolicy(w, w.childOfID)
+	// Bootstrap ChildOf and IsA as Traversable, mirroring C bootstrap.c:1063,1315-1316.
+	// Traversable implies Acyclic (bootstrap.c:1295-1296), so this also makes both
+	// relationships acyclic. IsA becomes Acyclic for the first time in Go flecs
+	// as a side effect; see CHANGELOG v0.46.0 for the behavior-change note.
+	applyTraversablePolicy(w, w.childOfID)
+	applyTraversablePolicy(w, w.isAID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

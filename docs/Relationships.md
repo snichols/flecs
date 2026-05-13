@@ -483,7 +483,7 @@ w.Read(func(r *flecs.Reader) {
 
 ### Traversal in queries
 
-Query terms can traverse a relationship using `.Up(rel)`, `.SelfUp(rel)`, or `.Cascade(rel)`:
+Query terms can traverse a relationship using `.Up(rel)`, `.SelfUp(rel)`, or `.Cascade(rel)`. The traversal relationship must be registered as **Traversable** (see [ComponentTraits.md § Traversable](ComponentTraits.md#traversable)). The built-in `ChildOf` and `IsA` relationships are always Traversable; custom relationships require an explicit `SetTraversable` call:
 
 ```go
 type Position struct{ X, Y float32 }
@@ -491,16 +491,18 @@ type Position struct{ X, Y float32 }
 w := flecs.New()
 posID := flecs.RegisterComponent[Position](w)
 
-// Up: match entities whose nearest ancestor (via ChildOf) has Position.
+// Built-in relationships are always traversable — no registration needed.
 qUp := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(w.ChildOf()))
-
-// SelfUp: match entities that own Position locally OR inherit it.
 qSelfUp := flecs.NewQueryFromTerms(w, flecs.With(posID).SelfUp(w.ChildOf()))
-
-// Cascade: iterate parent-before-child in depth order (CachedQuery only).
 cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID).Cascade(w.ChildOf()))
-
 _, _, _ = qUp, qSelfUp, cq
+
+// Custom traversal relationships must be registered first.
+var containedBy flecs.ID
+w.Write(func(fw *flecs.Writer) { containedBy = fw.NewEntity() })
+flecs.SetTraversable(w, containedBy)                              // required since v0.46.0
+q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(containedBy))
+_ = q
 ```
 
 For full traversal examples see [Queries.md — Traversal](Queries.md#traversal).
@@ -771,10 +773,15 @@ parent, ok := flecs.IsOneOf(w, colorRel)
 
 ### Traversable
 
-> **Not yet ported in Go flecs.**
-> `EcsTraversable` marks a relationship as safe to traverse in queries. In the Go port
-> any entity can be used as a traversal relationship with `Up`/`SelfUp`/`Cascade`
-> without explicit registration; the formal trait and its safety checks are not ported.
+**Shipped in v0.46.0.** `SetTraversable(w, relID)` / `IsTraversable(scope, relID)` / `w.Traversable()` bare-tag form.
+
+`EcsTraversable` marks a relationship as safe to traverse in queries. Only Traversable relationships may appear in `.Up(rel)`, `.SelfUp(rel)`, or `.Cascade(rel)` terms; attempting to use a non-traversable relationship panics at query construction with a message naming both the modifier and the relationship.
+
+Adding Traversable to a relationship also implies Acyclic (write-time cycle rejection). `ChildOf` and `IsA` are bootstrapped Traversable at world creation.
+
+**Migration note:** Existing code that traverses `IsA` or `ChildOf` continues to work without change because both are bootstrapped Traversable. Custom traversal relationships that were previously usable without registration must now call `SetTraversable(w, relID)` before use in traversal queries.
+
+**IsA is now Acyclic (v0.46.0 behavior change):** As a side effect of bootstrapping `IsA` as Traversable, `IsA` is also now Acyclic. Write-time cycle rejection applies to `(IsA, *)` pairs; previously, cycles were caught only at traversal time by the `walkUp` seen-map guard.
 
 ### Cleanup policies
 

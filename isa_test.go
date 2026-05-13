@@ -1,6 +1,7 @@
 package flecs_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/snichols/flecs"
@@ -251,29 +252,37 @@ func TestIsACycleHasSelfDoesNotLoop(t *testing.T) {
 
 // ── Two-entity cycle ──────────────────────────────────────────────────────────
 
-func TestIsATwoEntityCycleTerminates(t *testing.T) {
+// TestIsATwoEntityCycleRejectedAtWriteTime verifies that creating a two-entity
+// IsA cycle panics at write time. Since v0.46.0 IsA is bootstrapped Traversable,
+// which implies Acyclic. Acyclic enforcement rejects cycle creation at AddID time
+// rather than at traversal time (the previous behavior before v0.46.0).
+//
+// Before v0.46.0: A→(IsA)→B, B→(IsA)→A was silently accepted; the walkUp
+// seen-map in traversal.go:42-54 would terminate the walk cleanly.
+// After v0.46.0: adding the second edge panics with an acyclic-cycle message.
+func TestIsATwoEntityCycleRejectedAtWriteTime(t *testing.T) {
 	w := flecs.New()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when creating a two-entity IsA cycle, got none")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("expected string panic, got %T: %v", r, r)
+		}
+		if !strings.Contains(msg, "cycle") {
+			t.Errorf("panic message does not mention cycle: %q", msg)
+		}
+	}()
+
 	w.Write(func(fw *flecs.Writer) {
 		A := fw.NewEntity()
 		B := fw.NewEntity()
 		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
+		// Second edge creates a cycle — must panic (Acyclic enforcement).
 		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), A))
-
-		// Neither has Position; both Get and Has must terminate and return false.
-		_, ok := flecs.Get[Position](fw, A)
-		if ok {
-			t.Fatal("Get[Position] on A in two-entity cycle must return false")
-		}
-		_, ok = flecs.Get[Position](fw, B)
-		if ok {
-			t.Fatal("Get[Position] on B in two-entity cycle must return false")
-		}
-		if flecs.Has[Position](fw, A) {
-			t.Fatal("Has[Position] on A in two-entity cycle must return false")
-		}
-		if flecs.Has[Position](fw, B) {
-			t.Fatal("Has[Position] on B in two-entity cycle must return false")
-		}
 	})
 }
 
@@ -654,16 +663,17 @@ func TestIsATagInheritance(t *testing.T) {
 
 // ── Count baseline ────────────────────────────────────────────────────────────
 
-// TestIsAWorldCountBaseline verifies that a fresh world has 28 built-in entities
+// TestIsAWorldCountBaseline verifies that a fresh world has 29 built-in entities
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
 // RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle, Symmetric,
-// Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, WriteOnce, Wildcard, Any)
+// Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, WriteOnce,
+// Traversable, Wildcard, Any)
 // before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 28 {
-		t.Fatalf("fresh World.Count(): want 28 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Wildcard + Any), got %d", base)
+	if base != 29 {
+		t.Fatalf("fresh World.Count(): want 29 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Wildcard + Any), got %d", base)
 	}
 }
