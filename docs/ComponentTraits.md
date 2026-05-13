@@ -716,11 +716,9 @@ w.Read(func(fr *flecs.Reader) {
 
 ### Sparse
 
-**Shipped in v0.51.0 (storage path — Phase 15.19).** The `Sparse` trait stores a component in a per-component sparse-set keyed by entity ID rather than in the archetype SoA tables. Sparse components have stable pointers (not invalidated by archetype migrations on other components), and adding/removing a Sparse component does NOT cause an archetype transition for the owning entity.
+**Fully shipped in v0.51.0–v0.52.0 (Phases 15.19–15.20).** The `Sparse` trait stores a component in a per-component sparse-set keyed by entity ID rather than in the archetype SoA tables. Sparse components have stable pointers (not invalidated by archetype migrations on other components), and adding/removing a Sparse component does NOT cause an archetype transition for the owning entity. As of v0.52.0, query terms naming Sparse components are fully supported — see [docs/Queries.md § Sparse-aware queries](Queries.md#sparse-aware-queries).
 
-> **Query integration is deferred to Phase 15.20.** Terms naming a Sparse component will not match in queries yet. Use `EachSparse[T]` to iterate all holders of a Sparse component in insertion order.
-
-**Go-flecs divergence from upstream C.** In upstream flecs, the `EcsSparse` flag controls only storage; the "no archetype transition" property is separately contributed by `EcsIdDontFragment`. In Go flecs (v0.51.0), `Sparse` consolidates both behaviors: setting a component Sparse means its data lives in the sparse-set AND the entity's archetype is not affected. When `DontFragment` is ported in a later phase, the behaviors can be split.
+**Go-flecs divergence from upstream C.** In upstream flecs, the `EcsSparse` flag controls only storage; the "no archetype transition" property is separately contributed by `EcsIdDontFragment`. In Go flecs, `Sparse` consolidates both behaviors: setting a component Sparse means its data lives in the sparse-set AND the entity's archetype is not affected. When `DontFragment` is ported in a later phase, the behaviors can be split.
 
 ```go
 w := flecs.New()
@@ -753,8 +751,8 @@ w.Read(func(fr *flecs.Reader) {
 **Restrictions:**
 - `SetSparse` panics if the component is already in use via archetype storage (set before first use).
 - `AddID(e, sparseComponentID)` panics — Sparse components are data-bearing; use `Set[T]` or `SetByID`.
-- Pair-form Sparse is out of scope for this phase; `SetSparse` rejects non-data-bearing components.
-- Query terms naming Sparse components are not yet handled (Phase 15.20).
+- Pair-form Sparse is not supported; `SetSparse` rejects non-data-bearing components. Pair terms are always archetype-stored.
+- Wildcard/Any query terms are not supported in the same query as sparse terms (the sparse and archetype paths are incompatible).
 
 ---
 
@@ -970,7 +968,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
 | **Relationship** | `EcsRelationship` | ✅ shipped (v0.47.0) | `SetRelationship(w, id)` / `IsRelationship(scope, id)`; `w.Relationship()` bare-tag form; write-time enforcement: bare-tag add panics; pair target-slot add panics unless target has `Trait`; `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped |
 | **Singleton** | `EcsSingleton` | ✅ shipped (v0.44.0) | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity(scope, compID)` / `Singleton[T](scope)` / `WriteSingleton[T](fw, e, v)`; `w.Singleton()` bare-tag form; at-most-one-holder (Go semantic differs from C must-be-self); write-time panic names both entities; slot released on Remove or entity delete; no built-in ships Singleton |
-| **Sparse** | `EcsSparse` | ✅ shipped (v0.51.0, storage only) | `SetSparse(w, compID)` / `IsSparse(scope, compID)`; `w.Sparse()` bare-tag form; no archetype transition; pointer-stable boxed storage; `EachSparse[T]` for dense-order iteration; `HasID`/`OwnsID`/`GetRef` consult sparse-set; entity-delete cleanup; JSON round-trip; Go Sparse consolidates DontFragment behaviors (query integration deferred to Phase 15.20) |
+| **Sparse** | `EcsSparse` | ✅ shipped (v0.52.0, fully) | `SetSparse(w, compID)` / `IsSparse(scope, compID)`; `w.Sparse()` bare-tag form; no archetype transition; pointer-stable boxed storage; `EachSparse[T]` for dense-order iteration; `HasID`/`OwnsID`/`GetRef` consult sparse-set; entity-delete cleanup; JSON round-trip; query integration: three-mode iterator (all-sparse, mixed, all-archetype), `Field[T]`/`FieldMaybe[T]` sparse branches, `Not`/`Optional` on sparse terms, `CachedQuery.Changed()` via version counter; Go Sparse consolidates DontFragment behaviors |
 | **Symmetric** | `EcsSymmetric` | ✅ shipped (v0.36.0) | `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)`; `w.Symmetric()` bare-tag form; mirror fires on add and remove; loop-guard via `HasComponent` idempotence; composes with `Exclusive` |
 | **Target** | `EcsTarget` | ✅ shipped (v0.47.0) | `SetTarget(w, id)` / `IsTarget(scope, id)`; `w.Target()` bare-tag form; write-time enforcement: bare-tag add panics; pair relationship-slot add panics; `Override`, `Inherit`, `DontInherit` bootstrapped (not `RemoveAction`/`DeleteAction`/`PanicAction`) |
 | **Trait** | `EcsTrait` | ✅ shipped (v0.47.0) | `SetTrait(w, id)` / `IsTrait(scope, id)`; `w.Trait()` bare-tag form; exempts entity from `Relationship`'s no-target-slot check; `IsA` and `ChildOf` bootstrapped Trait (permits patterns like `(SomeRel, ChildOf)`) |

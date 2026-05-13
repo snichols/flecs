@@ -1,8 +1,31 @@
 # Changelog
 
+## v0.52.0 — 2026-05-13 — Phase 15.20: Sparse query integration
+
+### Added
+
+- **Sparse-aware query terms** — `NewQuery`, `NewQueryFromTerms`, `NewCachedQuery`, and `NewCachedQueryFromTerms` now compile each term with `Sparse: true` when the term's component has the Sparse trait. Sparse pair terms are not marked sparse (pairs remain archetype-stored in this release).
+- **Three-mode query iterator** — `QueryIter` dispatches to one of three paths based on term composition:
+  - **All-sparse** (every required TermAnd term is sparse): the smallest sparse-set is chosen as the iteration driver; each candidate entity is cross-checked against the remaining sparse required/not terms. Yields one entity at a time (`Count()=1`, `Entities()` returns a single-element slice).
+  - **Mixed** (at least one sparse term alongside archetype terms): iterates matching archetype tables; for each table entity, sparse terms are checked via the sparse-set before yielding. `Not`/`Optional` sparse terms handled per-entity.
+  - **All-archetype** (no sparse terms): the existing fast table-based path, unchanged.
+- **`Field[T]`/`FieldMaybe[T]` sparse branches** — when a term is sparse, `Field[T]` returns a 1-element `unsafe.Slice` pointing to the entity's stable boxed value. `FieldMaybe[T]` returns the slice and `true` when present, `nil` and `false` when absent. Neither allocates.
+- **`Not`/`Optional` on sparse terms** — `TermNot` sparse terms require the entity to be absent from the sparse-set; `TermMaybe` sparse terms populate the optional slot but do not filter.
+- **Sparse version counter for `CachedQuery.Changed()`** — `sparseSet.version` (uint64) is bumped on each structural change (new entry insert or removal, not in-place updates). `CachedQuery.Changed()` consults `cq.sparseVersions map[ID]uint64` after its archetype checks; returns `true` on first call (unseen version) and whenever a sparse-set version advances.
+- **Pure-sparse cached query shortcut** — `CachedQuery` sets `sparseAndOnly = true` when all required terms are sparse and there are no archetype terms. `Iter()` on such queries builds a fresh driver directly from the sparse-sets each call (no stale table caching required). Mixed queries still cache the archetype table list.
+- **`isSparseTermID(w *World, id ID) bool`** helper in `sparse.go` — returns `false` for pair IDs (which remain archetype-stored), checks `w.sparsePolicies` for scalar IDs.
+- **13 new tests** in `sparse_test.go` — `TestSparse_QueryPureSparse`, `TestSparse_QueryMixed`, `TestSparse_QueryAllArchetypeRegression`, `TestSparse_QueryWildcardPairOnSparseRelationship`, `TestSparse_QueryNotSparse`, `TestSparse_QueryOptionalSparse`, `TestSparse_QueryFieldPtrCorrectness`, `TestSparse_QueryFieldPtrMutation`, `TestSparse_CachedQueryVersionCounter`, `TestSparse_QueryEmptySparseset`, `TestSparse_QuerySmallestDriverHeuristic`, `TestSparse_QueryPureSparseZeroEntities`, `TestSparse_QueryMarshalRoundTrip`.
+
+### Changed
+
+- **`Term.Sparse bool`** (new field) — `validateAndSortTerms` stamps this field after promotion resolution so downstream code can branch on it without re-checking `sparsePolicies`.
+- **`matchesTable`** — TermAnd and TermNot branches now skip the archetype column check when `term.Sparse` is true; sparse presence is validated per-entity in `matchesSparseTerms`.
+- **`sparseSet.version`** — new uint64 field on `sparseSet`; `sparseSetInsert` bumps it only on new-entry (not in-place update); `sparseSetRemove` bumps it on deletion.
+- **`w.Sparse()` doc comment** — removed "deferred to Phase 15.20" note.
+
 ## v0.51.0 — 2026-05-13 — Phase 15.19: Sparse component storage (storage path only)
 
-> **Part 1 of 2 — storage only.** This release ships the Sparse storage backend and the manual write/read/remove API. Query integration (query terms naming a Sparse component) is deferred to Phase 15.20 and is explicitly **not yet available**.
+> **Part 1 of 2 — storage only.** This release shipped the Sparse storage backend and the manual write/read/remove API. Query integration (query terms naming a Sparse component) is available in v0.52.0.
 
 ### Added
 

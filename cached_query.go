@@ -105,9 +105,17 @@ type CachedQuery struct {
 	tableUpSources  []map[ID]ID
 	cascadeTermTrav ID   // traversal relationship for the Cascade term; 0 if none
 	removed         bool // set by Close; deferred-removal model (see observer.go)
+	// sparseAndOnly is true when all TermAnd terms are sparse. Pure-sparse cached
+	// queries iterate sparse-sets directly at Iter() time and do not cache archetype
+	// tables (tryMatchTable is a no-op for them).
+	sparseAndOnly bool
 	// Change detection state (Phase 9.5). Not goroutine-safe.
 	lastChangeCounts map[*table.Table]uint64 // last seen ChangeCount per table; nil before first Changed() call
 	tablesAdded      bool                    // set by tryMatchTable when a new table is appended
+	// sparseVersions tracks the last-seen version of each sparse-set referenced by
+	// a sparse term, for Changed() detection. Keyed by component entity index (same
+	// as sparseStorage key). Nil until first Changed() call.
+	sparseVersions map[ID]uint64
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -140,7 +148,7 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
-		terms[i] = Term{ID: id, Kind: TermAnd}
+		terms[i] = Term{ID: id, Kind: TermAnd, Sparse: isSparseTermID(w, id)}
 		applyInheritablePromotion(w, &terms[i])
 	}
 	return newCachedQueryInternal(w, terms, cp, nil)
@@ -190,6 +198,21 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		}
 	}
 
+	// Determine if all And terms are sparse (pure-sparse cached query).
+	sparseAndCount := 0
+	archetypeAndCount := 0
+	for _, t := range terms {
+		if t.Kind != TermAnd {
+			continue
+		}
+		if t.Sparse {
+			sparseAndCount++
+		} else {
+			archetypeAndCount++
+		}
+	}
+	sparseAndOnly := archetypeAndCount == 0 && sparseAndCount > 0
+
 	cq := &CachedQuery{
 		w:               w,
 		terms:           terms,
@@ -197,6 +220,7 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		orGroups:        orGroups,
 		tables:          make([]*table.Table, 0),
 		cascadeTermTrav: cascadeTermTrav,
+		sparseAndOnly:   sparseAndOnly,
 	}
 
 	// Initial population: check every existing table (unordered during bulk load).
@@ -281,11 +305,85 @@ func (cq *CachedQuery) TermsFull() []Term {
 // TermOptional terms, Next still computes per-table optional presence so that
 // FieldMaybe works correctly.
 //
+// For pure-sparse cached queries, Iter builds the sparse driver fresh on each
+// call (sparse-sets may have changed since construction). For mixed queries, the
+// cached archetype tables are used; per-entity sparse filtering is applied at
+// iteration time.
+//
 // After Close, Next returns false immediately.
 func (cq *CachedQuery) Iter() *QueryIter {
 	if cq.removed {
 		return &QueryIter{pos: -1}
 	}
+
+	wildcardIdx := findWildcardTermIdx(cq.w, cq.terms)
+
+	if cq.sparseAndOnly {
+		// Pure-sparse: build a fresh sparse driver (sparse-sets may have mutated).
+		var driver []sparseEntry
+		zeroDriver := false
+		minLen := -1
+		for _, term := range cq.terms {
+			if term.Kind != TermAnd || !term.Sparse {
+				continue
+			}
+			key := ID(term.ID.Index())
+			ss := cq.w.sparseStorage[key]
+			if ss == nil {
+				zeroDriver = true
+				break
+			}
+			if minLen < 0 || len(ss.dense) < minLen {
+				minLen = len(ss.dense)
+				snap := make([]sparseEntry, len(ss.dense))
+				copy(snap, ss.dense)
+				driver = snap
+			}
+		}
+		if zeroDriver {
+			driver = nil
+		}
+		return &QueryIter{
+			world:           cq.w,
+			terms:           cq.terms,
+			orGroups:        cq.orGroups,
+			allSparse:       true,
+			hasSparseTerms:  true,
+			sparseDriver:    driver,
+			sparseDriverPos: -1,
+			pos:             -1,
+			wildcardTermIdx: wildcardIdx,
+			wildcardPairPos: -1,
+		}
+	}
+
+	hasSparseTerms := false
+	for _, t := range cq.terms {
+		if t.Kind == TermAnd && t.Sparse {
+			hasSparseTerms = true
+			break
+		}
+	}
+
+	if hasSparseTerms {
+		// Mixed: use cached archetype tables; per-entity sparse filtering in nextMixed.
+		return &QueryIter{
+			world:           cq.w,
+			terms:           cq.terms,
+			orGroups:        cq.orGroups,
+			hasSparseTerms:  true,
+			candidates:      cq.tables,
+			pos:             -1,
+			cached:          true,
+			tableSourcesRef: cq.tableUpSources,
+			sparseTablePos:  -1,
+			sparseDriverPos: -1,
+			wildcardTermIdx: wildcardIdx,
+			wildcardPairPos: -1,
+		}
+	}
+
+	// All-archetype: existing behavior.
 	return &QueryIter{
 		world:           cq.w,
 		terms:           cq.terms,
@@ -294,7 +392,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		pos:             -1,
 		cached:          true,
 		tableSourcesRef: cq.tableUpSources,
-		wildcardTermIdx: findWildcardTermIdx(cq.w, cq.terms),
+		wildcardTermIdx: wildcardIdx,
 		wildcardPairPos: -1,
 	}
 }
@@ -365,10 +463,19 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	if cq.removed {
 		return
 	}
+	// Pure-sparse queries have no archetype requirements; their tables list stays
+	// empty. Iter() builds the sparse driver fresh from sparse-sets each time.
+	if cq.sparseAndOnly {
+		return
+	}
 	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).
+	// Sparse terms are skipped: they do not live in archetype tables.
 	for _, term := range cq.terms {
 		switch term.Kind {
 		case TermAnd:
+			if term.Sparse {
+				break // sparse term: skip archetype check; verified per-entity at iteration time
+			}
 			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
 				// Wildcard/Any pair matching: sentinel IDs never appear in table
 				// signatures; check for any concrete pair that satisfies the pattern.
@@ -401,6 +508,9 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 				}
 			}
 		case TermNot:
+			if term.Sparse {
+				break // sparse not terms checked per-entity; skip archetype check
+			}
 			if t.HasComponent(term.ID) {
 				return
 			}
@@ -464,14 +574,16 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	cq.tablesAdded = true
 }
 
-// Changed reports whether any matching table was mutated since the last call.
-// Returns true on the first call (initial state is "all changed"). NOT
+// Changed reports whether any matching table or sparse-set was mutated since the
+// last call. Returns true on the first call (initial state is "all changed"). NOT
 // goroutine-safe.
 //
 // A change is detected when:
-//   - A new matching table was added to the cache since the last call, OR
+//   - A new matching archetype table was added to the cache since the last call, OR
 //   - Any cached table had a column write (Set[T]/SetByID or pair write), OR
-//   - Any cached table had a structural change (entity added/removed via migrate).
+//   - Any cached table had a structural change (entity added/removed via migrate), OR
+//   - Any sparse-set referenced by a sparse term had a structural change (new entity
+//     added or entity removed).
 //
 // Because any column write on a cached table marks it dirty for ALL cached
 // queries containing it, Changed() may over-report but never under-reports.
@@ -497,6 +609,25 @@ func (cq *CachedQuery) Changed() bool {
 		cc := t.ChangeCount()
 		if cc != cq.lastChangeCounts[t] {
 			cq.lastChangeCounts[t] = cc
+			changed = true
+		}
+	}
+	// Check sparse-set versions for any sparse term.
+	for _, term := range cq.terms {
+		if !term.Sparse {
+			continue
+		}
+		key := ID(term.ID.Index())
+		ss := cq.w.sparseStorage[key]
+		if ss == nil {
+			continue
+		}
+		if cq.sparseVersions == nil {
+			cq.sparseVersions = make(map[ID]uint64)
+		}
+		last, seen := cq.sparseVersions[key]
+		if !seen || ss.version != last {
+			cq.sparseVersions[key] = ss.version
 			changed = true
 		}
 	}

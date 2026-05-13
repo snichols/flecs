@@ -103,6 +103,11 @@ type Term struct {
 	Kind     TermKind
 	Trav     ID            // traversal relationship (non-zero for Up/SelfUp/Cascade terms)
 	Traverse TraverseFlags // traversal mode; default TraverseSelf (0) = local-only match
+	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
+	// component is stored in a sparse-set (IsSparse returned true). Sparse terms
+	// are matched per-entity via sparseSetGet rather than per-table via archetype
+	// column presence. Not set for pair IDs — pairs use archetype storage in v0.52.0.
+	Sparse bool
 }
 
 // With returns a TermAnd term: matched tables must contain id.
@@ -223,7 +228,7 @@ func NewQuery(w *World, ids ...ID) *Query {
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
-		terms[i] = Term{ID: id, Kind: TermAnd}
+		terms[i] = Term{ID: id, Kind: TermAnd, Sparse: isSparseTermID(w, id)}
 		applyInheritablePromotion(w, &terms[i])
 	}
 	return &Query{w: w, terms: terms, andIDs: cp}
@@ -306,35 +311,104 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 
 // Iter starts a fresh iteration over all archetype tables matching the query.
 //
-// Seed strategy: pick the TermAnd term whose component-index entry has the
-// fewest tables (O(And-terms) scan), then for each seed table verify that
-// every other TermAnd is present and every TermNot is absent. TermOptional
+// Seed strategy (all-archetype mode): pick the TermAnd term whose component-index
+// entry has the fewest tables (O(And-terms) scan), then for each seed table verify
+// that every other TermAnd is present and every TermNot is absent. TermOptional
 // terms do not affect matching. This is O(smallest-set × terms) — optimal for
 // sparse queries.
+//
+// Sparse modes:
+//   - All-sparse: all TermAnd terms refer to sparse components. The smallest
+//     sparse-set (by current dense length) is chosen as the driver; each entity
+//     in it is checked against every other sparse TermAnd/TermNot term.
+//   - Mixed: some TermAnd terms are archetype, some are sparse. Archetype terms
+//     seed candidate tables as in the all-archetype mode; within each matched
+//     table each entity is additionally checked against the sparse terms.
 //
 // The seed table list is materialised once via TablesFor (one allocation) when a
 // TraverseSelf TermAnd term exists; otherwise all world tables are used as candidates
 // so that Up/SelfUp traversal can find non-locally-owned components.
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
-	// Prefer a TraverseSelf TermAnd seed (fewest tables in the component index).
-	// Skip transitive and wildcard pair terms: they need an all-tables scan
-	// because the concrete pair IDs are not indexed under the sentinel ID.
+
+	// Classify And terms as sparse or archetype.
+	sparseAndCount := 0
+	archetypeAndCount := 0
+	for _, t := range q.terms {
+		if t.Kind != TermAnd {
+			continue
+		}
+		if t.Sparse {
+			sparseAndCount++
+		} else {
+			archetypeAndCount++
+		}
+	}
+	allSparse := archetypeAndCount == 0 && sparseAndCount > 0
+	hasSparseTerms := sparseAndCount > 0
+
+	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
+
+	if allSparse {
+		// Pure-sparse mode: find the smallest sparse-set as driver.
+		var driver []sparseEntry
+		zeroDriver := false
+		minLen := -1
+		for _, term := range q.terms {
+			if term.Kind != TermAnd || !term.Sparse {
+				continue
+			}
+			key := ID(term.ID.Index())
+			ss := q.w.sparseStorage[key]
+			if ss == nil {
+				zeroDriver = true
+				break
+			}
+			if minLen < 0 || len(ss.dense) < minLen {
+				minLen = len(ss.dense)
+				snap := make([]sparseEntry, len(ss.dense))
+				copy(snap, ss.dense)
+				driver = snap
+			}
+		}
+		if zeroDriver {
+			driver = nil
+		}
+		return &QueryIter{
+			q:               q,
+			world:           q.w,
+			terms:           q.terms,
+			orGroups:        q.orGroups,
+			allSparse:       true,
+			hasSparseTerms:  true,
+			sparseDriver:    driver,
+			sparseDriverPos: -1,
+			pos:             -1,
+			wildcardTermIdx: wildcardIdx,
+			wildcardPairPos: -1,
+		}
+	}
+
+	// Archetype seed selection — used for both all-archetype and mixed modes.
+	// Skip sparse terms (they cannot seed archetype-table selection), transitive/
+	// reflexive pairs, and wildcard terms.
 	seedIdx := -1
 	minCount := 0
-	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
 	for i, term := range q.terms {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
 		}
+		if term.Sparse {
+			continue // sparse terms don't live in archetype tables
+		}
 		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
-			continue // transitive pairs need all-tables scan; skip as seed
+			continue
 		}
 		if term.ID.IsPair() && q.w.reflexivePolicies[ID(term.ID.First().Index())] {
-			continue // reflexive pairs need all-tables scan; skip as seed
+			continue
 		}
 		if isWildcardTerm(q.w, term.ID) {
-			continue // wildcard/any pairs need all-tables scan; skip as seed
+			continue
 		}
 		c := q.w.compIndex.Count(term.ID)
 		if seedIdx == -1 || c < minCount {
@@ -346,21 +420,24 @@ func (q *Query) Iter() *QueryIter {
 	if seedIdx >= 0 {
 		candidates = q.w.TablesFor(q.terms[seedIdx].ID)
 	} else {
-		// All And terms use traversal; must test every table so Up matches are found.
+		// All And terms use traversal or are sparse; must test every table.
 		candidates = make([]*table.Table, 0, len(q.w.tables))
 		for _, t := range q.w.tables {
 			candidates = append(candidates, t)
 		}
 	}
 	return &QueryIter{
-		q:               q,
-		world:           q.w,
-		terms:           q.terms,
-		orGroups:        q.orGroups,
-		candidates:      candidates,
-		pos:             -1,
-		wildcardTermIdx: wildcardIdx,
-		wildcardPairPos: -1,
+		q:                   q,
+		world:               q.w,
+		terms:               q.terms,
+		orGroups:            q.orGroups,
+		candidates:          candidates,
+		pos:                 -1,
+		hasSparseTerms:      hasSparseTerms,
+		sparseTablePos:      -1,
+		sparseDriverPos:     -1,
+		wildcardTermIdx:     wildcardIdx,
+		wildcardPairPos:     -1,
 	}
 }
 
@@ -380,6 +457,12 @@ func (q *Query) Each(fn func(*QueryIter)) {
 //
 // Mutation warning: calling Set, Remove, or Delete on the World while this
 // iterator is active produces undefined behaviour.
+//
+// Sparse iteration: when any TermAnd term is sparse, the iterator operates in
+// entity-at-a-time mode for those terms. Count() returns 1 per Next() step;
+// Entities() returns a single-element slice; Field[T] reads through sparseSetGet.
+// Wildcard pair expansion is not combined with sparse entity-at-a-time iteration
+// in v0.52.0.
 type QueryIter struct {
 	q          *Query         // nil for CachedQuery-derived iters; use terms for term access
 	world      *World         // backing world; set by Iter constructors; used by Reader()/Writer()
@@ -392,7 +475,7 @@ type QueryIter struct {
 	// candidate list is pre-filtered by CachedQuery. When false (the default),
 	// every candidate is evaluated against the term list.
 	cached          bool
-	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table
+	optionalPresent map[ID]bool // Optional- and Or-term presence for the current table/entity
 	// traversal source maps: component ID → resolved source entity.
 	// 0 = self-matched (entity's own table owns the component).
 	// non-zero = ancestor entity that owns the component (Up match).
@@ -408,6 +491,16 @@ type QueryIter struct {
 	wildcardTermIdx int  // index of the first wildcard/any term in terms[]; -1 if none
 	wildcardPairs   []ID // concrete matching pair IDs in current table for the wildcard term
 	wildcardPairPos int  // position in wildcardPairs; -1 = not yet set for current table
+	// sparse iteration state — set by Iter() when one or more And terms are sparse.
+	// allSparse: ALL And terms are sparse; no archetype seed, iterate sparse-sets directly.
+	// hasSparseTerms: at least one And term is sparse; entity-at-a-time within tables.
+	allSparse          bool
+	hasSparseTerms     bool
+	sparseDriver       []sparseEntry // dense-slice snapshot of the smallest sparse-set (allSparse mode)
+	sparseDriverPos    int           // current position in sparseDriver; -1 = before first
+	sparseTableEntities []ID         // entities in current table that pass sparse membership (mixed mode)
+	sparseTablePos      int          // current position in sparseTableEntities; -1 = needs next table
+	sparseEntity        ID           // current entity in sparse/mixed mode; 0 = not positioned
 }
 
 // Next advances to the next matching table (or next wildcard expansion row
@@ -421,7 +514,20 @@ type QueryIter struct {
 //
 // For multi-threaded iterators (workerTotal > 0), tables where this worker's
 // row count is zero are skipped transparently.
+//
+// Sparse modes: when the query contains sparse And terms, Next advances one
+// entity at a time (not one table at a time). Count() returns 1 and Entities()
+// returns a single-element slice for each step.
 func (it *QueryIter) Next() bool {
+	if it.allSparse {
+		return it.nextSparseOnly()
+	}
+	if it.hasSparseTerms {
+		return it.nextMixed()
+	}
+
+	// All-archetype fast path (unchanged from pre-v0.52.0).
+
 	// Wildcard expansion: advance to the next concrete pair in the current table
 	// before advancing the table pointer.
 	if it.wildcardTermIdx >= 0 && it.wildcardPairPos >= 0 &&
@@ -470,10 +576,144 @@ func (it *QueryIter) Next() bool {
 	}
 }
 
+// nextSparseOnly advances a pure-sparse iterator (all And terms are sparse).
+// Iterates the driver dense-slice; for each entity checks all other sparse terms.
+func (it *QueryIter) nextSparseOnly() bool {
+	driver := it.sparseDriver
+	if driver == nil {
+		it.sparseEntity = 0
+		return false
+	}
+	for {
+		it.sparseDriverPos++
+		if it.sparseDriverPos >= len(driver) {
+			it.sparseEntity = 0
+			return false
+		}
+		e := driver[it.sparseDriverPos].entity
+		if it.matchesSparseTerms(e) {
+			it.sparseEntity = e
+			it.updateOptionalPresenceSparse(e)
+			return true
+		}
+	}
+}
+
+// nextMixed advances a mixed iterator (some And terms archetype, some sparse).
+// Candidate archetype tables are iterated as in the all-archetype path; within
+// each matched table entities are additionally filtered by sparse membership.
+// Each Next() call yields exactly one entity (Count() == 1).
+func (it *QueryIter) nextMixed() bool {
+	for {
+		// Try advancing within the current table's sparse-filtered entity list.
+		it.sparseTablePos++
+		if it.sparseTablePos < len(it.sparseTableEntities) {
+			it.sparseEntity = it.sparseTableEntities[it.sparseTablePos]
+			it.updateOptionalPresenceMixed(it.current, it.sparseEntity)
+			return true
+		}
+
+		// Need the next matching archetype table.
+		it.pos++
+		if it.pos >= len(it.candidates) {
+			it.current = nil
+			it.sparseEntity = 0
+			return false
+		}
+		t := it.candidates[it.pos]
+		if !it.cached && !it.matchesTable(t) {
+			it.sparseTableEntities = it.sparseTableEntities[:0]
+			it.sparseTablePos = 0 // 0 < 0 on next iteration → advance table
+			continue
+		}
+		if it.cached && it.tableSourcesRef != nil && it.pos < len(it.tableSourcesRef) {
+			it.upSources = it.tableSourcesRef[it.pos]
+		}
+		it.current = t
+
+		// Build the filtered entity list for this table.
+		all := t.Entities()
+		it.sparseTableEntities = it.sparseTableEntities[:0]
+		for _, e := range all {
+			if it.matchesSparseTerms(e) {
+				it.sparseTableEntities = append(it.sparseTableEntities, e)
+			}
+		}
+		it.sparseTablePos = -1 // incremented to 0 at top of next iteration
+	}
+}
+
+// matchesSparseTerms returns true if entity e satisfies all sparse terms in the
+// query. TermAnd requires presence; TermNot requires absence. TermOptional and
+// TermOr do not affect matching (they are checked separately for Field access).
+func (it *QueryIter) matchesSparseTerms(e ID) bool {
+	for _, term := range it.terms {
+		if !term.Sparse {
+			continue
+		}
+		ptr := sparseSetGet(it.world, e, term.ID)
+		switch term.Kind {
+		case TermAnd:
+			if ptr == nil {
+				return false
+			}
+		case TermNot:
+			if ptr != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// updateOptionalPresenceSparse updates optionalPresent for pure-sparse queries.
+// Only sparse optional/or terms are evaluated (there is no current table).
+func (it *QueryIter) updateOptionalPresenceSparse(e ID) {
+	for k := range it.optionalPresent {
+		delete(it.optionalPresent, k)
+	}
+	for _, term := range it.terms {
+		if term.Kind != TermOptional && term.Kind != TermOr {
+			continue
+		}
+		if it.optionalPresent == nil {
+			it.optionalPresent = make(map[ID]bool)
+		}
+		if term.Sparse {
+			it.optionalPresent[term.ID] = sparseSetGet(it.world, e, term.ID) != nil
+		}
+	}
+}
+
+// updateOptionalPresenceMixed updates optionalPresent for mixed-mode queries.
+// Archetype optional/or terms are evaluated against the current table; sparse
+// optional/or terms are evaluated via the sparse-set for entity e.
+func (it *QueryIter) updateOptionalPresenceMixed(t *table.Table, e ID) {
+	for k := range it.optionalPresent {
+		delete(it.optionalPresent, k)
+	}
+	for _, term := range it.terms {
+		if term.Kind != TermOptional && term.Kind != TermOr {
+			continue
+		}
+		if it.optionalPresent == nil {
+			it.optionalPresent = make(map[ID]bool)
+		}
+		if term.Sparse {
+			it.optionalPresent[term.ID] = sparseSetGet(it.world, e, term.ID) != nil
+		} else {
+			it.optionalPresent[term.ID] = t.HasComponent(term.ID)
+		}
+	}
+}
+
 // matchesTable returns true if t satisfies all TermAnd, TermNot, and OR-group
 // terms. TermOptional terms are ignored during matching. For traversal And terms
 // (TraverseUp, TraverseSelfUp), the ancestor chain is walked via findUpSource;
 // resolved sources are stored in it.upSources for use by IsFieldSelf/FieldShared.
+//
+// Sparse terms (term.Sparse == true) are skipped: they do not live in archetype
+// tables and are checked per-entity by matchesSparseTerms instead.
 func (it *QueryIter) matchesTable(t *table.Table) bool {
 	// Reset traversal sources from any previous table.
 	for k := range it.upSources {
@@ -482,6 +722,9 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 	for _, term := range it.terms {
 		switch term.Kind {
 		case TermAnd:
+			if term.Sparse {
+				break // sparse terms checked per-entity; skip archetype check
+			}
 			switch term.Traverse {
 			case TraverseSelf, TraverseExplicitSelf:
 				if !t.HasComponent(term.ID) {
@@ -539,6 +782,9 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 				}
 			}
 		case TermNot:
+			if term.Sparse {
+				break // sparse not terms checked per-entity; skip archetype check
+			}
 			if t.HasComponent(term.ID) {
 				return false
 			}
@@ -576,31 +822,44 @@ func (it *QueryIter) updateOptionalPresence(t *table.Table) {
 	}
 }
 
-// Table returns the current matching table. Panics if called before the first
-// Next or after Next returned false.
+// Table returns the current matching archetype table. Panics if called before
+// the first Next, after Next returned false, or on a pure-sparse iterator (which
+// has no archetype table; use Entities() to get the current entity instead).
 func (it *QueryIter) Table() *table.Table {
 	if it.current == nil {
+		if it.allSparse {
+			panic("flecs: QueryIter.Table: not valid for pure-sparse queries (no archetype table); use Entities() to get the current entity")
+		}
 		panic("flecs: QueryIter.Table: not positioned on a valid table (call Next first)")
 	}
 	return it.current
 }
 
 // Count returns the number of entities visible to this iterator in the current
-// table. For multi-threaded iterators this is the worker's row count (a
-// subset of the full table); for ordinary iterators it is the full table count.
-// Panics if not positioned on a valid table.
+// step. For multi-threaded iterators this is the worker's row count (a subset of
+// the full table). For sparse or mixed-sparse iterators, Count() is always 1
+// (entity-at-a-time mode). Panics if not positioned.
 func (it *QueryIter) Count() int {
+	if it.allSparse || it.hasSparseTerms {
+		return 1
+	}
 	if it.workerTotal > 0 {
 		return it.wCount
 	}
 	return it.Table().Count()
 }
 
-// Entities returns the entity IDs for this iterator's rows in the current table.
+// Entities returns the entity IDs for this iterator's rows in the current step.
 // For multi-threaded iterators this is the worker's disjoint row slice; for
-// ordinary iterators it is the full table entity list. The slice is invalidated
-// by the next Next call; callers must consume or copy within the current step.
+// sparse or mixed-sparse iterators this is a single-element slice containing the
+// current entity. The slice is invalidated by the next Next call.
 func (it *QueryIter) Entities() []ID {
+	if it.allSparse || it.hasSparseTerms {
+		if it.sparseEntity == 0 {
+			return nil
+		}
+		return []ID{it.sparseEntity}
+	}
 	all := it.Table().Entities()
 	if it.workerTotal > 0 {
 		return all[it.wFirst : it.wFirst+it.wCount]
@@ -648,10 +907,15 @@ func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
 // zero-value entries. Tag columns carry no data, so the slice elements are
 // degenerate; ranging over it is valid but the elements are always zero.
 //
+// For sparse terms: returns a single-element []T slice backed by the stable
+// sparse-set pointer for the current entity. The element is valid until the next
+// it.Next() call (but the allocation itself is stable for the world's lifetime).
+//
 // Panics if:
-//   - it is not positioned on a valid table (Next has not been called or
+//   - it is not positioned on a valid entity/table (Next has not been called or
 //     returned false).
-//   - id is not in the current table's signature.
+//   - id is not in the current table's signature (archetype terms) or is not
+//     present in the sparse-set for the current entity (sparse terms).
 //   - T does not match the Go type registered for id.
 //
 // For TermOptional terms, use FieldMaybe instead: Field panics if the column
@@ -663,6 +927,24 @@ func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
 // returned []T header's data pointer is an unsafe.Pointer to T, which the GC
 // traces correctly for pointer-containing element types.
 func Field[T any](it *QueryIter, id ID) []T {
+	// Sparse term: read through the sparse-set for the current entity.
+	for _, term := range it.terms {
+		if term.ID == id && term.Sparse {
+			e := it.sparseEntity
+			if e == 0 {
+				panic(fmt.Sprintf("flecs: Field[%s]: not positioned on a valid entity (call Next first)",
+					reflect.TypeFor[T]()))
+			}
+			ptr := sparseSetGet(it.world, e, id)
+			if ptr == nil {
+				panic(fmt.Sprintf("flecs: Field[%s]: sparse component %d is not present on current entity",
+					reflect.TypeFor[T](), id))
+			}
+			return unsafe.Slice((*T)(ptr), 1)
+		}
+	}
+
+	// Archetype term: use the current table's column.
 	tbl := it.Table() // panics if not positioned
 	if !tbl.HasComponent(id) {
 		// Check if this is a traversal term matched via an ancestor (Up path).
@@ -704,9 +986,11 @@ func Field[T any](it *QueryIter, id ID) []T {
 // the current table does not contain id — always prefer FieldMaybe for Or-group
 // IDs to safely disambiguate which members are present in the current table.
 //
-// Returns (nil, false) if the current table does not contain id.
-// Returns (slice, true) if the current table contains id — identical semantics
-// to Field for the present case.
+// Returns (nil, false) if the current table/entity does not contain id.
+// Returns (slice, true) if the current table/entity contains id.
+//
+// For sparse optional terms: returns a single-element slice backed by the stable
+// sparse-set pointer (nil, false) when the entity does not hold the component.
 //
 // FieldMaybe must be called after a successful Next call.
 func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
@@ -718,6 +1002,20 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not a TermOptional or TermOr term; use Field for TermAnd terms",
 				reflect.TypeFor[T](), id))
 		}
+		if term.Sparse {
+			// Sparse optional: read through sparse-set for the current entity.
+			e := it.sparseEntity
+			if e == 0 {
+				panic(fmt.Sprintf("flecs: FieldMaybe[%s]: not positioned on a valid entity (call Next first)",
+					reflect.TypeFor[T]()))
+			}
+			ptr := sparseSetGet(it.world, e, id)
+			if ptr == nil {
+				return nil, false
+			}
+			return unsafe.Slice((*T)(ptr), 1), true
+		}
+		// Archetype optional: check via optionalPresent map populated by updateOptionalPresence*.
 		if !it.optionalPresent[id] {
 			return nil, false
 		}
@@ -919,6 +1217,11 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	// Cascade) are unaffected. Mirror of C flecs validator.c:766-770.
 	for i := range cp {
 		applyInheritablePromotion(w, &cp[i])
+	}
+
+	// Mark sparse terms. This must happen after sorting so that cp is final.
+	for i := range cp {
+		cp[i].Sparse = isSparseTermID(w, cp[i].ID)
 	}
 
 	// Traversable enforcement: any term whose Trav is non-zero requires the

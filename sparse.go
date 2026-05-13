@@ -35,6 +35,10 @@ type sparseSet struct {
 	dense    []sparseEntry
 	index    map[uint32]int // entity raw-index → dense slot
 	typeInfo *component.TypeInfo
+	// version is bumped on each structural change (insert of new entry or removal).
+	// CachedQuery.Changed() consults this to detect sparse-set mutations without
+	// needing to iterate the dense slice.
+	version uint64
 }
 
 // Sparse returns the ID of the built-in Sparse trait entity (index 34).
@@ -49,13 +53,13 @@ type sparseSet struct {
 //     other components on the same entity change (archetype migrations do not
 //     affect the sparse-set allocation).
 //   - HasID and OwnsID consult the sparse-set, not the entity's archetype type.
+//   - Query terms naming a Sparse component iterate the sparse-set natively
+//     (v0.52.0). Pure-sparse, mixed archetype+sparse, Not, and Optional on sparse
+//     terms are all supported. See docs/Queries.md for worked examples.
 //
 // Note: Go-flecs Sparse consolidates the upstream C EcsSparse + EcsIdDontFragment
 // behaviors into a single trait. When DontFragment lands in a later phase, the
 // split can be revisited. This consolidation is documented in CHANGELOG.md v0.51.0.
-//
-// Query integration is deferred to Phase 15.20: query terms naming a Sparse
-// component will not match in queries yet.
 //
 // Usage:
 //
@@ -131,17 +135,19 @@ func sparseSetInsert(w *World, e ID, componentID ID, srcPtr unsafe.Pointer) {
 	eIdx := e.Index()
 
 	if slot, ok := ss.index[eIdx]; ok {
-		// Update existing slot in-place; pointer is stable.
+		// Update existing slot in-place; pointer is stable. Version not bumped for updates.
 		dst := ss.dense[slot].data
 		copy(unsafe.Slice((*byte)(dst), info.Size), unsafe.Slice((*byte)(srcPtr), info.Size))
 	} else {
-		// New entry: allocate a heap copy for pointer stability.
+		// New entry: allocate a heap copy for pointer stability. Bump version so
+		// CachedQuery.Changed() detects the structural change.
 		pv := reflect.New(info.Type)
 		dst := pv.UnsafePointer()
 		copy(unsafe.Slice((*byte)(dst), info.Size), unsafe.Slice((*byte)(srcPtr), info.Size))
 		slot := len(ss.dense)
 		ss.dense = append(ss.dense, sparseEntry{entity: e, data: dst})
 		ss.index[eIdx] = slot
+		ss.version++
 		// Record that e now holds this component (for O(k) entity-delete cleanup).
 		if w.sparseHeld == nil {
 			w.sparseHeld = make(map[uint32][]ID)
@@ -186,6 +192,7 @@ func sparseSetRemove(w *World, e ID, componentID ID) {
 	}
 	ss.dense = ss.dense[:last]
 	delete(ss.index, eIdx)
+	ss.version++ // structural change; CachedQuery.Changed() detects this
 
 	// Update sparseHeld so entity-delete cleanup is accurate.
 	if held, ok := w.sparseHeld[eIdx]; ok {
@@ -201,6 +208,18 @@ func sparseSetRemove(w *World, e ID, componentID ID) {
 			}
 		}
 	}
+}
+
+// isSparseTermID reports whether a query term with the given id refers to a
+// component stored in sparse-set storage. For non-pair IDs, this checks the
+// sparse policy directly. For pair IDs, pairs are stored in archetype tables in
+// v0.52.0 regardless of whether the relationship is also a sparse scalar
+// component — so pair terms are never considered sparse.
+func isSparseTermID(w *World, id ID) bool {
+	if id.IsPair() {
+		return false // pairs are archetype-stored in v0.52.0
+	}
+	return w.sparsePolicies[ID(id.Index())]
 }
 
 // EachSparse iterates all entities that hold component T as Sparse, calling fn

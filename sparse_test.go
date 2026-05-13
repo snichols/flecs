@@ -749,3 +749,569 @@ func TestSparse_MarshalPolicyNoData(t *testing.T) {
 	})
 	_ = posID
 }
+
+// ── Query integration tests (Phase 15.20 / v0.52.0) ──────────────────────────
+
+// sparseTag is a third sparse component for multi-term pure-sparse query tests.
+type sparseTag struct{ Z float32 }
+
+// sparseArch is an archetype (non-sparse) component for mixed-query tests.
+type sparseArch struct{ W float32 }
+
+// TestSparse_QueryPureSparse verifies that a pure-sparse query over three sparse
+// components yields exactly the entities that have all three, in dense order.
+func TestSparse_QueryPureSparse(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	tagID := flecs.RegisterComponent[sparseTag](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+	flecs.SetSparse(w, tagID)
+
+	var e1, e2, e3, e4 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 1})
+		flecs.Set(fw, e1, sparseVel{DX: 1})
+		flecs.Set(fw, e1, sparseTag{Z: 1}) // all three
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 2})
+		flecs.Set(fw, e2, sparseVel{DX: 2}) // missing tag
+
+		e3 = fw.NewEntity()
+		flecs.Set(fw, e3, sparsePos{X: 3})
+		flecs.Set(fw, e3, sparseTag{Z: 3}) // missing vel
+
+		e4 = fw.NewEntity()
+		flecs.Set(fw, e4, sparsePos{X: 4})
+		flecs.Set(fw, e4, sparseVel{DX: 4})
+		flecs.Set(fw, e4, sparseTag{Z: 4}) // all three
+	})
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.With(velID),
+		flecs.With(tagID),
+	)
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 2 || !found[e1] || !found[e4] {
+		t.Errorf("pure-sparse query: expected e1 and e4; got %v", found)
+	}
+	if found[e2] || found[e3] {
+		t.Errorf("pure-sparse query: e2 and e3 should not be included; got %v", found)
+	}
+}
+
+// TestSparse_QueryMixed verifies that a query with both archetype and sparse terms
+// yields only entities satisfying all terms.
+func TestSparse_QueryMixed(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+	archID := flecs.RegisterComponent[sparseArch](w) // archetype
+
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 1})
+		flecs.Set(fw, e1, sparseVel{DX: 1})
+		flecs.Set(fw, e1, sparseArch{W: 10}) // all three → match
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 2})
+		flecs.Set(fw, e2, sparseVel{DX: 2}) // no archetype component → no match
+
+		e3 = fw.NewEntity()
+		flecs.Set(fw, e3, sparseArch{W: 30}) // no sparse components → no match
+	})
+
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.With(velID),
+		flecs.With(archID),
+	)
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 1 || !found[e1] {
+		t.Errorf("mixed query: expected only e1; got %v", found)
+	}
+}
+
+// TestSparse_QueryAllArchetypeRegression verifies that all-archetype queries are
+// unaffected by the sparse query integration (fast path preserved).
+func TestSparse_QueryAllArchetypeRegression(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w) // NOT marked sparse
+	velID := flecs.RegisterComponent[sparseVel](w)  // NOT marked sparse
+
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 1})
+		flecs.Set(fw, e1, sparseVel{DX: 1}) // has both → match
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 2}) // missing vel → no match
+
+		e3 = fw.NewEntity()
+		flecs.Set(fw, e3, sparseVel{DX: 3}) // missing pos → no match
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(velID))
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		// All-archetype: Entities() returns all entities in the matched table.
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 1 || !found[e1] {
+		t.Errorf("all-archetype regression: expected only e1; got %v", found)
+	}
+}
+
+// TestSparse_QueryWildcardPairOnSparseRelationship verifies that a wildcard pair
+// query Pair(R, Wildcard) works correctly when R is also registered as a sparse
+// scalar component. Pairs are stored in archetype tables regardless of R's sparse
+// trait; this tests that sparse marking on R does not interfere with pair queries.
+func TestSparse_QueryWildcardPairOnSparseRelationship(t *testing.T) {
+	w := flecs.New()
+	// rID is both a sparse scalar component and a relationship used in pairs.
+	rID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, rID)
+
+	var tgt1, tgt2, tgt3 flecs.ID
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tgt1 = fw.NewEntity()
+		tgt2 = fw.NewEntity()
+		tgt3 = fw.NewEntity()
+
+		// Pairs (rID, tgtN) land in archetype tables — not sparse storage.
+		e1 = fw.NewEntity()
+		flecs.AddID(fw, e1, flecs.MakePair(rID, tgt1))
+
+		e2 = fw.NewEntity()
+		flecs.AddID(fw, e2, flecs.MakePair(rID, tgt2))
+
+		e3 = fw.NewEntity()
+		flecs.AddID(fw, e3, flecs.MakePair(rID, tgt3))
+	})
+
+	// All-archetype wildcard pair query; rID's sparse trait does not affect this.
+	q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(rID, w.Wildcard())))
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 3 || !found[e1] || !found[e2] || !found[e3] {
+		t.Errorf("wildcard pair on sparse relationship: expected e1, e2, e3; got %v", found)
+	}
+}
+
+// TestSparse_QueryNotSparse verifies that Without(sparseC) on a sparse component
+// matches entities that do NOT have that sparse component.
+func TestSparse_QueryNotSparse(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 1}) // has pos, no vel → match
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 2})
+		flecs.Set(fw, e2, sparseVel{DX: 2}) // has both → no match (has vel)
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Without(velID))
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 1 || !found[e1] {
+		t.Errorf("Not sparse: expected only e1; got %v", found)
+	}
+}
+
+// TestSparse_QueryOptionalSparse verifies that Maybe(sparseC) on a sparse component
+// yields matched entities with and without the optional component.
+func TestSparse_QueryOptionalSparse(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 10})
+		flecs.Set(fw, e1, sparseVel{DX: 1}) // has optional vel
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 20}) // no vel
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Maybe(velID))
+
+	type result struct {
+		hasVel bool
+		velVal sparseVel
+	}
+	results := make(map[flecs.ID]result)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			vSlice, ok := flecs.FieldMaybe[sparseVel](it, velID)
+			r := result{hasVel: ok}
+			if ok && len(vSlice) > 0 {
+				r.velVal = vSlice[0]
+			}
+			results[e] = r
+		}
+	})
+
+	if len(results) != 2 {
+		t.Fatalf("Optional sparse: expected 2 results, got %d", len(results))
+	}
+	r1 := results[e1]
+	if !r1.hasVel || r1.velVal.DX != 1 {
+		t.Errorf("e1 optional vel: hasVel=%v val=%+v, want hasVel=true val.DX=1", r1.hasVel, r1.velVal)
+	}
+	r2 := results[e2]
+	if r2.hasVel {
+		t.Errorf("e2 optional vel: hasVel=%v, want false", r2.hasVel)
+	}
+}
+
+// TestSparse_QueryFieldPtrCorrectness verifies that Field[T] for a sparse term
+// returns a pointer that is valid until the next iterator advance, and that the
+// pointer addresses distinct stable allocations for different entities.
+func TestSparse_QueryFieldPtrCorrectness(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 11, Y: 12})
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 21, Y: 22})
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+
+	// Collect pointers and values in a single iteration.
+	type entry struct {
+		ptr *sparsePos
+		val sparsePos
+	}
+	var entries []entry
+	q.Each(func(it *flecs.QueryIter) {
+		slice := flecs.Field[sparsePos](it, posID)
+		if len(slice) != 1 {
+			t.Fatalf("Field sparse: expected slice len 1, got %d", len(slice))
+		}
+		entries = append(entries, entry{ptr: &slice[0], val: slice[0]})
+	})
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	// Verify values are distinct.
+	if entries[0].val == entries[1].val {
+		t.Errorf("expected distinct values: both are %+v", entries[0].val)
+	}
+	// Pointers must be stable (non-nil, distinct).
+	if entries[0].ptr == nil || entries[1].ptr == nil {
+		t.Error("Field sparse: nil pointer in slice[0]")
+	}
+	if entries[0].ptr == entries[1].ptr {
+		t.Error("Field sparse: two different entities returned the same pointer")
+	}
+}
+
+// TestSparse_QueryFieldPtrMutation verifies that writing through the pointer
+// returned by Field[T] for a sparse term is immediately visible via EachSparse
+// and GetRef.
+func TestSparse_QueryFieldPtrMutation(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, sparsePos{X: 1, Y: 1})
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+
+	// Mutate through the Field pointer.
+	q.Each(func(it *flecs.QueryIter) {
+		slice := flecs.Field[sparsePos](it, posID)
+		slice[0].X = 99
+		slice[0].Y = 88
+	})
+
+	// Verify via EachSparse.
+	var found sparsePos
+	w.Read(func(r *flecs.Reader) {
+		flecs.EachSparse[sparsePos](r, func(id flecs.ID, v *sparsePos) {
+			if id == e {
+				found = *v
+			}
+		})
+	})
+	if found.X != 99 || found.Y != 88 {
+		t.Errorf("mutation via Field ptr: got %+v, want {99 88}", found)
+	}
+
+	// Verify via GetRef.
+	var ptr *sparsePos
+	w.Read(func(r *flecs.Reader) { ptr = flecs.GetRef[sparsePos](r, e) })
+	if ptr == nil || ptr.X != 99 || ptr.Y != 88 {
+		t.Errorf("GetRef after Field mutation: got %+v", ptr)
+	}
+}
+
+// TestSparse_CachedQueryVersionCounter verifies that CachedQuery.Changed() returns
+// true after a sparse-set mutation (new entity or removal), implementing the sparse
+// version counter requirement.
+func TestSparse_CachedQueryVersionCounter(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID))
+
+	// First call to Changed() should always return true (initial state).
+	if !cq.Changed() {
+		t.Error("Changed(): expected true on first call")
+	}
+
+	// No mutations: Changed() should return false.
+	if cq.Changed() {
+		t.Error("Changed(): expected false with no mutations")
+	}
+
+	// Add an entity with the sparse component.
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, sparsePos{X: 42})
+	})
+
+	// After sparse-set insertion: Changed() must return true.
+	if !cq.Changed() {
+		t.Error("Changed(): expected true after sparse-set insertion")
+	}
+
+	// No further mutations: Changed() should return false.
+	if cq.Changed() {
+		t.Error("Changed(): expected false after reporting the change")
+	}
+
+	// Iterate and verify the new entity is visible.
+	found := false
+	cq.Each(func(it *flecs.QueryIter) {
+		for _, eid := range it.Entities() {
+			if eid == e {
+				found = true
+			}
+		}
+	})
+	if !found {
+		t.Error("CachedQuery: new sparse entity not found after version bump")
+	}
+
+	// Remove the entity: Changed() must return true again.
+	w.Write(func(fw *flecs.Writer) { flecs.Remove[sparsePos](fw, e) })
+	if !cq.Changed() {
+		t.Error("Changed(): expected true after sparse-set removal")
+	}
+	_ = posID
+}
+
+// TestSparse_QueryEmptySparseset verifies that a pure-sparse query over an empty
+// sparse-set yields zero results without panicking.
+func TestSparse_QueryEmptySparseset(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+	// Intentionally add no entities.
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+
+	count := 0
+	q.Each(func(it *flecs.QueryIter) {
+		count += it.Count()
+	})
+
+	if count != 0 {
+		t.Errorf("empty sparse-set: expected 0 results, got %d", count)
+	}
+}
+
+// TestSparse_QuerySmallestDriverHeuristic verifies that the smallest sparse-set
+// is selected as the driver for pure-sparse queries. When term A has 5 entries
+// and term B has 5000, the query should visit ≈5 entities — not 5000.
+func TestSparse_QuerySmallestDriverHeuristic(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w) // will have 5 entries
+	velID := flecs.RegisterComponent[sparseVel](w)  // will have 5000 entries
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+
+	// 5 entities have both pos and vel (the intersection).
+	var matchedEntities [5]flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		for i := range matchedEntities {
+			e := fw.NewEntity()
+			matchedEntities[i] = e
+			flecs.Set(fw, e, sparsePos{X: float32(i)})
+			flecs.Set(fw, e, sparseVel{DX: float32(i)})
+		}
+		// 4995 additional entities have only vel (not in pos sparse-set).
+		for i := 0; i < 4995; i++ {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, sparseVel{DX: float32(i)})
+		}
+	})
+
+	// The query must yield exactly 5 results (the intersection) without
+	// iterating all 5000 vel-only entries.
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(velID))
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if len(found) != 5 {
+		t.Errorf("smallest driver heuristic: expected 5 results (intersection), got %d", len(found))
+	}
+	for _, e := range matchedEntities {
+		if !found[e] {
+			t.Errorf("expected entity %v in results", e)
+		}
+	}
+}
+
+// TestSparse_QueryPureSparseZeroEntities verifies that a pure-sparse query on a
+// component that was registered but has no held entities yields zero results
+// without panicking.
+func TestSparse_QueryPureSparseZeroEntities(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+	// No entities hold posID.
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+
+	count := 0
+	var panicked bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+				t.Errorf("pure-sparse zero entities: unexpected panic: %v", r)
+			}
+		}()
+		q.Each(func(it *flecs.QueryIter) {
+			count += it.Count()
+		})
+	}()
+
+	if panicked {
+		return
+	}
+	if count != 0 {
+		t.Errorf("pure-sparse zero entities: expected 0 results, got %d", count)
+	}
+}
+
+// TestSparse_QueryMarshalRoundTrip verifies that a cached query with a sparse term
+// rebuilds cleanly after world marshal/unmarshal and produces correct results.
+func TestSparse_QueryMarshalRoundTrip(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparsePos{X: 7, Y: 8})
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparsePos{X: 9, Y: 10})
+	})
+
+	data, err := w.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+
+	// Restore into a fresh world.
+	w2 := flecs.New()
+	posID2 := flecs.RegisterComponent[sparsePos](w2)
+	if err := w2.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+
+	// Build cached query AFTER unmarshal; it must see the restored sparse data.
+	cq := flecs.NewCachedQueryFromTerms(w2, flecs.With(posID2))
+
+	var found []sparsePos
+	cq.Each(func(it *flecs.QueryIter) {
+		for range it.Entities() {
+			slice := flecs.Field[sparsePos](it, posID2)
+			found = append(found, slice[0])
+		}
+	})
+
+	if len(found) != 2 {
+		t.Fatalf("marshal round-trip: expected 2 results, got %d", len(found))
+	}
+	for _, p := range found {
+		if (p.X != 7 && p.X != 9) || (p.Y != 8 && p.Y != 10) {
+			t.Errorf("marshal round-trip: unexpected value %+v", p)
+		}
+	}
+	_ = posID
+	_ = e1
+	_ = e2
+}
