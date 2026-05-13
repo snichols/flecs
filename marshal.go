@@ -129,6 +129,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.Relationship():   {},
 		w.Target():         {},
 		w.Trait():          {},
+		w.PairIsTag():      {},
 		w.Wildcard():       {},
 		w.Any():            {},
 	}
