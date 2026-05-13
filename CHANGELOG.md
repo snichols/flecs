@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.49.0 — 2026-05-13 — Phase 15.17: With relationship trait
+
+### Added
+
+- **`SetWith(w *World, source ID, coAdd ID)`** — registers `coAdd` as a co-add for `source`. Idempotent. Stored as a `(With, coAdd)` pair on `source`'s archetype; automatic JSON round-trip via existing pair marshalling. No removal API — With is sticky.
+- **`HasWith(s scope, source ID) []ID`** — returns all co-add IDs registered on `source` via `SetWith`. Accepts `scope` so it works inside `Read` and `Write` blocks. Returns nil if none registered.
+- **`w.With() ID`** — returns the built-in With trait entity (index 32). Bare-tag form: `fw.AddID(source, w.With())` has no meaning on its own; use `SetWith` to register co-adds.
+- **Auto-add enforcement — immediate path** — `applyWithCoAdds` fires after every `addIDImmediate` call: scans the source entity's archetype for `(With, *)` pairs and calls `addIDImmediate` for each co-add. Pair form: adding `(R, T)` where R has `(With, S)` co-adds `(S, T)`.
+- **Auto-add enforcement — deferred path** — `expandWithIntoScratch` fires in `batchForEntity` during the two-pass coalescer: inserts With co-add IDs into the running sorted signature before the single archetype migration. Diamond dedup: if a co-add is already in the target signature, recursion is skipped.
+- **Transitive chaining** — `SetWith(A, B)` + `SetWith(B, C)`: adding A also adds B then C. Both immediate and deferred paths recurse transitively.
+- **Cycle detection** — mutual cycles (`SetWith(A,B)` + `SetWith(B,A)`) panic with a message naming the cycle path (e.g. `flecs: With cycle detected: A → B → A`) on both the immediate and deferred paths.
+- **`with_test.go`** — 22 test cases at ≥95% coverage on `with.go`: bare add, chained, multiple co-adds, pair form, pair form chained, cycle detection, idempotent, deferred bare add, HasWith round-trip, IsA no-retrigger, Exclusive interaction, one-way remove, deferred pair form, hook ordering, batched deferred (exercises `batchForEntity`/`expandWithIntoScratch`), diamond dedup, deferred cycle (helper path), source with extra tag (covers scanning continue branch), HasWith null entity, dead source immediate/batched.
+
+### Changed
+
+- **Built-in entity reindex** — With inserted at index 32; Wildcard shifts 32→33; Any shifts 33→34; user entities now start at index 35.
+- **Bootstrap** — With is bootstrapped at world creation with `applyRelationshipPolicy`. PairIsTag bootstrap note updated (SlotOf/DependsOn/Flag still not ported).
+
 ## v0.48.0 — 2026-05-13 — Phase 15.16: PairIsTag relationship trait
 
 ### Added

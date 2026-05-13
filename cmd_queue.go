@@ -175,6 +175,10 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.traitID.Index() {
 				// Bare Trait tag: mark entity as a Trait entity.
 				applyTraitPolicy(w, entity)
+			} else if !c.id.IsPair() && w.withID != 0 && c.id.Index() == w.withID.Index() {
+				// Bare With tag: no side-map to update — With co-add metadata lives
+				// in (With, Y) pair storage on the entity itself.
+				_ = entity
 			}
 			// Usage-constraint enforcement on deferred path (mirrors immediate path
 			// in id_ops.go). Panics at coalesce time, not at queue submission.
@@ -184,6 +188,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 				checkAcyclic(w, entity, c.id.First(), c.id.Second())
 			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
+			// With co-add expansion for deferred path: insert co-add IDs for c.id
+			// into the pending signature so they land in the same archetype migration.
+			// expandWithIntoScratch recurses for chained With (A→B→C); sortedIDInsert
+			// deduplicates so diamond patterns (A→C and B→C) are handled without duplication.
+			expandWithIntoScratch(w, c.id, &q.scratch1)
 			c.kind = cmdSkip
 		case cmdRemoveID:
 			q.scratch1 = sortedIDDelete(q.scratch1, c.id)

@@ -141,6 +141,12 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(relID, w.PairIsTag()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsPairIsTag).
 		applyPairIsTagPolicy(w, e)
+	} else if id.Index() == w.withID.Index() {
+		// Bare With tag added to entity e: no immediate policy to apply — With's
+		// co-add metadata lives in (With, Y) pairs on e, not in a side-map.
+		// The presence of the bare With tag on e itself is allowed for completeness
+		// but the semantics are driven by pair-form (With, coAdd) storage.
+		_ = e
 	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
@@ -180,6 +186,8 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 					if w.symmetricPolicies[id.First()] {
 						addIDImmediate(w, id.Second(), MakePair(id.First(), e))
 					}
+					// With co-add: fire (With, *) pairs registered on id's relationship.
+					applyWithCoAdds(w, e, id)
 					return true
 				}
 			}
@@ -208,6 +216,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 			overrideCopyForInstance(w, e, prefab, nil)
 		}
 	}
+	// With co-add: after the originating add's table transition lands, fire any
+	// (With, Y) pairs registered on the source entity. Each co-add is its own
+	// independent addIDImmediate call (its own migration, its own OnAdd hook fire).
+	// applyWithCoAdds manages withExpandStack for cycle detection.
+	applyWithCoAdds(w, e, id)
 	return true
 }
 
