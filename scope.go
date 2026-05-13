@@ -381,6 +381,16 @@ func GetPairRef[T any](s scope, e ID, rel ID, tgt ID) *T {
 // locally or via an IsA chain.
 func HasID(s scope, e ID, id ID) bool {
 	w := s.scopeWorld()
+	// Sparse: consult sparse-set index; the entity's archetype type does NOT contain
+	// Sparse components.
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		ss, ok := w.sparseStorage[ID(id.Index())]
+		if !ok {
+			return false
+		}
+		_, has := ss.index[e.Index()]
+		return has
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -401,7 +411,16 @@ func HasID(s scope, e ID, id ID) bool {
 
 // OwnsID reports whether entity e locally owns the component or tag identified by id.
 func OwnsID(s scope, e ID, id ID) bool {
-	rec := s.scopeWorld().index.Get(e)
+	w := s.scopeWorld()
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		ss, ok := w.sparseStorage[ID(id.Index())]
+		if !ok {
+			return false
+		}
+		_, has := ss.index[e.Index()]
+		return has
+	}
+	rec := w.index.Get(e)
 	if rec == nil {
 		return false
 	}
@@ -470,6 +489,18 @@ func Remove[T any](fw *Writer, e ID) bool {
 	if !ok || info.Component == 0 {
 		return false
 	}
+	// Check sparse storage first, then archetype.
+	if fw.world.sparsePolicies[ID(info.Component.Index())] {
+		ss, ok := fw.world.sparseStorage[ID(info.Component.Index())]
+		if !ok {
+			return false
+		}
+		if _, has := ss.index[e.Index()]; !has {
+			return false
+		}
+		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
+		return true
+	}
 	rec := fw.world.index.Get(e)
 	if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
 		return false
@@ -521,6 +552,18 @@ func RemoveID(fw *Writer, e ID, id ID) bool {
 	s := fw.stage
 	if s.deferDepth == 0 {
 		return removeIDImmediate(fw.world, e, id)
+	}
+	// Check sparse storage first, then archetype.
+	if !id.IsPair() && fw.world.sparsePolicies[ID(id.Index())] {
+		ss, ok := fw.world.sparseStorage[ID(id.Index())]
+		if !ok {
+			return false
+		}
+		if _, has := ss.index[e.Index()]; !has {
+			return false
+		}
+		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
+		return true
 	}
 	rec := fw.world.index.Get(e)
 	if rec == nil || rec.Table == nil || !rec.Table.HasComponent(id) {

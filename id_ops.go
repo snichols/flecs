@@ -1,6 +1,7 @@
 package flecs
 
 import (
+	"fmt"
 	"reflect"
 	"unsafe"
 
@@ -15,6 +16,10 @@ func addIDOnWorld(w *World, e ID, e2 ID) bool {
 		rec := w.index.Get(e)
 		if rec == nil {
 			panic("flecs: AddID called on dead entity")
+		}
+		// Sparse components are data-bearing and cannot be added as a bare tag.
+		if !e2.IsPair() && w.sparsePolicies[ID(e2.Index())] {
+			panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", e2))
 		}
 		if rec.Table != nil && rec.Table.HasComponent(e2) {
 			return false
@@ -35,6 +40,10 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		return false
 	}
 	w.registry.EnsureID(id)
+	// Sparse components are data-bearing and cannot be added as a bare tag.
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", id))
+	}
 	// When a cleanup-trait pair is added to an entity, translate the pair into
 	// an entry in the world's cleanupPolicies map. This makes the pair-add path
 	// fw.AddID(relID, MakePair(w.OnDeleteTarget(), w.DeleteAction())) equivalent
@@ -153,6 +162,10 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(parentID, w.OrderedChildren()) form, mirroring C's
 		// flecs_register_ordered_children observer in src/bootstrap.c:604-630.
 		applyOrderedChildrenPolicy(w, e)
+	} else if w.sparseID != 0 && id.Index() == w.sparseID.Index() {
+		// Bare Sparse tag added to component entity e: mark e as Sparse-stored.
+		// This is the fw.AddID(componentID, w.Sparse()) form.
+		applySparsePolicy(w, e)
 	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
@@ -302,6 +315,17 @@ func overrideCopyForInstance(w *World, instance, prefab ID, seen map[ID]struct{}
 }
 
 func removeIDImmediate(w *World, e ID, id ID) bool {
+	// Sparse: remove from per-component sparse-set; do NOT cause an archetype transition.
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		ptr := sparseSetGet(w, e, id)
+		if ptr == nil {
+			return false
+		}
+		info, _ := w.registry.LookupByID(id)
+		w.fireOnRemove(info, id, e, ptr)
+		sparseSetRemove(w, e, id)
+		return true
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false

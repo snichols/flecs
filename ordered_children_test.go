@@ -617,17 +617,20 @@ func TestOrderedChildren_BareTagForm(t *testing.T) {
 }
 
 // TestOrderedChildren_BuiltinIndex verifies OrderedChildren is at index 33
-// and that the reindex of Wildcard/Any is correct.
+// and that Sparse(34), Wildcard(35), Any(36) are correct.
 func TestOrderedChildren_BuiltinIndex(t *testing.T) {
 	w := flecs.New()
 	if got := w.OrderedChildren().Index(); got != 33 {
 		t.Errorf("OrderedChildren index: want 33, got %d", got)
 	}
-	if got := w.Wildcard().Index(); got != 34 {
-		t.Errorf("Wildcard index: want 34, got %d", got)
+	if got := w.Sparse().Index(); got != 34 {
+		t.Errorf("Sparse index: want 34, got %d", got)
 	}
-	if got := w.Any().Index(); got != 35 {
-		t.Errorf("Any index: want 35, got %d", got)
+	if got := w.Wildcard().Index(); got != 35 {
+		t.Errorf("Wildcard index: want 35, got %d", got)
+	}
+	if got := w.Any().Index(); got != 36 {
+		t.Errorf("Any index: want 36, got %d", got)
 	}
 }
 

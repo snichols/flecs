@@ -82,8 +82,8 @@ type World struct {
 	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
 	withID               ID                              // built-in With trait entity (index 32)
 	orderedChildrenID    ID                              // built-in OrderedChildren trait entity (index 33)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 34; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 35; _; first user entity at index 36)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 35; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 36; _; first user entity at index 37)
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -105,6 +105,10 @@ type World struct {
 	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
 	pairIsTagPolicies    map[ID]bool                     // relationship entity index → PairIsTag flag
 	orderedChildren      map[ID]*orderedChildList        // keyed by parent entity index; non-nil entry means ordered
+	sparseID             ID                              // built-in Sparse trait entity (index 34)
+	sparsePolicies       map[ID]bool                     // component entity index → sparse flag
+	sparseStorage        map[ID]*sparseSet               // per-component sparse-set keyed by entity index
+	sparseHeld           map[uint32][]ID                 // entity raw-index → sparse component IDs held (for O(k) delete cleanup)
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -157,9 +161,10 @@ type World struct {
 //   - Index 31: PairIsTag built-in relationship trait entity
 //   - Index 32: With built-in relationship trait entity
 //   - Index 33: OrderedChildren built-in trait entity
-//   - Index 34: Wildcard built-in query-term sentinel (*)
-//   - Index 35: Any built-in query-term sentinel (_)
-//   - Index 36+: user entities (NewEntity)
+//   - Index 34: Sparse built-in trait entity
+//   - Index 35: Wildcard built-in query-term sentinel (*)
+//   - Index 36: Any built-in query-term sentinel (_)
+//   - Index 37+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -367,13 +372,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(orderedChildren))
 	w.orderedChildrenID = orderedChildren
-	// Allocate the built-in Wildcard query-term sentinel (gets index 34).
+	// Allocate the built-in Sparse trait entity (gets index 34).
+	sparse := w.index.Alloc()
+	rec = w.index.Get(sparse)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(sparse))
+	w.sparseID = sparse
+	// Allocate the built-in Wildcard query-term sentinel (gets index 35).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 35).
+	// Allocate the built-in Any query-term sentinel (gets index 36).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -656,6 +667,28 @@ func (w *World) deleteOne(e ID) bool {
 			removeFromOrderedList(list, e)
 		}
 	}
+	// Clean up sparse-set entries for e. Fire OnRemove for each component e holds
+	// as Sparse, then remove e from the respective sparse-set.
+	// sparseHeld gives O(k) cleanup where k = number of sparse components on e.
+	// Mirrors upstream src/storage/component_index.c:252-265 flecs_component_fini_sparse.
+	if w.sparseHeld != nil {
+		eIdx := uint32(e.Index())
+		if held := w.sparseHeld[eIdx]; len(held) > 0 {
+			// Snapshot held slice since sparseSetRemove modifies w.sparseHeld.
+			heldSnap := append([]ID(nil), held...)
+			for _, cid := range heldSnap {
+				key := ID(cid.Index())
+				if ss, ok := w.sparseStorage[key]; ok {
+					slot, hasSlot := ss.index[e.Index()]
+					if hasSlot {
+						info, _ := w.registry.LookupByID(cid)
+						w.fireOnRemove(info, cid, e, ss.dense[slot].data)
+					}
+				}
+				sparseSetRemove(w, e, cid)
+			}
+		}
+	}
 	freed := w.index.Free(e)
 	if freed && w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "entity deleted",
@@ -857,6 +890,14 @@ func getOnWorld[T any](w *World, e ID) (T, bool) {
 	if !ok || info.Component == 0 {
 		return zero, false
 	}
+	// Sparse: fetch from per-component sparse-set instead of archetype table.
+	if w.sparsePolicies[ID(info.Component.Index())] {
+		ptr := sparseSetGet(w, e, info.Component)
+		if ptr == nil {
+			return zero, false
+		}
+		return *(*T)(ptr), true
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return zero, false
@@ -876,6 +917,16 @@ func getOnWorld[T any](w *World, e ID) (T, bool) {
 // Internal helper; does not check exclusive access.
 func hasOnWorld[T any](w *World, e ID) bool {
 	cid := RegisterComponent[T](w)
+	// Sparse: consult sparse-set index; the entity's archetype type does NOT contain
+	// Sparse components.
+	if w.sparsePolicies[ID(cid.Index())] {
+		ss, ok := w.sparseStorage[ID(cid.Index())]
+		if !ok {
+			return false
+		}
+		_, has := ss.index[e.Index()]
+		return has
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -907,6 +958,18 @@ func removeOnWorld[T any](w *World, e ID) bool {
 		if !ok || info.Component == 0 {
 			return false
 		}
+		// Sparse: check sparse-set; entity's archetype does not contain sparse components.
+		if w.sparsePolicies[ID(info.Component.Index())] {
+			ss, ok := w.sparseStorage[ID(info.Component.Index())]
+			if !ok {
+				return false
+			}
+			if _, has := ss.index[e.Index()]; !has {
+				return false
+			}
+			s0.queue.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
+			return true
+		}
 		rec := w.index.Get(e)
 		if rec == nil || rec.Table == nil || !rec.Table.HasComponent(info.Component) {
 			return false
@@ -923,6 +986,16 @@ func removeImmediate[T any](w *World, e ID) bool {
 		return false
 	}
 	cid := info.Component
+	// Sparse: remove from per-component sparse-set; do NOT cause an archetype transition.
+	if w.sparsePolicies[ID(cid.Index())] {
+		ptr := sparseSetGet(w, e, cid)
+		if ptr == nil {
+			return false
+		}
+		w.fireOnRemove(info, cid, e, ptr)
+		sparseSetRemove(w, e, cid)
+		return true
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false

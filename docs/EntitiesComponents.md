@@ -327,7 +327,7 @@ Tags added to component entities customize their storage and query behaviour. Th
 
 The `CanToggle` trait (shipped v0.35.0) allows individual entities to have a component temporarily disabled without removing it. See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for the full API.
 
-> **Not yet ported in Go flecs** — the `Sparse` component trait (opt-in sparse storage, better for components accessed randomly with high add/remove frequency) is not yet implemented. See the [feature-gap list](README.md) and the [ComponentTraits manual](ComponentTraits.md).
+The `Sparse` trait (shipped v0.51.0, storage path) stores a component in a per-component sparse-set rather than the archetype tables, giving pointer-stable addresses and no archetype transition on add/remove. Use `SetSparse(w, compID)` before first use. See the [ComponentTraits manual § Sparse](ComponentTraits.md#sparse) for the full API. Note: query integration is deferred to Phase 15.20 — use `EachSparse[T]` for bulk iteration in the meantime.
 
 ### Registration
 

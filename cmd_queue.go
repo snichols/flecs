@@ -184,6 +184,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 				// snapshotting any children already committed to their tables at this
 				// point in the flush.
 				applyOrderedChildrenPolicy(w, entity)
+			} else if !c.id.IsPair() && w.sparseID != 0 && c.id.Index() == w.sparseID.Index() {
+				// Bare Sparse tag: mark entity as a Sparse-stored component.
+				applySparsePolicy(w, entity)
 			}
 			// Usage-constraint enforcement on deferred path (mirrors immediate path
 			// in id_ops.go). Panics at coalesce time, not at queue submission.
@@ -200,9 +203,20 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			expandWithIntoScratch(w, c.id, &q.scratch1)
 			c.kind = cmdSkip
 		case cmdRemoveID:
+			// Sparse: do not modify archetype signature; removal is handled via dispatch.
+			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+				// leave kind; dispatch will call removeIDImmediate which handles sparse
+				break
+			}
 			q.scratch1 = sortedIDDelete(q.scratch1, c.id)
 			c.kind = cmdSkip
 		case cmdSetByID, cmdSetPair:
+			// Sparse: do not modify archetype signature; value is routed via sparse-set.
+			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+				hasSet = true
+				// keep kind; dispatch handles sparse Set via setImmediateByPtr
+				break
+			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
 			hasSet = true
 			// keep kind; handled in pass 2
@@ -342,11 +356,18 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 	// --- Pass 2: rewrite Set cmds to cmdModified ---
 	// Values are NOT written here; dispatch writes each value at its original
 	// submission position so that OnSet fires with the correct per-call value.
+	// Sparse Set cmds are NOT rewritten to cmdModified — they dispatch via
+	// setImmediateByPtr which handles OnAdd+OnSet correctly without a table slot.
 	idx = entry.first
 	for {
 		c := &q.cmds[idx]
 		if c.kind == cmdSetByID || c.kind == cmdSetPair {
-			c.kind = cmdModified
+			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+				// Leave as cmdSetByID: dispatch will call setImmediateByPtr which
+				// fires OnAdd (first Set) and OnSet correctly for sparse storage.
+			} else {
+				c.kind = cmdModified
+			}
 		}
 		ni, hasNi := nextInChain(c.nextForEntity)
 		if !hasNi {
@@ -432,15 +453,28 @@ func (q *cmdQueue) dispatch(w *World, c *cmd) {
 		// the same component is set multiple times), then fire OnSet so that the
 		// hook sees the value submitted at THIS call site — preserving FIFO
 		// submission order for hook invocations.
+		info, ok := w.registry.LookupByID(c.id)
+		if !ok {
+			return
+		}
+		// Sparse: write directly into the sparse-set slot.
+		if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+			if c.valueSize > 0 {
+				payload := q.arena.bytes(c.valueOff, c.valueSize)
+				ptr := unsafe.Pointer(&payload[0])
+				checkAndSetWriteOnce(w, c.entity, c.id)
+				sparseSetInsert(w, c.entity, c.id, ptr)
+				w.fireOnSet(info, c.id, c.entity, sparseSetGet(w, c.entity, c.id))
+			} else {
+				w.fireOnSet(info, c.id, c.entity, sparseSetGet(w, c.entity, c.id))
+			}
+			return
+		}
 		rec := w.index.Get(c.entity)
 		if rec == nil || rec.Table == nil {
 			return
 		}
 		if !rec.Table.HasComponent(c.id) {
-			return
-		}
-		info, ok := w.registry.LookupByID(c.id)
-		if !ok {
 			return
 		}
 		var ptr unsafe.Pointer
