@@ -160,6 +160,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.singletonID.Index() {
 				// Bare Singleton tag: mark entity as a singleton component.
 				applySingletonPolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.writeOnceID.Index() {
+				// Bare WriteOnce tag: mark entity as a write-once component.
+				applyWriteOncePolicy(w, entity)
 			}
 			// Acyclic cycle check on pair adds (deferred path).
 			if c.id.IsPair() && w.acyclicPolicies[ID(c.id.First().Index())] {
@@ -392,6 +395,8 @@ func (q *cmdQueue) dispatch(w *World, c *cmd) {
 		if c.valueSize > 0 {
 			payload := q.arena.bytes(c.valueOff, c.valueSize)
 			ptr = unsafe.Pointer(&payload[0])
+			// WriteOnce enforcement for coalesced deferred Set commands.
+			checkAndSetWriteOnce(w, c.entity, c.id)
 			rec.Table.Set(int(rec.Row), c.id, ptr)
 			ptr = rec.Table.Get(int(rec.Row), c.id) // stable column pointer
 		} else {

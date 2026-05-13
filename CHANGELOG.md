@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.45.0 — 2026-05-13 — Phase 15.13: WriteOnce component trait
+
+### Added
+
+- **`SetWriteOnce(w, componentID)`** — marks `componentID` as WriteOnce: after the first value write (`Set`), any subsequent `Set` on the same `(entity, component)` pair panics with a message naming both the entity and the component. No upstream C counterpart — this is a Go-flecs-only ergonomic trait.
+- **`IsWriteOnce(s scope, componentID ID) bool`** — reports whether `componentID` has been marked WriteOnce. Accepts `scope` (per Phase 15.8 convention) so it works inside `Read` and `Write` blocks. Returns `false` without panic for non-component entities.
+- **`w.WriteOnce() ID`** — returns the built-in WriteOnce trait entity (index 26). Bare-tag form: `fw.AddID(componentID, w.WriteOnce())` is equivalent to `SetWriteOnce(w, componentID)`.
+- **Write-time enforcement** — `setImmediateByPtr` (immediate path) and the `cmdModified` dispatch case (coalesced-deferred path) both enforce the WriteOnce constraint. The first Set records `hasBeenSet`; subsequent Sets panic.
+- **`Add` is not a write** — `addIDImmediate` slots the component with a zero value; this does not count as the first write. `Add → Set` is allowed; a second `Set` after that panics.
+- **Pair-form rule** — `WriteOnce` on relationship `R` governs every pair `(R, T)`. Each `(entity, (R, T))` slot is tracked independently. `WriteOnce` on a target `T` does not propagate.
+- **Non-component-target panic** — `SetWriteOnce(w, e)` panics at application time if `e` is not a registered component entity.
+- **Slot lifecycle** — `Remove` clears the per-(entity, component) `hasBeenSet` tracking so a fresh `Add + Set` cycle starts over. Entity deletion (`deleteOne`) clears all WriteOnce slots for the deleted entity.
+- **`writeonce_test.go`** — 11 test cases: first Set succeeds; second Set panics naming entity and component; Add→Set→Set panics (Add is not a trigger); Remove clears tracking; deferred-coalesced path panics on second queued Set; pair-form with independent (R, T1) and (R, T2) slots; non-component target panics at trait-application time; `IsWriteOnce` round-trip and idempotent `SetWriteOnce`; marker entity is not a component; remove without prior Set (nil-map early return); bare-tag form equivalent.
+
+### Changed
+
+- **Built-in entity reindex** — WriteOnce inserted at index 26; Wildcard shifts 26→27; Any shifts 27→28; user entities now start at index 29.
+- **Renamed from `Constant`** — previously tracked as `Constant` in the Phase 14.8 gap analysis. Renamed to `WriteOnce` to avoid a future collision with upstream `EcsConstant`, which is an enum-value tag applied to enum/bitmask constant entities in the meta addon (`include/flecs/flecs.h:2014`). `WriteOnce` is also more precise: `ReadOnly` is overloaded with thread-safety read-view semantics; `Immutable` would imply removes are blocked too.
+
 ## v0.44.0 — 2026-05-12 — Phase 15.12: Singleton component trait
 
 ### Added

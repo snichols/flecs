@@ -14,7 +14,7 @@ See the [Quickstart](Quickstart.md) for an introductory overview, [Relationships
   - [Acyclic](#acyclic)
   - [CanToggle](#cantoggle)
   - [Cleanup traits (OnDelete / OnDeleteTarget)](#cleanup-traits-ondelete--ondeletetarget)
-  - [Constant](#constant)
+  - [WriteOnce](#writeonce)
   - [DontFragment](#dontfragment)
   - [Exclusive](#exclusive)
   - [Final](#final)
@@ -290,13 +290,42 @@ action, ok := flecs.GetCleanupPolicy(w, likesID, w.OnDeleteTarget())
 
 ---
 
-### Constant
+### WriteOnce
 
-**What it does:** The `Constant` trait marks a component as read-only after it has been added. Attempting to `Set` a constant component after its initial value has been written would be a fatal error.
+**Shipped in v0.45.0** — the `WriteOnce` trait prevents value rewrites after the first `Set` on a given (entity, component) pair.
 
-**Workaround:** None — enforce read-only invariants manually in application code.
+> **Renamed from `Constant`**: Previously tracked as `Constant` in the Phase 14.8 gap analysis. Renamed to `WriteOnce` to avoid a future collision with upstream C `EcsConstant`, which is an enum-value tag used by the meta addon (`include/flecs/flecs.h:2014`). `WriteOnce` is also more precise than `ReadOnly` (overloaded with thread-safety read-view semantics) or `Immutable` (implies removes are blocked too).
 
-> **Not yet ported in Go flecs.** This trait is not listed in the upstream C `ComponentTraits.md` but was identified during Phase 14.8 as a gap. See the [feature-gap list](README.md#feature-gap-list).
+> **No upstream counterpart**: This is a Go-flecs-only ergonomic trait. Upstream C flecs has no write-once / post-set-immutable trait.
+
+**What it does:** The first `Set` (or coalesced-deferred `Set`) on a WriteOnce component succeeds normally. Any subsequent `Set` on the same `(entity, component)` pair panics with a message naming both the entity and the component. `Add` without `Set` does not count as the first write.
+
+**Pair-form rule:** `WriteOnce` applied to a relationship `R` governs every pair `(R, T)`. Each `(entity, (R, T))` slot is tracked independently — writing `(entity, (R, T1))` does not block `(entity, (R, T2))`. Applying `WriteOnce` to a target `T` does **not** propagate to pairs that use `T` as their target.
+
+**Non-component target:** `SetWriteOnce(w, e)` panics if `e` is not a registered component entity. `IsWriteOnce` on a non-component returns `false` without panic.
+
+**Lifecycle:** `Remove` clears the per-(entity, component) tracking so a subsequent `Add + Set` starts fresh. Entity deletion also clears all write-once slots for the deleted entity. `WriteOnce` does **not** block `Remove`.
+
+**Raw-pointer access is not guarded:** `WriteOnce` enforces at the `Set` API boundary only. Direct pointer mutations via `FieldByMatch[T]` or `Each[T]` are unchecked by design.
+
+```go
+type Config struct{ Capacity int }
+
+w := flecs.New()
+cfgID := flecs.RegisterComponent[Config](w)
+flecs.SetWriteOnce(w, cfgID)
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    flecs.Set(fw, e, Config{Capacity: 100}) // first write — OK
+})
+
+// Second write panics: "WriteOnce component ... already written"
+w.Write(func(fw *flecs.Writer) {
+    flecs.Set(fw, e, Config{Capacity: 200}) // panics
+})
+```
 
 ---
 
@@ -765,7 +794,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **CanToggle** | `EcsCanToggle` | ✅ shipped (v0.35.0) | `SetCanToggle(w, cid)` / `IsCanToggle`; `w.CanToggle()` bare-tag form; `Each1`/`Each2`/`Each3`/`Each4` skip disabled rows; `EnableID`/`DisableID`/`IsEnabledID` + typed generics |
 | **OnDelete** | `EcsOnDelete` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDelete(), action)` / `GetCleanupPolicy`; actions: `RemoveAction`, `DeleteAction`, `PanicAction` |
 | **OnDeleteTarget** | `EcsOnDeleteTarget` | ✅ shipped (v0.32.0) | `SetCleanupPolicy(w, id, w.OnDeleteTarget(), action)`; `ChildOf` bootstrapped with `DeleteAction`; `IsA` has no default (opt-in) |
-| **Constant** | *(informal)* | ⏳ planned | No read-only enforcement after first write |
+| **WriteOnce** | *(Go-only; formerly `Constant`)* | ✅ shipped (v0.45.0) | `SetWriteOnce(w, compID)` / `IsWriteOnce(scope, compID)`; `w.WriteOnce()` bare-tag form; per-(entity, component) first-write tracking; second Set panics naming entity and component; Remove clears tracking; pair-form: WriteOnce on relationship R governs every (R, T) independently; no built-in ships WriteOnce; previously called `Constant` — renamed to avoid collision with upstream `EcsConstant` (enum-value tag in meta addon) |
 | **DontFragment** | `EcsDontFragment` | ⏳ planned | No sparse non-fragmenting storage |
 | **Exclusive** | `EcsExclusive` | ✅ shipped (v0.34.0) | `SetExclusive(w, relID)` / `IsExclusive(w, relID)`; `w.Exclusive()` bare-tag form; `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped exclusive; `IsA` not exclusive |
 | **Final** | `EcsFinal` | ✅ shipped (v0.42.0) | `SetFinal(w, entityID)` / `IsFinal(scope, entityID)`; `w.Final()` bare-tag form; write-time enforcement: adding `(IsA, target)` panics if target is Final; no built-in ships Final; self-pair `(IsA, e)` also rejected when e is Final |

@@ -74,8 +74,9 @@ type World struct {
 	finalID             ID                              // built-in Final trait entity (index 23)
 	oneOfID             ID                              // built-in OneOf trait entity (index 24)
 	singletonID         ID                              // built-in Singleton trait entity (index 25)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 26; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 27; _; first user entity at index 28)
+	writeOnceID         ID                              // built-in WriteOnce trait entity (index 26)
+	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 27; *)
+	anyID               ID                              // built-in Any query-term sentinel (index 28; _; first user entity at index 29)
 	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
@@ -88,6 +89,8 @@ type World struct {
 	oneOfPolicies       map[ID]ID                       // relationship entity index → required ChildOf parent (raw index)
 	singletonPolicies   map[ID]bool                     // component entity index → singleton flag
 	singletonInstances  map[ID]ID                       // component entity index → entity currently holding it
+	writeOncePolicies   map[ID]bool                     // component entity index → writeOnce flag
+	writeOnceHasBeenSet map[writeOnceKey]bool           // per-(entity-index, component-ID) first-write tracking
 	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -132,9 +135,10 @@ type World struct {
 //   - Index 23: Final built-in trait entity
 //   - Index 24: OneOf built-in trait entity
 //   - Index 25: Singleton built-in trait entity
-//   - Index 26: Wildcard built-in query-term sentinel (*)
-//   - Index 27: Any built-in query-term sentinel (_)
-//   - Index 28+: user entities (NewEntity)
+//   - Index 26: WriteOnce built-in trait entity
+//   - Index 27: Wildcard built-in query-term sentinel (*)
+//   - Index 28: Any built-in query-term sentinel (_)
+//   - Index 29+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -294,13 +298,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(singleton))
 	w.singletonID = singleton
-	// Allocate the built-in Wildcard query-term sentinel (gets index 26).
+	// Allocate the built-in WriteOnce trait entity (gets index 26).
+	writeOnce := w.index.Alloc()
+	rec = w.index.Get(writeOnce)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(writeOnce))
+	w.writeOnceID = writeOnce
+	// Allocate the built-in Wildcard query-term sentinel (gets index 27).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 27).
+	// Allocate the built-in Any query-term sentinel (gets index 28).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -541,6 +551,12 @@ func (w *World) deleteOne(e ID) bool {
 	for compIdx, holder := range w.singletonInstances {
 		if holder.Index() == e.Index() {
 			delete(w.singletonInstances, compIdx)
+		}
+	}
+	// Clear any writeOnce hasBeenSet slots for this entity.
+	for key := range w.writeOnceHasBeenSet {
+		if key.entity == e.Index() {
+			delete(w.writeOnceHasBeenSet, key)
 		}
 	}
 	freed := w.index.Free(e)
