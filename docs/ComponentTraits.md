@@ -844,36 +844,60 @@ flecs.IsTraversable(fr, w.IsA())    // → true
 
 ### With
 
-**What it does:** The `With` relationship added to a component or relationship entity ensures that whenever that component or relationship is added to an entity, a second component is also added automatically. When added to a relationship, the co-added id is itself a pair with the same target.
-
-**What the C API looks like:**
-
-```c
-// C — not available in Go flecs
-ecs_entity_t Responsibility = ecs_new(world);
-ecs_entity_t Power = ecs_new_w_pair(world, EcsWith, Responsibility);
-
-ecs_entity_t e = ecs_new_w_id(world, Power);
-// e now has both Power and Responsibility
-```
-
-**Workaround:** Add both components explicitly in application code, or use an `OnAdd` hook to add the dependent component:
+**Shipped in v0.49.0.** The `With` relationship trait ensures that whenever entity X is added to a target entity E, a second entity Y is also automatically added. When X is a relationship (pair form), the co-add inherits the same target: adding `(R, T)` where R has `(With, S)` also adds `(S, T)`.
 
 ```go
-// Workaround using OnAdd hook
-type Power struct{}
-type Responsibility struct{}
-
 w := flecs.New()
-flecs.RegisterComponent[Power](w)
-flecs.RegisterComponent[Responsibility](w)
 
-flecs.OnAdd[Power](w, func(fw *flecs.Writer, e flecs.ID, _ Power) {
-    flecs.Add[Responsibility](fw, e)
+var power, responsibility flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    power = fw.NewEntity()
+    responsibility = fw.NewEntity()
+})
+
+// Register: adding power to an entity also adds responsibility.
+flecs.SetWith(w, power, responsibility)
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    fw.AddID(e, power) // also adds responsibility automatically
+})
+
+w.Read(func(fr *flecs.Reader) {
+    // Both are present.
+    _ = flecs.HasID(fr, e, power)        // true
+    _ = flecs.HasID(fr, e, responsibility) // true — co-added by With
 })
 ```
 
-> **Not yet ported in Go flecs** as a first-class trait.
+**Pair form:** adding a pair `(R, T)` where R has `(With, S)` co-adds `(S, T)`:
+
+```go
+flecs.SetWith(w, relA, relB) // adds (R, T) → also adds (S, T)
+```
+
+**Transitive chaining:** `SetWith(A, B)` + `SetWith(B, C)` — adding A adds B, which adds C.
+
+**Cycle detection:** mutual cycles (`SetWith(A,B)` + `SetWith(B,A)`) panic with a clear path message on the first AddID that would close the loop:
+
+```
+flecs: With cycle detected: A → B → A
+```
+
+**IsA interaction:** With fires on direct add only. Inheriting a component via IsA does **not** re-trigger With for the inheritor — matches C semantics.
+
+**Exclusive interaction:** With is one-way add-only. Replacing `(R, T1)` with `(R, T2)` via Exclusive co-adds `(S, T2)` but does not remove the previously co-added `(S, T1)`. Manual cleanup is the user's responsibility.
+
+**Storage:** co-add lists are stored as `(With, Y)` pairs on the source entity's archetype — no separate side-map. Automatic JSON round-trip via existing pair marshalling.
+
+**API:**
+
+| Function | Description |
+|---|---|
+| `SetWith(w, source, coAdd)` | Register coAdd as a co-add for source. Idempotent. |
+| `HasWith(scope, source) []ID` | Return all co-add IDs registered on source. Nil if none. |
+| `w.With() ID` | Built-in With entity (index 32). |
 
 ---
 
@@ -909,7 +933,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Transitive** | `EcsTransitive` | ✅ shipped (v0.37.0) | `SetTransitive(w, relID)` / `IsTransitive(w, relID)`; `w.Transitive()` bare-tag form; lazy walk at query time with cycle detection and depth limit; cached query re-evaluates on table-create |
 | **Traversable** | `EcsTraversable` | ✅ shipped (v0.46.0) | `SetTraversable(w, relID)` / `IsTraversable(scope, relID)`; `w.Traversable()` bare-tag form; query-time enforcement: non-traversable `Up`/`SelfUp`/`Cascade` terms panic at construction; Traversable implies Acyclic; `ChildOf` + `IsA` bootstrapped Traversable; `IsA` now Acyclic as behavior change (see changelog) |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
-| **With** | `EcsWith` | ⏳ planned | No automatic co-addition; use `OnAdd` hook as workaround |
+| **With** | `EcsWith` | ✅ shipped (v0.49.0) | `SetWith(w, source, coAdd)` / `HasWith(scope, source) []ID`; `w.With()` bare-tag accessor (index 32); auto-add on immediate and deferred paths; pair form preserves target; transitive chaining; cycle detection panics with path message; IsA no-retrigger; Exclusive one-way add-only |
 
 ---
 
@@ -919,8 +943,8 @@ The table below is the canonical reference for trait-system planning. Check the 
 
 | Sentinel | Index | Semantics |
 |---|---|---|
-| `w.Wildcard()` | 31 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
-| `w.Any()` | 32 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
+| `w.Wildcard()` | 33 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
+| `w.Any()` | 34 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
 
 Both sentinels work in target and relationship positions. See [`docs/Queries.md`](Queries.md) § *Wildcard and Any query terms* for the full API.
 

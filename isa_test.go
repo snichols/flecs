@@ -663,17 +663,17 @@ func TestIsATagInheritance(t *testing.T) {
 
 // ── Count baseline ────────────────────────────────────────────────────────────
 
-// TestIsAWorldCountBaseline verifies that a fresh world has 33 built-in entities
+// TestIsAWorldCountBaseline verifies that a fresh world has 34 built-in entities
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
 // RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle, Symmetric,
 // Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, WriteOnce,
-// Traversable, Relationship, Target, Trait, PairIsTag, Wildcard, Any)
+// Traversable, Relationship, Target, Trait, PairIsTag, With, Wildcard, Any)
 // before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 33 {
-		t.Fatalf("fresh World.Count(): want 33 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Relationship + Target + Trait + PairIsTag + Wildcard + Any), got %d", base)
+	if base != 34 {
+		t.Fatalf("fresh World.Count(): want 34 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Relationship + Target + Trait + PairIsTag + With + Wildcard + Any), got %d", base)
 	}
 }

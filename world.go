@@ -80,8 +80,10 @@ type World struct {
 	targetID             ID                              // built-in Target usage-constraint trait entity (index 29)
 	traitID              ID                              // built-in Trait usage-constraint trait entity (index 30)
 	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 32; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 33; _; first user entity at index 34)
+	withID               ID                              // built-in With trait entity (index 32)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 33; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 34; _; first user entity at index 35)
+	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies    map[ID]bool                     // relationship entity → exclusive flag
@@ -151,9 +153,10 @@ type World struct {
 //   - Index 29: Target built-in usage-constraint trait entity
 //   - Index 30: Trait built-in usage-constraint trait entity
 //   - Index 31: PairIsTag built-in relationship trait entity
-//   - Index 32: Wildcard built-in query-term sentinel (*)
-//   - Index 33: Any built-in query-term sentinel (_)
-//   - Index 34+: user entities (NewEntity)
+//   - Index 32: With built-in relationship trait entity
+//   - Index 33: Wildcard built-in query-term sentinel (*)
+//   - Index 34: Any built-in query-term sentinel (_)
+//   - Index 35+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -349,13 +352,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(pairIsTag))
 	w.pairIsTagID = pairIsTag
-	// Allocate the built-in Wildcard query-term sentinel (gets index 32).
+	// Allocate the built-in With trait entity (gets index 32).
+	with := w.index.Alloc()
+	rec = w.index.Get(with)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(with))
+	w.withID = with
+	// Allocate the built-in Wildcard query-term sentinel (gets index 33).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 33).
+	// Allocate the built-in Any query-term sentinel (gets index 34).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -385,12 +394,13 @@ func New() *World {
 	applyTraversablePolicy(w, w.childOfID)
 	applyTraversablePolicy(w, w.isAID)
 	// Bootstrap Relationship on built-in relationships, mirroring C bootstrap.c:1280-1288.
-	// SlotOf, DependsOn, With, and Identifier are upstream but not yet ported; skip.
+	// SlotOf, DependsOn, and Identifier are upstream but not yet ported; skip.
 	applyRelationshipPolicy(w, w.isAID)
 	applyRelationshipPolicy(w, w.childOfID)
 	applyRelationshipPolicy(w, w.onDeleteID)
 	applyRelationshipPolicy(w, w.onDeleteTargetID)
 	applyRelationshipPolicy(w, w.onInstantiateID)
+	applyRelationshipPolicy(w, w.withID)
 	// Bootstrap Target on built-in target entities, mirroring C bootstrap.c:1291-1293.
 	// Note: Remove, Delete, Cascade, Throw are NOT marked Target in upstream.
 	applyTargetPolicy(w, w.overrideID)
@@ -402,7 +412,7 @@ func New() *World {
 	applyTraitPolicy(w, w.isAID)
 	applyTraitPolicy(w, w.childOfID)
 	// Bootstrap PairIsTag on IsA and ChildOf, mirroring C bootstrap.c:1272-1273.
-	// SlotOf, DependsOn, Flag, and With are upstream but not yet ported; skip.
+	// SlotOf, DependsOn, and Flag are upstream but not yet ported; skip.
 	applyPairIsTagPolicy(w, w.isAID)
 	applyPairIsTagPolicy(w, w.childOfID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
