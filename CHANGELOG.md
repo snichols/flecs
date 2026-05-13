@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.48.0 — 2026-05-13 — Phase 15.16: PairIsTag relationship trait
+
+### Added
+
+- **`SetPairIsTag(w, relID)`** — marks `relID` as a PairIsTag relationship: all pairs `(relID, T)` are forced to behave as tags; `SetPair[T]` and `SetPairByID` (both immediate and deferred paths) panic with a message naming the relationship and the PairIsTag trait. Idempotent.
+- **`IsPairIsTag(s scope, relID ID) bool`** — reports whether `relID` has been marked PairIsTag. Accepts `scope` (per Phase 15.8 convention) so it works inside `Read` and `Write` blocks. Also accepts a pair ID — if `relID.IsPair()`, the relationship side is extracted before the lookup, matching the ergonomic shape of `IsTrait`/`IsRelationship`.
+- **`w.PairIsTag() ID`** — returns the built-in PairIsTag trait entity (index 31). Bare-tag form: `fw.AddID(relID, w.PairIsTag())` is equivalent to `SetPairIsTag(w, relID)`.
+- **Set-after-use trap** — `SetPairIsTag(R)` checks the component registry for any pair `(R, *)` with non-zero-size TypeInfo. If found, it panics with a message naming both the pair and the data type. This mirrors C `flecs_assert_relation_unused` in `bootstrap.c:270-290`. Bare-tag adds (zero-size TypeInfo) are unaffected.
+- **Write-time enforcement** — `checkPairIsTag` fires at three call sites: `setPairImmediate[T]` (id_ops.go), `w.SetPairByID` (value_ops.go), `SetPair[T]` deferred path (scope.go), and `(*Writer).SetPairByID` (scope.go). The deferred path panics at enqueue time so the error surfaces at the user's call site, not at flush.
+- **`pairistag_test.go`** — 12 test cases: tag-form add unaffected; `SetPair[T]` panics; `SetPairByID` panics; pre-existing data blocks `SetPairIsTag`; bare-tag dispatch via `AddID`; idempotent round-trip; bootstrap of `IsA`/`ChildOf`; composition with Exclusive; deferred enqueue panic; `RemoveID` still works; `IsPairIsTag` on a pair ID; skip-different-relationship coverage.
+
+### Changed
+
+- **Built-in entity reindex** — PairIsTag inserted at index 31; Wildcard shifts 31→32; Any shifts 32→33; user entities now start at index 34.
+- **Built-in bootstrap** — `IsA` and `ChildOf` are bootstrapped PairIsTag at world creation, mirroring C `bootstrap.c:1272-1273`. SlotOf/DependsOn/Flag/With are not yet ported.
+- **Divergence from C** — In C `EcsPairIsTag` retroactively sets `type_info = NULL` on all existing `(R, *)` id records when the trait is applied. In Go flecs the set-after-use trap panics instead, keeping storage consistent without a retroactive rewrite.
+
 ## v0.47.0 — 2026-05-13 — Phase 15.15: Relationship/Target/Trait usage constraints
 
 ### Added

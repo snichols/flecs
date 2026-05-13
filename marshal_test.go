@@ -49,7 +49,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.RemoveAction(): {}, w.DeleteAction(): {}, w.PanicAction(): {},
 		w.Exclusive(): {}, w.CanToggle(): {}, w.Symmetric(): {}, w.Transitive(): {},
 		w.Reflexive(): {}, w.Acyclic(): {}, w.Final(): {}, w.OneOf(): {}, w.Singleton(): {}, w.WriteOnce(): {}, w.Traversable(): {},
-		w.Relationship(): {}, w.Target(): {}, w.Trait(): {},
+		w.Relationship(): {}, w.Target(): {}, w.Trait(): {}, w.PairIsTag(): {},
 		w.Wildcard(): {}, w.Any(): {},
 	}
 	for _, cid := range w.Components() {

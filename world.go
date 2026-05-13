@@ -79,8 +79,9 @@ type World struct {
 	relationshipID       ID                              // built-in Relationship usage-constraint trait entity (index 28)
 	targetID             ID                              // built-in Target usage-constraint trait entity (index 29)
 	traitID              ID                              // built-in Trait usage-constraint trait entity (index 30)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 31; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 32; _; first user entity at index 33)
+	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 32; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 33; _; first user entity at index 34)
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
 	exclusivePolicies    map[ID]bool                     // relationship entity → exclusive flag
@@ -99,6 +100,7 @@ type World struct {
 	relationshipPolicies map[ID]bool                     // entity index → Relationship usage-constraint flag
 	targetPolicies       map[ID]bool                     // entity index → Target usage-constraint flag
 	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
+	pairIsTagPolicies    map[ID]bool                     // relationship entity index → PairIsTag flag
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -148,9 +150,10 @@ type World struct {
 //   - Index 28: Relationship built-in usage-constraint trait entity
 //   - Index 29: Target built-in usage-constraint trait entity
 //   - Index 30: Trait built-in usage-constraint trait entity
-//   - Index 31: Wildcard built-in query-term sentinel (*)
-//   - Index 32: Any built-in query-term sentinel (_)
-//   - Index 33+: user entities (NewEntity)
+//   - Index 31: PairIsTag built-in relationship trait entity
+//   - Index 32: Wildcard built-in query-term sentinel (*)
+//   - Index 33: Any built-in query-term sentinel (_)
+//   - Index 34+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -340,13 +343,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(trait))
 	w.traitID = trait
-	// Allocate the built-in Wildcard query-term sentinel (gets index 31).
+	// Allocate the built-in PairIsTag trait entity (gets index 31).
+	pairIsTag := w.index.Alloc()
+	rec = w.index.Get(pairIsTag)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(pairIsTag))
+	w.pairIsTagID = pairIsTag
+	// Allocate the built-in Wildcard query-term sentinel (gets index 32).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 32).
+	// Allocate the built-in Any query-term sentinel (gets index 33).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -392,6 +401,10 @@ func New() *World {
 	// the target slot despite having the Relationship trait.
 	applyTraitPolicy(w, w.isAID)
 	applyTraitPolicy(w, w.childOfID)
+	// Bootstrap PairIsTag on IsA and ChildOf, mirroring C bootstrap.c:1272-1273.
+	// SlotOf, DependsOn, Flag, and With are upstream but not yet ported; skip.
+	applyPairIsTagPolicy(w, w.isAID)
+	applyPairIsTagPolicy(w, w.childOfID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

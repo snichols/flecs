@@ -311,6 +311,7 @@ func (fw *Writer) SetPairByID(e, rel, tgt ID, v any) {
 	if v == nil {
 		panic("flecs: SetPairByID: v must not be nil")
 	}
+	checkPairIsTag(fw.world, rel)
 	pairID := MakePair(rel, tgt)
 	vType := reflect.TypeOf(v)
 	if existing, ok := fw.world.registry.LookupByID(pairID); ok {
@@ -471,6 +472,7 @@ func SetPair[T any](fw *Writer, e ID, rel ID, tgt ID, v T) {
 		setPairImmediate[T](fw.world, e, rel, tgt, v)
 		return
 	}
+	checkPairIsTag(fw.world, rel)
 	pairID := MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[T](fw.world.registry, pairID)
 	if pairInfo.Size > 0 {

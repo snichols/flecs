@@ -14,8 +14,9 @@ import (
 // OnDelete(12), OnDeleteTarget(13), RemoveAction(14), DeleteAction(15),
 // PanicAction(16), Exclusive(17), CanToggle(18), Symmetric(19), Transitive(20),
 // Reflexive(21), Acyclic(22), Final(23), OneOf(24), Singleton(25), WriteOnce(26),
-// Traversable(27), Relationship(28), Target(29), Trait(30), Wildcard(31), Any(32).
-const builtinEntityCount = 32
+// Traversable(27), Relationship(28), Target(29), Trait(30), PairIsTag(31),
+// Wildcard(32), Any(33).
+const builtinEntityCount = 33
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

@@ -136,6 +136,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// Bare Trait tag: mark e as a Trait entity (exempts it from Relationship's
 		// no-tag-as-target check when appearing in a pair target slot).
 		applyTraitPolicy(w, e)
+	} else if id.Index() == w.pairIsTagID.Index() {
+		// Bare PairIsTag tag: mark e's relationship so all (e, *) pairs are tag-only.
+		// This is the fw.AddID(relID, w.PairIsTag()) form, mirroring C's
+		// ecs_add_id(world, MyRel, EcsPairIsTag).
+		applyPairIsTagPolicy(w, e)
 	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
@@ -286,6 +291,7 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 }
 
 func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
+	checkPairIsTag(w, rel)
 	pairID := MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[T](w.registry, pairID)
 	rec := w.index.Get(e)

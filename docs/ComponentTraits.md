@@ -504,22 +504,34 @@ _ = ok
 
 ### PairIsTag
 
-**What it does:** When added to a relationship, `PairIsTag` forces all pairs with that relationship to behave as tags — no component data is stored, even if the pair's target is a data-bearing component. This avoids a common pitfall where `(Serializable, Position)` accidentally stores a second copy of `Position` data.
+**Shipped in v0.48.0.** When added to a relationship, `PairIsTag` forces all pairs with that relationship to behave as tags — no component data is stored, even if the pair's target is a data-bearing component. This avoids a common pitfall where `(Serializable, Position)` accidentally stores a second copy of `Position` data.
 
-**What the C API looks like:**
+In Go flecs, pair data only materializes when a caller explicitly invokes `SetPair[T]` / `SetPairByID` / `RegisterPairData[T]`. `PairIsTag` is therefore primarily a **defensive declaration**: it makes those value-bearing paths panic on a marked relationship, preventing accidental promotion of an intended tag-pair into a data-pair. Built-in relationships `IsA` and `ChildOf` are bootstrapped as `PairIsTag`, mirroring C `bootstrap.c:1272-1273`.
 
-```c
-// C — not available in Go flecs
-ECS_TAG(world, Serializable);
-ecs_add_id(world, Serializable, EcsPairIsTag);
+```go
+// Mark a relationship as PairIsTag.
+flecs.SetPairIsTag(w, myRelID)
+// or bare-tag form:
+fw.AddID(myRelID, w.PairIsTag())
 
-// Now (Serializable, Position) is a tag — no Position data stored
-ecs_add_pair(world, e, Serializable, ecs_id(Position));
+// Tag-form pair add is still allowed — no data stored.
+fw.AddID(e, flecs.MakePair(myRelID, targetID))
+r.HasID(e, flecs.MakePair(myRelID, targetID)) // → true
+
+// Value-bearing operations now panic.
+// flecs.SetPair[Position](fw, e, myRelID, targetID, v) // panics: PairIsTag
+
+// Query whether a relationship is PairIsTag.
+flecs.IsPairIsTag(fr, myRelID) // → true
+// Also works with a pair ID directly.
+flecs.IsPairIsTag(fr, flecs.MakePair(myRelID, targetID)) // → true
 ```
 
-**Workaround:** Use a zero-size struct as the relationship first element to ensure no data storage. In Go flecs all relationships that use a zero-size struct type as the first pair element already store no data naturally.
+**Set-after-use trap.** Calling `SetPairIsTag(R)` after `SetPair[T](e, R, T, v)` panics with a descriptive message. Mark the relationship before using it as a data-pair.
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#additional-gaps-discovered-in-phase-143-relationships-port): *PairIsTag trait*.
+**Workaround for the zero-data case.** If your relationship uses a zero-size struct type as its first pair element, Go flecs already stores no data naturally. `PairIsTag` adds the extra enforcement layer that prevents *future* callers from accidentally promoting it to a data-pair.
+
+**Divergence from C.** In C, `EcsPairIsTag` also clears existing id-record `type_info` pointers for all `(R, *)` pairs already registered under `R`. In Go flecs the set-after-use check rejects that case with a panic instead, keeping storage consistent without a retroactive rewrite.
 
 ---
 
@@ -886,7 +898,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Final** | `EcsFinal` | ✅ shipped (v0.42.0) | `SetFinal(w, entityID)` / `IsFinal(scope, entityID)`; `w.Final()` bare-tag form; write-time enforcement: adding `(IsA, target)` panics if target is Final; no built-in ships Final; self-pair `(IsA, e)` also rejected when e is Final |
 | **OneOf** | `EcsOneOf` | ✅ shipped (v0.43.0) | `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)`; `w.OneOf()` bare-tag and pair forms; write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent; Wildcard/Any exempt; no built-in ships OneOf |
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
-| **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
+| **PairIsTag** | `EcsPairIsTag` | ✅ shipped (v0.48.0) | `SetPairIsTag(w, relID)` / `IsPairIsTag(scope, relID)`; `w.PairIsTag()` bare-tag form; write-time enforcement: `SetPair[T]`/`SetPairByID` panic on PairIsTag relationship; set-after-use trap panics; `IsPairIsTag` accepts pair IDs; `IsA` and `ChildOf` bootstrapped |
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
 | **Relationship** | `EcsRelationship` | ✅ shipped (v0.47.0) | `SetRelationship(w, id)` / `IsRelationship(scope, id)`; `w.Relationship()` bare-tag form; write-time enforcement: bare-tag add panics; pair target-slot add panics unless target has `Trait`; `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped |
 | **Singleton** | `EcsSingleton` | ✅ shipped (v0.44.0) | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity(scope, compID)` / `Singleton[T](scope)` / `WriteSingleton[T](fw, e, v)`; `w.Singleton()` bare-tag form; at-most-one-holder (Go semantic differs from C must-be-self); write-time panic names both entities; slot released on Remove or entity delete; no built-in ships Singleton |
