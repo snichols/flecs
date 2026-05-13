@@ -126,7 +126,21 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// This is the fw.AddID(relID, w.Traversable()) form, mirroring C's
 		// ecs_add_id(world, MyRel, EcsTraversable).
 		applyTraversablePolicy(w, e)
+	} else if id.Index() == w.relationshipID.Index() {
+		// Bare Relationship tag: mark e as a Relationship-constrained entity.
+		applyRelationshipPolicy(w, e)
+	} else if id.Index() == w.targetID.Index() {
+		// Bare Target tag: mark e as a Target-constrained entity.
+		applyTargetPolicy(w, e)
+	} else if id.Index() == w.traitID.Index() {
+		// Bare Trait tag: mark e as a Trait entity (exempts it from Relationship's
+		// no-tag-as-target check when appearing in a pair target slot).
+		applyTraitPolicy(w, e)
 	}
+	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
+	// bare-tag and pair-form adds, before any migration. Mirrors C
+	// component_index.c:384-481.
+	checkUsageConstraints(w, id)
 	// Acyclic cycle check: if adding (e, R, target) and R is acyclic, verify
 	// that target cannot already reach e via R. Write-time rejection is a
 	// deliberate divergence from C (which guards at lookup/traversal time).

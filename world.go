@@ -38,74 +38,80 @@ type Table = table.Table
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	mu                  sync.RWMutex // guards Read/Write scopes
-	writeCapability     Writer       // cached Writer; &writeCapability avoids per-Write allocation
-	readCapability      Reader       // cached Reader; &readCapability avoids per-Read allocation
-	index               *entityindex.Index
-	registry            *component.Registry
-	tables              map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty               *table.Table                    // canonical empty-signature table for new entities
-	compIndex           *componentindex.Index           // reverse map: component ID → tables containing it
-	observers           map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
-	cachedQueries       []*CachedQuery                  // lazily allocated; notified on new table creation
-	systems             []*System                       // lazily allocated; compacted in NewSystem
-	childOfID           ID                              // built-in ChildOf relationship entity (index 1)
-	isAID               ID                              // built-in IsA relationship entity (index 2)
-	nameID              ID                              // built-in Name component entity (index 3)
-	preUpdateID         ID                              // built-in PreUpdate phase entity (index 4)
-	onUpdateID          ID                              // built-in OnUpdate phase entity (index 5)
-	postUpdateID        ID                              // built-in PostUpdate phase entity (index 6)
-	onFixedUpdateID     ID                              // built-in OnFixedUpdate phase entity (index 7)
-	onInstantiateID     ID                              // built-in OnInstantiate relationship entity (index 8)
-	inheritID           ID                              // built-in Inherit trait entity (index 9)
-	overrideID          ID                              // built-in Override trait entity (index 10)
-	dontInheritID       ID                              // built-in DontInherit trait entity (index 11)
-	onDeleteID          ID                              // built-in OnDelete trait relationship entity (index 12)
-	onDeleteTargetID    ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
-	removeActionID      ID                              // built-in Remove cleanup action entity (index 14)
-	deleteActionID      ID                              // built-in Delete cleanup action entity (index 15)
-	panicActionID       ID                              // built-in Panic cleanup action entity (index 16)
-	exclusiveID         ID                              // built-in Exclusive trait entity (index 17)
-	canToggleID         ID                              // built-in CanToggle trait entity (index 18)
-	symmetricID         ID                              // built-in Symmetric trait entity (index 19)
-	transitiveID        ID                              // built-in Transitive trait entity (index 20)
-	reflexiveID         ID                              // built-in Reflexive trait entity (index 21)
-	acyclicID           ID                              // built-in Acyclic trait entity (index 22)
-	finalID             ID                              // built-in Final trait entity (index 23)
-	oneOfID             ID                              // built-in OneOf trait entity (index 24)
-	singletonID         ID                              // built-in Singleton trait entity (index 25)
-	writeOnceID         ID                              // built-in WriteOnce trait entity (index 26)
-	traversableID       ID                              // built-in Traversable trait entity (index 27)
-	wildcardID          ID                              // built-in Wildcard query-term sentinel (index 28; *)
-	anyID               ID                              // built-in Any query-term sentinel (index 29; _; first user entity at index 30)
-	cleanupPolicies     map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
-	instantiatePolicies map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
-	exclusivePolicies   map[ID]bool                     // relationship entity → exclusive flag
-	canTogglePolicies   map[ID]bool                     // component entity index → CanToggle flag
-	symmetricPolicies   map[ID]bool                     // relationship entity index → symmetric flag
-	transitivePolicies  map[ID]bool                     // relationship entity index → transitive flag
-	reflexivePolicies   map[ID]bool                     // relationship entity index → reflexive flag
-	acyclicPolicies     map[ID]bool                     // relationship entity index → acyclic flag
-	finalPolicies       map[ID]bool                     // entity index → final flag
-	oneOfPolicies       map[ID]ID                       // relationship entity index → required ChildOf parent (raw index)
-	singletonPolicies   map[ID]bool                     // component entity index → singleton flag
-	singletonInstances  map[ID]ID                       // component entity index → entity currently holding it
-	writeOncePolicies   map[ID]bool                     // component entity index → writeOnce flag
-	writeOnceHasBeenSet map[writeOnceKey]bool           // per-(entity-index, component-ID) first-write tracking
-	traversablePolicies map[ID]bool                     // relationship entity index → traversable flag
-	exclusiveAccess     atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
-	exclusiveThread     string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	stages              []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
-	workerStageWriters  []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
-	workerCount         int                             // number of persistent goroutines in the worker pool; 0 = serial
-	workerCh            chan func()                     // job channel; nil when workerCount == 0
-	inProgress          bool                            // true while Progress is executing
-	time                float32                         // total accumulated simulation time
-	frameCount          uint64                          // number of Progress calls
-	fixedTimestep       float32                         // fixed step size; 0 means disabled
-	fixedAccumulator    float32                         // internal accumulator for fixed-step dispatch
-	lastFramePhases     [4]PhaseStats                   // per-phase timing from the most recent Progress call
-	logger              *slog.Logger                    // optional structured logger; nil means no logging
+	mu                   sync.RWMutex // guards Read/Write scopes
+	writeCapability      Writer       // cached Writer; &writeCapability avoids per-Write allocation
+	readCapability       Reader       // cached Reader; &readCapability avoids per-Read allocation
+	index                *entityindex.Index
+	registry             *component.Registry
+	tables               map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty                *table.Table                    // canonical empty-signature table for new entities
+	compIndex            *componentindex.Index           // reverse map: component ID → tables containing it
+	observers            map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	cachedQueries        []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems              []*System                       // lazily allocated; compacted in NewSystem
+	childOfID            ID                              // built-in ChildOf relationship entity (index 1)
+	isAID                ID                              // built-in IsA relationship entity (index 2)
+	nameID               ID                              // built-in Name component entity (index 3)
+	preUpdateID          ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID           ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID         ID                              // built-in PostUpdate phase entity (index 6)
+	onFixedUpdateID      ID                              // built-in OnFixedUpdate phase entity (index 7)
+	onInstantiateID      ID                              // built-in OnInstantiate relationship entity (index 8)
+	inheritID            ID                              // built-in Inherit trait entity (index 9)
+	overrideID           ID                              // built-in Override trait entity (index 10)
+	dontInheritID        ID                              // built-in DontInherit trait entity (index 11)
+	onDeleteID           ID                              // built-in OnDelete trait relationship entity (index 12)
+	onDeleteTargetID     ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
+	removeActionID       ID                              // built-in Remove cleanup action entity (index 14)
+	deleteActionID       ID                              // built-in Delete cleanup action entity (index 15)
+	panicActionID        ID                              // built-in Panic cleanup action entity (index 16)
+	exclusiveID          ID                              // built-in Exclusive trait entity (index 17)
+	canToggleID          ID                              // built-in CanToggle trait entity (index 18)
+	symmetricID          ID                              // built-in Symmetric trait entity (index 19)
+	transitiveID         ID                              // built-in Transitive trait entity (index 20)
+	reflexiveID          ID                              // built-in Reflexive trait entity (index 21)
+	acyclicID            ID                              // built-in Acyclic trait entity (index 22)
+	finalID              ID                              // built-in Final trait entity (index 23)
+	oneOfID              ID                              // built-in OneOf trait entity (index 24)
+	singletonID          ID                              // built-in Singleton trait entity (index 25)
+	writeOnceID          ID                              // built-in WriteOnce trait entity (index 26)
+	traversableID        ID                              // built-in Traversable trait entity (index 27)
+	relationshipID       ID                              // built-in Relationship usage-constraint trait entity (index 28)
+	targetID             ID                              // built-in Target usage-constraint trait entity (index 29)
+	traitID              ID                              // built-in Trait usage-constraint trait entity (index 30)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 31; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 32; _; first user entity at index 33)
+	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
+	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
+	exclusivePolicies    map[ID]bool                     // relationship entity → exclusive flag
+	canTogglePolicies    map[ID]bool                     // component entity index → CanToggle flag
+	symmetricPolicies    map[ID]bool                     // relationship entity index → symmetric flag
+	transitivePolicies   map[ID]bool                     // relationship entity index → transitive flag
+	reflexivePolicies    map[ID]bool                     // relationship entity index → reflexive flag
+	acyclicPolicies      map[ID]bool                     // relationship entity index → acyclic flag
+	finalPolicies        map[ID]bool                     // entity index → final flag
+	oneOfPolicies        map[ID]ID                       // relationship entity index → required ChildOf parent (raw index)
+	singletonPolicies    map[ID]bool                     // component entity index → singleton flag
+	singletonInstances   map[ID]ID                       // component entity index → entity currently holding it
+	writeOncePolicies    map[ID]bool                     // component entity index → writeOnce flag
+	writeOnceHasBeenSet  map[writeOnceKey]bool           // per-(entity-index, component-ID) first-write tracking
+	traversablePolicies  map[ID]bool                     // relationship entity index → traversable flag
+	relationshipPolicies map[ID]bool                     // entity index → Relationship usage-constraint flag
+	targetPolicies       map[ID]bool                     // entity index → Target usage-constraint flag
+	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
+	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
+	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
+	workerStageWriters   []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
+	workerCount          int                             // number of persistent goroutines in the worker pool; 0 = serial
+	workerCh             chan func()                     // job channel; nil when workerCount == 0
+	inProgress           bool                            // true while Progress is executing
+	time                 float32                         // total accumulated simulation time
+	frameCount           uint64                          // number of Progress calls
+	fixedTimestep        float32                         // fixed step size; 0 means disabled
+	fixedAccumulator     float32                         // internal accumulator for fixed-step dispatch
+	lastFramePhases      [4]PhaseStats                   // per-phase timing from the most recent Progress call
+	logger               *slog.Logger                    // optional structured logger; nil means no logging
 }
 
 // New initializes and returns an empty World.
@@ -139,9 +145,12 @@ type World struct {
 //   - Index 25: Singleton built-in trait entity
 //   - Index 26: WriteOnce built-in trait entity
 //   - Index 27: Traversable built-in trait entity
-//   - Index 28: Wildcard built-in query-term sentinel (*)
-//   - Index 29: Any built-in query-term sentinel (_)
-//   - Index 30+: user entities (NewEntity)
+//   - Index 28: Relationship built-in usage-constraint trait entity
+//   - Index 29: Target built-in usage-constraint trait entity
+//   - Index 30: Trait built-in usage-constraint trait entity
+//   - Index 31: Wildcard built-in query-term sentinel (*)
+//   - Index 32: Any built-in query-term sentinel (_)
+//   - Index 33+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -313,13 +322,31 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(traversable))
 	w.traversableID = traversable
-	// Allocate the built-in Wildcard query-term sentinel (gets index 28).
+	// Allocate the built-in Relationship usage-constraint trait entity (gets index 28).
+	relationship := w.index.Alloc()
+	rec = w.index.Get(relationship)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(relationship))
+	w.relationshipID = relationship
+	// Allocate the built-in Target usage-constraint trait entity (gets index 29).
+	target := w.index.Alloc()
+	rec = w.index.Get(target)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(target))
+	w.targetID = target
+	// Allocate the built-in Trait usage-constraint trait entity (gets index 30).
+	trait := w.index.Alloc()
+	rec = w.index.Get(trait)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(trait))
+	w.traitID = trait
+	// Allocate the built-in Wildcard query-term sentinel (gets index 31).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 29).
+	// Allocate the built-in Any query-term sentinel (gets index 32).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -348,6 +375,23 @@ func New() *World {
 	// as a side effect; see CHANGELOG v0.46.0 for the behavior-change note.
 	applyTraversablePolicy(w, w.childOfID)
 	applyTraversablePolicy(w, w.isAID)
+	// Bootstrap Relationship on built-in relationships, mirroring C bootstrap.c:1280-1288.
+	// SlotOf, DependsOn, With, and Identifier are upstream but not yet ported; skip.
+	applyRelationshipPolicy(w, w.isAID)
+	applyRelationshipPolicy(w, w.childOfID)
+	applyRelationshipPolicy(w, w.onDeleteID)
+	applyRelationshipPolicy(w, w.onDeleteTargetID)
+	applyRelationshipPolicy(w, w.onInstantiateID)
+	// Bootstrap Target on built-in target entities, mirroring C bootstrap.c:1291-1293.
+	// Note: Remove, Delete, Cascade, Throw are NOT marked Target in upstream.
+	applyTargetPolicy(w, w.overrideID)
+	applyTargetPolicy(w, w.inheritID)
+	applyTargetPolicy(w, w.dontInheritID)
+	// Bootstrap Trait on ChildOf and IsA, mirroring C bootstrap.c:1060-1061.
+	// This permits patterns like (SomeRel, ChildOf) where ChildOf appears in
+	// the target slot despite having the Relationship trait.
+	applyTraitPolicy(w, w.isAID)
+	applyTraitPolicy(w, w.childOfID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

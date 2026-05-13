@@ -10,6 +10,7 @@ See the [Quickstart](Quickstart.md) for an introductory overview, [Relationships
 - [Implemented traits](#implemented-traits)
   - [Inheritable trait](#inheritable-trait)
   - [OnInstantiate trait](#oninstantiate-trait)
+  - [Relationship / Target / Trait](#relationship--target--trait)
 - [Unimplemented traits](#unimplemented-traits)
   - [Acyclic](#acyclic)
   - [CanToggle](#cantoggle)
@@ -22,7 +23,6 @@ See the [Quickstart](Quickstart.md) for an introductory overview, [Relationships
   - [OrderedChildren](#orderedchildren)
   - [PairIsTag](#pairistaag)
   - [Reflexive](#reflexive)
-  - [Relationship / Target / Trait](#relationship--target--trait)
   - [Singleton](#singleton)
   - [Sparse](#sparse)
   - [Symmetric](#symmetric)
@@ -553,14 +553,72 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(myRelID, a)))
 
 ### Relationship / Target / Trait
 
+These three traits ship together in Phase 15.15 (v0.47.0) because `Trait` only has meaning in combination with `Relationship` — it exempts a pair target from `Relationship`'s "no-tag-as-target" check.
+
 **What they do:**
-- `Relationship` enforces that an entity can only be used as the first element (relationship side) of a pair. Adding it as a plain tag or as a pair target will panic.
-- `Target` enforces that an entity can only be used as the second element (target side) of a pair.
-- `Trait` marks an entity as a trait so that some `Relationship` constraints are relaxed (trait entities are still allowed as pair targets even when the relationship has the `Relationship` flag).
 
-**Workaround:** None — the Go port does not enforce these usage constraints.
+- **`Relationship`** — an entity marked `Relationship` can only appear as the _relationship_ (first element) of a pair. Attempting to add it as a plain tag or as a pair target panics at write time with a message naming the entity and the violated constraint.
+- **`Target`** — an entity marked `Target` can only appear as the _target_ (second element) of a pair. Adding it as a plain tag or as the relationship side of a pair panics.
+- **`Trait`** — exempts an entity from `Relationship`'s "no-tag-as-target" check when it appears in the target slot. `ChildOf` and `IsA` are bootstrapped `Trait` at world creation, which is what permits patterns like `(SomeRel, ChildOf)` where a `Relationship`-marked entity appears in the target slot.
 
-> **Not yet ported in Go flecs.**
+**Design notes:**
+
+- Wildcard and Any are **not** bootstrapped with either `Relationship` or `Target`. This keeps `(R, *)` and `(R, _)` query patterns working without any special-casing, mirroring the `!ecs_id_is_wildcard(rel)` guard in C `component_index.c:396`.
+- The self-pair `(R, R)` panics when R has `Relationship` but not `Trait`, because R is in the target slot and the check fires naturally.
+- Once set, the markers are sticky — there is no API to remove them, matching the convention of `Final`, `Exclusive`, and every other trait in this codebase.
+
+**Bootstrap:** At world creation the following entities are automatically classified:
+
+- `Relationship`: `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate`
+- `Target`: `Override`, `Inherit`, `DontInherit` (note: `RemoveAction`/`DeleteAction`/`PanicAction` are **not** marked Target, matching upstream)
+- `Trait`: `IsA`, `ChildOf`
+
+**API:**
+
+```go
+// Mark entities with usage constraints.
+flecs.SetRelationship(w, myRelID)
+flecs.SetTarget(w, myTgtID)
+flecs.SetTrait(w, myID)      // exempts myID from Relationship's no-target-slot check
+
+// Bare-tag forms (equivalent to Set* calls above).
+fw.AddID(myRelID, w.Relationship())
+fw.AddID(myTgtID, w.Target())
+fw.AddID(myID, w.Trait())
+
+// Query the trait (works inside Read or Write scopes).
+flecs.IsRelationship(scope, myRelID) // bool
+flecs.IsTarget(scope, myTgtID)       // bool
+flecs.IsTrait(scope, myID)           // bool
+```
+
+**Usage examples:**
+
+```go
+// Define a relationship-only entity.
+w.Write(func(fw *flecs.Writer) {
+    Likes = fw.NewEntity()
+})
+flecs.SetRelationship(w, Likes)
+
+// OK: Likes in relationship slot.
+w.Write(func(fw *flecs.Writer) {
+    flecs.AddID(fw, alice, flecs.MakePair(Likes, pizza))
+})
+
+// Panics: Likes used as bare tag.
+// flecs.AddID(fw, alice, Likes)
+
+// Panics: Likes in target slot (no Trait exemption).
+// flecs.AddID(fw, alice, flecs.MakePair(Owns, Likes))
+
+// Trait exemption: mark M as Trait so (Likes, M) is allowed.
+flecs.SetRelationship(w, Likes)
+flecs.SetTrait(w, M)
+w.Write(func(fw *flecs.Writer) {
+    flecs.AddID(fw, alice, flecs.MakePair(Likes, M)) // OK — M is Trait
+})
+```
 
 ---
 
@@ -830,12 +888,12 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **OrderedChildren** | `EcsOrderedChildren` | ⏳ planned | No guaranteed child iteration order |
 | **PairIsTag** | `EcsPairIsTag` | ⏳ planned | No forced tag semantics on data-pair relationships |
 | **Reflexive** | `EcsReflexive` | ✅ shipped (v0.39.0) | `SetReflexive(w, relID)` / `IsReflexive(w, relID)`; `w.Reflexive()` bare-tag form; `HasID(e, (R,e))` returns true; query self-match includes target's own table; composes with Transitive; `IsA` bootstrapped reflexive |
-| **Relationship** | `EcsRelationship` | ⏳ planned | No usage-as-relationship constraint |
+| **Relationship** | `EcsRelationship` | ✅ shipped (v0.47.0) | `SetRelationship(w, id)` / `IsRelationship(scope, id)`; `w.Relationship()` bare-tag form; write-time enforcement: bare-tag add panics; pair target-slot add panics unless target has `Trait`; `IsA`, `ChildOf`, `OnDelete`, `OnDeleteTarget`, `OnInstantiate` bootstrapped |
 | **Singleton** | `EcsSingleton` | ✅ shipped (v0.44.0) | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity(scope, compID)` / `Singleton[T](scope)` / `WriteSingleton[T](fw, e, v)`; `w.Singleton()` bare-tag form; at-most-one-holder (Go semantic differs from C must-be-self); write-time panic names both entities; slot released on Remove or entity delete; no built-in ships Singleton |
 | **Sparse** | `EcsSparse` | ⏳ planned | All components use archetype SoA storage |
 | **Symmetric** | `EcsSymmetric` | ✅ shipped (v0.36.0) | `SetSymmetric(w, relID)` / `IsSymmetric(w, relID)`; `w.Symmetric()` bare-tag form; mirror fires on add and remove; loop-guard via `HasComponent` idempotence; composes with `Exclusive` |
-| **Target** | `EcsTarget` | ⏳ planned | No usage-as-target constraint |
-| **Trait** | `EcsTrait` | ⏳ planned | No first-class trait marker |
+| **Target** | `EcsTarget` | ✅ shipped (v0.47.0) | `SetTarget(w, id)` / `IsTarget(scope, id)`; `w.Target()` bare-tag form; write-time enforcement: bare-tag add panics; pair relationship-slot add panics; `Override`, `Inherit`, `DontInherit` bootstrapped (not `RemoveAction`/`DeleteAction`/`PanicAction`) |
+| **Trait** | `EcsTrait` | ✅ shipped (v0.47.0) | `SetTrait(w, id)` / `IsTrait(scope, id)`; `w.Trait()` bare-tag form; exempts entity from `Relationship`'s no-target-slot check; `IsA` and `ChildOf` bootstrapped Trait (permits patterns like `(SomeRel, ChildOf)`) |
 | **Transitive** | `EcsTransitive` | ✅ shipped (v0.37.0) | `SetTransitive(w, relID)` / `IsTransitive(w, relID)`; `w.Transitive()` bare-tag form; lazy walk at query time with cycle detection and depth limit; cached query re-evaluates on table-create |
 | **Traversable** | `EcsTraversable` | ✅ shipped (v0.46.0) | `SetTraversable(w, relID)` / `IsTraversable(scope, relID)`; `w.Traversable()` bare-tag form; query-time enforcement: non-traversable `Up`/`SelfUp`/`Cascade` terms panic at construction; Traversable implies Acyclic; `ChildOf` + `IsA` bootstrapped Traversable; `IsA` now Acyclic as behavior change (see changelog) |
 | **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
@@ -849,8 +907,8 @@ The table below is the canonical reference for trait-system planning. Check the 
 
 | Sentinel | Index | Semantics |
 |---|---|---|
-| `w.Wildcard()` | 28 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
-| `w.Any()` | 29 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
+| `w.Wildcard()` | 31 | Emits one iterator row per concrete target. `(R, Wildcard)` yields one row per `(R, X)` pair in the table. |
+| `w.Any()` | 32 | Short-circuit match: at most one row per entity. `(R, Any)` yields one row if any `(R, X)` pair exists. |
 
 Both sentinels work in target and relationship positions. See [`docs/Queries.md`](Queries.md) § *Wildcard and Any query terms* for the full API.
 

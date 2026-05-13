@@ -663,17 +663,17 @@ func TestIsATagInheritance(t *testing.T) {
 
 // ── Count baseline ────────────────────────────────────────────────────────────
 
-// TestIsAWorldCountBaseline verifies that a fresh world has 29 built-in entities
+// TestIsAWorldCountBaseline verifies that a fresh world has 32 built-in entities
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
 // RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle, Symmetric,
 // Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, WriteOnce,
-// Traversable, Wildcard, Any)
+// Traversable, Relationship, Target, Trait, Wildcard, Any)
 // before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 29 {
-		t.Fatalf("fresh World.Count(): want 29 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Wildcard + Any), got %d", base)
+	if base != 32 {
+		t.Fatalf("fresh World.Count(): want 32 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Relationship + Target + Trait + Wildcard + Any), got %d", base)
 	}
 }

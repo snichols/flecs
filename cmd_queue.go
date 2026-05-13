@@ -166,7 +166,19 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			} else if !c.id.IsPair() && c.id.Index() == w.traversableID.Index() {
 				// Bare Traversable tag: mark entity as a traversable relationship.
 				applyTraversablePolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.relationshipID.Index() {
+				// Bare Relationship tag: mark entity as a Relationship-constrained entity.
+				applyRelationshipPolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.targetID.Index() {
+				// Bare Target tag: mark entity as a Target-constrained entity.
+				applyTargetPolicy(w, entity)
+			} else if !c.id.IsPair() && c.id.Index() == w.traitID.Index() {
+				// Bare Trait tag: mark entity as a Trait entity.
+				applyTraitPolicy(w, entity)
 			}
+			// Usage-constraint enforcement on deferred path (mirrors immediate path
+			// in id_ops.go). Panics at coalesce time, not at queue submission.
+			checkUsageConstraints(w, c.id)
 			// Acyclic cycle check on pair adds (deferred path).
 			if c.id.IsPair() && w.acyclicPolicies[ID(c.id.First().Index())] {
 				checkAcyclic(w, entity, c.id.First(), c.id.Second())

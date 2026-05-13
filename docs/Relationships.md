@@ -511,7 +511,9 @@ For full traversal examples see [Queries.md — Traversal](Queries.md#traversal)
 
 ## Relationship traits
 
-Relationship traits are components added to relationship *entities* to change their behaviour. Most traits from the C flecs implementation are not yet ported to Go.
+Relationship traits are components added to relationship *entities* to change their behaviour. Several C flecs traits are not yet ported to Go; see [ComponentTraits.md](ComponentTraits.md) for the full roadmap.
+
+> **Usage-constraint traits (Phase 15.15 / v0.47.0):** Use `flecs.SetRelationship(w, relID)` to declare that an entity may only appear as the *relationship* (first element) of a pair. Use `flecs.SetTarget(w, tgtID)` to declare that an entity may only appear as the *target* (second element). Use `flecs.SetTrait(w, id)` to exempt an entity from `Relationship`'s no-target-slot check (this is how `ChildOf` and `IsA` can still appear as pair targets). Write-time enforcement panics with a clear message naming the entity and the violated constraint. See [ComponentTraits.md § Relationship / Target / Trait](ComponentTraits.md#relationship--target--trait) for the full API and examples.
 
 ### Exclusive
 
