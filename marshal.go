@@ -12,6 +12,12 @@ import (
 type jsonWorld struct {
 	Version  int          `json:"version"`
 	Entities []jsonEntity `json:"entities"`
+	// SparseComponents is the list of component names that have the Sparse trait.
+	// Restored BEFORE entities so that the sparse routing is live during entity replay.
+	SparseComponents []string `json:"sparse_components,omitempty"`
+	// SparseData is component name → entity serial → JSON-encoded component value.
+	// Restored AFTER entities so that entity IDs exist when the sparse-set is populated.
+	SparseData map[string]map[int]json.RawMessage `json:"sparse_data,omitempty"`
 }
 
 // jsonEntity is the JSON representation of a single entity.
@@ -133,6 +139,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.PairIsTag():       {},
 		w.With():            {},
 		w.OrderedChildren(): {},
+		w.Sparse():          {},
 		w.Wildcard():        {},
 		w.Any():             {},
 	}
@@ -288,9 +295,46 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			entities = append(entities, je)
 		}
 
+		// Serialize sparse policies (component names with Sparse trait).
+		var sparseComponents []string
+		var sparseData map[string]map[int]json.RawMessage
+		if w.sparsePolicies != nil {
+			for key := range w.sparsePolicies {
+				cid := key // key is already ID(componentID.Index()), raw index as ID
+				// Find the actual component ID in the registry that matches this index.
+				// We stored the policy keyed by ID(componentID.Index()), so we need to
+				// look up the info by the raw index to get the name.
+				if ss, ok := w.sparseStorage[cid]; ok {
+					info := ss.typeInfo
+					if info != nil && info.Name != "" {
+						sparseComponents = append(sparseComponents, info.Name)
+						// Serialize each entity's sparse data.
+						for _, entry := range ss.dense {
+							if serial, ok := m.idToSerial[entry.entity]; ok {
+								raw, err := json.Marshal(reflect.NewAt(info.Type, entry.data).Elem().Interface())
+								if err != nil {
+									resultErr = err
+									return
+								}
+								if sparseData == nil {
+									sparseData = make(map[string]map[int]json.RawMessage)
+								}
+								if sparseData[info.Name] == nil {
+									sparseData[info.Name] = make(map[int]json.RawMessage)
+								}
+								sparseData[info.Name][serial] = raw
+							}
+						}
+					}
+				}
+			}
+		}
+
 		jw := jsonWorld{
-			Version:  1,
-			Entities: entities,
+			Version:          1,
+			Entities:         entities,
+			SparseComponents: sparseComponents,
+			SparseData:       sparseData,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -355,6 +399,18 @@ func (w *World) UnmarshalJSON(data []byte) error {
 					typeStringToType[ts] = info.Type
 				}
 			}
+		}
+
+		// Phase 0: restore sparse policies BEFORE entity allocation so that the
+		// sparse routing (w.sparsePolicies check in setImmediateByPtr) is live
+		// during entity replay. Components must be pre-registered before UnmarshalJSON.
+		for _, compName := range jw.SparseComponents {
+			info, ok := compByName[compName]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse component %q is not registered in the world", compName)
+				return
+			}
+			applySparsePolicy(w, info.ID)
 		}
 
 		// Phase 1: allocate all entities so future phases can resolve serial→ID.
@@ -434,6 +490,33 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				ptr := reflect.New(info.Type)
 				if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
 					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: component %q: %w", compName, err)
+					return
+				}
+				fw.SetByID(e, info.ID, ptr.Elem().Interface())
+			}
+		}
+
+		// Phase 3: restore sparse data AFTER entities are created so that entity
+		// IDs exist when the sparse-set is populated. Ordering: policies first
+		// (phase 0), entities second (phases 1-2), sparse values here (phase 3).
+		for compName, bySerial := range jw.SparseData {
+			info, ok := compByName[compName]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse data component %q is not registered in the world", compName)
+				return
+			}
+			if info.Type == nil || info.Size == 0 {
+				continue
+			}
+			for serial, raw := range bySerial {
+				e, ok := serialToID[serial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse data for %q references unknown serial %d", compName, serial)
+					return
+				}
+				ptr := reflect.New(info.Type)
+				if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse data for %q: %w", compName, err)
 					return
 				}
 				fw.SetByID(e, info.ID, ptr.Elem().Interface())

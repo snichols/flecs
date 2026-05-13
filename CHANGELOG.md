@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.51.0 — 2026-05-13 — Phase 15.19: Sparse component storage (storage path only)
+
+> **Part 1 of 2 — storage only.** This release ships the Sparse storage backend and the manual write/read/remove API. Query integration (query terms naming a Sparse component) is deferred to Phase 15.20 and is explicitly **not yet available**.
+
+### Added
+
+- **`SetSparse(w *World, componentID ID)`** — marks `componentID` as Sparse-stored. Idempotent. Panics if the component is a tag (zero-size) or not registered, or if it has already been added to any entity via archetype storage (set-before-first-use enforcement mirrors the Phase 15.16 `SetPairIsTag` after-use trap).
+- **`IsSparse(s scope, componentID ID) bool`** — reports whether `componentID` has the Sparse trait. Accepts `scope` so it works inside both `Read` and `Write` blocks (per Phase 15.8 convention).
+- **`w.Sparse() ID`** — returns the built-in Sparse trait entity (index 34). Bare-tag form: `fw.AddID(posID, w.Sparse())` is equivalent to `SetSparse(w, posID)`.
+- **Per-component sparse-set storage** — `World.sparseStorage map[ID]*sparseSet` holds one `sparseSet` per Sparse component. Each set uses a dense vector + sparse page index for O(1) insert/remove/lookup. Pointer stability is achieved by boxing each value on the heap via `reflect.New` so that dense slice growth never moves existing component addresses.
+- **No archetype transition** — Set/Remove on a Sparse component does NOT call `w.migrate`; the entity stays in its current archetype table. `HasID`, `OwnsID`, `GetRef`, `GetByID`, and `Get[T]` all consult the sparse-set rather than the archetype type.
+- **Write path** — `setImmediateByPtr` detects sparse via `w.sparsePolicies` and routes to `sparseSetInsert`. Fires `OnAdd` (first write) and `OnSet`. Honors `WriteOnce` and `Singleton` composition.
+- **Read path** — `getOnWorld[T]`, `getRefOnWorld[T]`, `GetByID`, `HasID`, `OwnsID`, `hasOnWorld[T]` all branch on `sparsePolicies` before consulting the archetype table.
+- **Remove path** — `removeImmediate[T]`, `removeIDImmediate`, and the deferred `Remove[T]`/`RemoveID` paths branch on `sparsePolicies`. Fires `OnRemove` before deletion.
+- **Deferred path** — `Set[T]` and `Remove[T]` inside a `Write` block queue `cmdSetByID`/`cmdRemoveID`; the flush dispatcher routes through `setImmediateByPtr`/`removeIDImmediate` which handle sparse correctly.
+- **`AddID` rejection** — `AddID(e, sparseComponentID)` panics with `"flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value"` on both immediate and deferred paths. Sparse components are data-bearing.
+- **Entity-delete cleanup** — `deleteOne` uses `w.sparseHeld map[uint32][]ID` (entity raw-index → sparse component IDs held) for O(k) cleanup where k = sparse components on the entity. Fires `OnRemove` before removal.
+- **`EachSparse[T](s scope, fn func(e ID, v *T))`** — iterates all entities holding T as Sparse in dense (insertion) order. The pointer `v` is the stable boxed pointer to the entity's data. Snapshot-on-entry makes in-callback mutation safe. Phase 15.20 will integrate Sparse into the query system; until then `EachSparse` is the bulk-iteration entry point.
+- **Marshal/unmarshal round-trip** — `MarshalJSON` adds a `sparse_policies` field (list of component names with the Sparse trait) and `sparse_data` (component name → entity serial → JSON-encoded value). Unmarshal order: `sparse_policies` restored before entities so the sparse routing is live during entity replay; `sparse_data` restored after entities are created so entity IDs exist. Documented with comments in `marshal.go`.
+- **`sparse_test.go`** — 24 test cases covering: basic Set/Get/Remove, multiple entities, no archetype transition, pointer stability across migration, HasID/OwnsID, AddID panic, SetSparse after-use panic, SetSparse on tag panic, entity delete cleanup, ID reuse, deferred path, EachSparse visits all/insertion order, EachSparse on unregistered/non-sparse types, remove from middle (swap-with-last), marshal round-trip, idempotence, bare-tag form, hooks (OnAdd/OnSet/OnRemove), composition with Final.
+
+### Changed
+
+- **Built-in entity reindex** — Sparse inserted at index 34; Wildcard shifts 34→35; Any shifts 35→36; user entities now start at index 37.
+- **`HasID` / `OwnsID`** — for non-pair IDs with the Sparse trait, these functions now consult the sparse-set index rather than the entity's archetype type. The entity's archetype does NOT contain Sparse components (consequence of no-archetype-transition semantics).
+
+### Go-flecs divergence from upstream C
+
+In upstream flecs, `EcsSparse` controls storage only; the "no archetype transition" property is separately contributed by `EcsIdDontFragment` (`src/storage/component_index.c:144-180`). Go flecs consolidates both behaviors into a single `Sparse` trait for v0.51.0. When `DontFragment` is ported in a later phase, the behaviors can be split. This consolidation is documented in `docs/ComponentTraits.md § Sparse`.
+
 ## v0.50.0 — 2026-05-13 — Phase 15.18: OrderedChildren trait
 
 ### Added

@@ -15,6 +15,14 @@ func getRefOnWorld[T any](w *World, e ID) *T {
 	if !ok || info.Component == 0 {
 		return nil
 	}
+	// Sparse: return boxed pointer directly — it is pointer-stable.
+	if w.sparsePolicies[ID(info.Component.Index())] {
+		ptr := sparseSetGet(w, e, info.Component)
+		if ptr == nil {
+			return nil
+		}
+		return (*T)(ptr)
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return nil
@@ -111,6 +119,14 @@ func (w *World) GetByID(e ID, id ID) (any, bool) {
 	info, ok := w.registry.LookupByID(id)
 	if !ok {
 		return nil, false
+	}
+	// Sparse: fetch from sparse-set.
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		ptr := sparseSetGet(w, e, id)
+		if ptr == nil {
+			return nil, false
+		}
+		return materializeByPtr(info, ptr), true
 	}
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -257,6 +273,35 @@ func setByIDImmediate(w *World, e ID, id ID, v any) {
 // w.registry; info is its TypeInfo. srcPtr points to the value to write
 // (nil for tag components, where the column write is a no-op).
 func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *component.TypeInfo) {
+	// Sparse: route to per-component sparse-set; do NOT call w.migrate.
+	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
+		rec := w.index.Get(e)
+		if rec == nil {
+			panic("flecs: Set called on dead entity")
+		}
+		key := ID(id.Index())
+		ss := w.sparseStorage[key]
+		_, isExisting := ss.index[e.Index()]
+		if srcPtr != nil {
+			checkAndSetWriteOnce(w, e, id)
+		}
+		if w.singletonPolicies[key] {
+			checkSingleton(w, id, e)
+		}
+		if !isExisting {
+			if srcPtr != nil {
+				sparseSetInsert(w, e, id, srcPtr)
+			}
+			w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
+			w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+		} else {
+			if srcPtr != nil {
+				sparseSetInsert(w, e, id, srcPtr)
+			}
+			w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+		}
+		return
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		panic("flecs: Set called on dead entity")

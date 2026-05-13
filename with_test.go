@@ -723,10 +723,13 @@ func TestWith_BuiltinIndexShift(t *testing.T) {
 	if w.OrderedChildren().Index() != 33 {
 		t.Errorf("OrderedChildren index: want 33, got %d", w.OrderedChildren().Index())
 	}
-	if w.Wildcard().Index() != 34 {
-		t.Errorf("Wildcard index: want 34, got %d", w.Wildcard().Index())
+	if w.Sparse().Index() != 34 {
+		t.Errorf("Sparse index: want 34, got %d", w.Sparse().Index())
 	}
-	if w.Any().Index() != 35 {
-		t.Errorf("Any index: want 35, got %d", w.Any().Index())
+	if w.Wildcard().Index() != 35 {
+		t.Errorf("Wildcard index: want 35, got %d", w.Wildcard().Index())
+	}
+	if w.Any().Index() != 36 {
+		t.Errorf("Any index: want 36, got %d", w.Any().Index())
 	}
 }
