@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.70.0 — 2026-05-14 — Phase 16.15: Multi-term observers
+
+Ports multi-term observer support from upstream C flecs. An `ObserveQuery` observer
+fires on a trigger component event only when the entity also passes all filter terms.
+Closes the term-set observer filters gap entry in `docs/README.md` line 157.
+
+### Added
+
+- **`ObserveQuery(w, event, terms, fn)`** — registers a multi-term observer for a single event. `terms[0]` is the trigger (TermAnd, determines the dispatch key); `terms[1:]` are filter terms evaluated per-entity at fire time. Returns `*Observer`; call `Unsubscribe` to cancel.
+- **`ObserveQueryID(w, triggerID, event, filterTerms, fn)`** — variant with an explicit trigger ID. Useful for pair-ID or raw-ID triggers that are inconvenient to express as `terms[0]`. Filter terms need not include a TermAnd for the trigger.
+- **`ObserveQueryEvents(w, events, terms, fn)`** — multi-event variant; callback receives the `EventKind` that fired.
+- **`ObserveQueryWithOptions(w, opts, events, terms, fn)`** — options-bearing variant; supports `WithYieldExisting()` (sweep at registration) and `WithSource(e)` (fixed-source restriction).
+- **`termsMatchTable`** (internal) — table-level filter check for yield_existing sweeps; handles wildcard pairs and DontFragment terms.
+- **`entityMatchesTerms`** (internal) — per-entity filter evaluation at dispatch time; handles TermAnd / TermNot / TermOr / wildcard pairs / DontFragment / Sparse / Union.
+
+### Changed
+
+- **`observerNode`** extended with `multiFilter *multiTermFilter` (nil for all pre-existing single-term observers; zero-overhead on the existing dispatch path).
+- **`dispatchObservers`** evaluates `n.multiFilter` before invoking the callback; skips filter when `e == 0` (custom-event-with-no-entity path).
+- **`commitBatch` and `migrate`** in `world.go` now update `rec.Table` / `rec.Row` **before** firing `fireOnAdd`, so multi-term filters see the fully-migrated entity state at dispatch time. (This also fixes a latent consistency issue for any future caller that reads `rec.Table` inside an OnAdd observer.)
+
+### Implementation notes
+
+1. **Dispatch key unchanged**: multi-term observers register with the same `(triggerID, eventEntity)` key as single-term observers. The filter is stored in the node and evaluated at dispatch time.
+2. **Short-circuit evaluation**: the first failing filter term causes the callback to be skipped; remaining terms are not evaluated.
+3. **yield_existing sparseMode**: when any TermAnd/TermNot term has DontFragment, Union, or Sparse flag, per-entity `entityMatchesTerms` is called even after the table-level check passes (DontFragment storage is not visible in the archetype).
+4. **Record update timing**: moving `rec.Table = newTable; rec.Row = uint32(newRow)` before `fireOnAdd` is safe because `newTable` and `newRow` are fully committed before any observer fires. The old table reference is preserved locally for `fireOnRemove` / `RemoveSwap` calls that follow.
+5. **Built-in entity count**: unchanged at 48; user entities still start at index 48.
+
 ## v0.69.0 — 2026-05-14 — Phase 16.14: Prefab hierarchies + slots
 
 Ports prefab hierarchy replication and the `SlotOf` relationship from upstream C flecs.
