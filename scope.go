@@ -327,6 +327,15 @@ func (fw *Writer) Delete(e ID) bool {
 	return true
 }
 
+// Clear removes all components from entity e, leaving it alive. See [Clear].
+func (fw *Writer) Clear(e ID) bool { return Clear(fw, e) }
+
+// MakeAlive claims a specific entity ID. See [MakeAlive].
+func (fw *Writer) MakeAlive(id ID) ID { return MakeAlive(fw, id) }
+
+// SetVersion overrides the generation counter on an alive entity. See [SetVersion].
+func (fw *Writer) SetVersion(versionedID ID) { SetVersion(fw, versionedID) }
+
 // SetName sets the Name component on entity e.
 func (fw *Writer) SetName(e ID, name string) {
 	Set[Name](fw, e, Name{Value: name})

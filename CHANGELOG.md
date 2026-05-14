@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.56.0 — 2026-05-14 — Phase 16.1: Clear, MakeAlive, SetVersion
+
+Drains three more entries from the docs/README.md feature-gap list identified
+in Phase 14.1 (EntitiesComponents port).
+
+### Added
+
+- **`Clear(fw *Writer, e ID) bool`** — removes all components, tags, and pairs from entity `e`,
+  leaving it alive in the empty archetype. `OnRemove` fires for each component; `OnDelete` does not
+  fire. Deferred when called inside `w.Write`; the coalescing queue skips prior `AddID`/`Set` for
+  the same entity and re-applies only commands queued *after* the `Clear`. Mirrors C `ecs_clear`.
+- **`MakeAlive(fw *Writer, id ID) ID`** — claims a specific entity ID (index + generation) for use
+  in this world. Useful for networked scenarios where both peers must share the same entity IDs.
+  Slot-free: advances the registry to the requested generation and places the entity in the empty
+  archetype. Slot alive at same generation: no-op. Slot alive at different generation: panics with a
+  descriptive message. Panics when called in a deferred scope. Removes the raw index from the FIFO
+  recycle queue if present (so `NewEntity` will not re-issue the claimed slot). Mirrors C
+  `ecs_make_alive`.
+- **`SetVersion(fw *Writer, versionedID ID)`** — overrides the generation counter on an alive
+  entity. After the call `IsAlive(oldID)` is false and `IsAlive(versionedID)` is true. Panics on
+  downgrade (new generation < current generation — use `Delete` + `MakeAlive` to reset deliberately;
+  this is a deliberate divergence from C `ecs_set_version` which accepts any value), on dead entity,
+  and in deferred scope. Mirrors C `ecs_set_version`.
+- **`entityindex.Index.GetCurrentByIndex(rawIndex uint32) (ids.ID, bool)`** — returns the currently
+  alive entity at `rawIndex`, or `(0, false)` if dead or never allocated.
+- **`entityindex.Index.MakeAlive(id ids.ID) (ids.ID, bool)`** — lower-level primitive backing
+  `flecs.MakeAlive`; handles recycle-queue removal and dense-vector placement.
+- **`entityindex.Index.SetVersion(rawIndex uint32, newGen uint32)`** — lower-level primitive backing
+  `flecs.SetVersion`; updates the dense vector entry directly.
+- **`cmdClear`** — new command kind in the deferred queue; dispatched by `batchForEntity` (clears
+  prior commands for the same entity, resets migration baseline to the empty archetype) and by
+  `dispatch` (direct `clearImmediate` call for non-coalesced paths).
+- **Writer methods** — `(*Writer).Clear`, `(*Writer).MakeAlive`, `(*Writer).SetVersion` thin
+  wrappers for call-site ergonomics.
+
+### Changed (docs)
+
+- `docs/EntitiesComponents.md` §§ Clearing, Manual IDs, Manual Versioning: replaced "Not yet ported"
+  stubs with working Go code examples.
+- `docs/README.md` feature-gap list: flipped three entries from "not yet ported" to "shipped v0.56.0".
+
 ## v0.55.0 — 2026-05-14 — Phase 16.0: OnReplace hook
 
 First phase beyond the trait-system roadmap; resumes draining the docs/README.md feature-gap list.

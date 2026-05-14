@@ -388,3 +388,147 @@ func TestEachDenseOrder(t *testing.T) {
 		}
 	}
 }
+
+// ─── GetCurrentByIndex ────────────────────────────────────────────────────────
+
+func TestGetCurrentByIndexAlive(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+
+	got, ok := idx.GetCurrentByIndex(a.Index())
+	if !ok {
+		t.Fatal("GetCurrentByIndex: want ok=true for alive entity")
+	}
+	if got != a {
+		t.Fatalf("GetCurrentByIndex: want %v, got %v", a, got)
+	}
+}
+
+func TestGetCurrentByIndexDead(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+	idx.Free(a)
+
+	_, ok := idx.GetCurrentByIndex(a.Index())
+	if ok {
+		t.Fatal("GetCurrentByIndex: want ok=false for freed entity")
+	}
+}
+
+func TestGetCurrentByIndexNeverAllocated(t *testing.T) {
+	idx := New()
+
+	_, ok := idx.GetCurrentByIndex(999)
+	if ok {
+		t.Fatal("GetCurrentByIndex: want ok=false for never-allocated slot")
+	}
+}
+
+// ─── MakeAlive ────────────────────────────────────────────────────────────────
+
+func TestMakeAliveNewSlot(t *testing.T) {
+	idx := New()
+	target := ids.MakeEntity(500, 3)
+
+	got, ok := idx.MakeAlive(target)
+	if !ok {
+		t.Fatal("MakeAlive: want ok=true for free slot")
+	}
+	if got.Index() != 500 || got.Generation() != 3 {
+		t.Fatalf("MakeAlive: want idx=500 gen=3, got %v", got)
+	}
+	if !idx.IsAlive(got) {
+		t.Fatal("MakeAlive: entity not alive after claim")
+	}
+}
+
+func TestMakeAliveNoOpSameGen(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+
+	got, ok := idx.MakeAlive(a)
+	if !ok {
+		t.Fatal("MakeAlive same-gen: want ok=true")
+	}
+	if got != a {
+		t.Fatalf("MakeAlive same-gen: want %v, got %v", a, got)
+	}
+}
+
+func TestMakeAliveConflictDifferentGen(t *testing.T) {
+	idx := New()
+	a := idx.Alloc() // gen=0
+
+	wrongGen := ids.MakeEntity(a.Index(), 5)
+	current, ok := idx.MakeAlive(wrongGen)
+	if ok {
+		t.Fatal("MakeAlive conflict: want ok=false")
+	}
+	if current.Generation() != a.Generation() {
+		t.Fatalf("MakeAlive conflict: returned gen %d, want %d", current.Generation(), a.Generation())
+	}
+}
+
+func TestMakeAliveRemovesFromRecycleQueue(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+	rawIdx := a.Index()
+	idx.Free(a)
+	// rawIdx is now in the recycle queue.
+
+	claimed := ids.MakeEntity(rawIdx, 7)
+	_, ok := idx.MakeAlive(claimed)
+	if !ok {
+		t.Fatal("MakeAlive: want ok=true for recycled slot at different gen")
+	}
+
+	// NewEntity must not reissue the claimed index.
+	b := idx.Alloc()
+	if b.Index() == rawIdx {
+		t.Fatalf("Alloc reissued MakeAlive-claimed index %d", rawIdx)
+	}
+}
+
+func TestMakeAliveIndexZeroPanic(t *testing.T) {
+	idx := New()
+	zero := ids.MakeEntity(0, 0)
+	got, ok := idx.MakeAlive(zero)
+	if ok || got != 0 {
+		t.Fatal("MakeAlive(0): want (0, false)")
+	}
+}
+
+// ─── SetVersion ──────────────────────────────────────────────────────────────
+
+func TestSetVersionUpdatesGeneration(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+
+	idx.SetVersion(a.Index(), 42)
+
+	newID := ids.MakeEntity(a.Index(), 42)
+	if !idx.IsAlive(newID) {
+		t.Fatal("SetVersion: new versioned ID not alive")
+	}
+	if idx.IsAlive(a) {
+		t.Fatal("SetVersion: old ID still alive after version bump")
+	}
+}
+
+func TestSetVersionPreservesIndex(t *testing.T) {
+	idx := New()
+	a := idx.Alloc()
+
+	idx.SetVersion(a.Index(), 99)
+
+	got, ok := idx.GetCurrentByIndex(a.Index())
+	if !ok {
+		t.Fatal("SetVersion: slot not alive after SetVersion")
+	}
+	if got.Index() != a.Index() {
+		t.Fatalf("SetVersion: index changed: want %d, got %d", a.Index(), got.Index())
+	}
+	if got.Generation() != 99 {
+		t.Fatalf("SetVersion: generation not updated: want 99, got %d", got.Generation())
+	}
+}
