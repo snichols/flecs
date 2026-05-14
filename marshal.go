@@ -168,6 +168,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.Event():              {},
 		w.DependsOn():          {},
 		w.EventMonitor():       {},
+		w.SlotOf():             {},
 	}
 
 	var result []byte
@@ -301,6 +302,14 @@ func (w *World) MarshalJSON() ([]byte, error) {
 				}
 				info, ok := fr.ComponentInfo(cid)
 				if !ok {
+					continue
+				}
+				// Skip raw entity IDs used as tags (EnsureID sentinel TypeInfos have
+				// Name=="tag"). These include built-in entities like Prefab and Disabled
+				// applied to user entities. They cannot be round-tripped by name; user
+				// zero-size components registered via RegisterComponent[T] have proper
+				// type names (e.g. "flecs_test.myTag"), never just "tag".
+				if info.Name == "tag" {
 					continue
 				}
 				if info.Type == nil && info.Size > 0 {

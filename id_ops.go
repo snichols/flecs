@@ -300,12 +300,14 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 	if id.IsPair() && w.symmetricPolicies[id.First()] {
 		addIDImmediate(w, id.Second(), MakePair(id.First(), e))
 	}
-	// Override copy hook: after adding (IsA, prefab) to an entity, walk the prefab's
-	// component chain and eagerly copy any Override-marked components into the instance.
+	// Override copy + subtree-copy hooks: after adding (IsA, prefab) to an entity,
+	// eagerly copy Override-marked components and replicate the prefab's child
+	// subtree onto the instance.
 	if id.IsPair() && id.First().Index() == w.isAID.Index() {
 		prefab := id.Second()
 		if w.index.IsAlive(prefab) {
 			overrideCopyForInstance(w, e, prefab, nil)
+			instantiateChildrenForInstance(w, e, prefab)
 		}
 	}
 	// With co-add: after the originating add's table transition lands, fire any

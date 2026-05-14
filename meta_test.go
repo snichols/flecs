@@ -18,8 +18,8 @@ import (
 // With(32), OrderedChildren(33), Sparse(34), DontFragment(35), Disabled(36),
 // Prefab(37), Wildcard(38), Any(39), EventOnAdd(40), EventOnSet(41),
 // EventOnRemove(42), EventOnTableCreate(43), Event(44), DependsOn(45),
-// EventMonitor(46).
-const builtinEntityCount = 46
+// EventMonitor(46), SlotOf(47).
+const builtinEntityCount = 47
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

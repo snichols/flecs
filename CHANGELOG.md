@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.69.0 — 2026-05-14 — Phase 16.14: Prefab hierarchies + slots
+
+Ports prefab hierarchy replication and the `SlotOf` relationship from upstream C flecs.
+Instantiating a prefab now replicates its entire child subtree onto the instance.
+Slot pairs provide O(1) named access to copied children. Closes the prefab hierarchies
+and prefab slots gap entries in `docs/README.md` lines 136–137.
+
+### Added
+
+- **Prefab hierarchy replication** — `AddID(e, MakePair(w.IsA(), prefab))` now traverses `prefab`'s children recursively and spawns a mirrored subtree on `e`. Two-pass algorithm: pass 1 pre-allocates all instance entity IDs (enabling sibling forward-reference rewriting); pass 2 copies components with cross-reference rewriting.
+- **Same-subtree cross-reference rewriting** — pair targets that belong to the instantiated prefab subtree are rewritten from the prefab child entity to the corresponding instance child entity. External references are left unchanged.
+- **`SlotOf` built-in relationship** (`w.SlotOf()`, index 47) — bootstrapped with `Exclusive`, `Relationship`, and `PairIsTag` traits. A prefab child carrying `(SlotOf, prefabParent)` causes `(prefabChild, instanceChild)` to be added to the instance root during instantiation. `OrderedChildren` propagation: when the prefab is ordered, the instance is marked ordered before children are added.
+- **`GetPairTarget(scope, e, rel) (ID, bool)`** — O(1) lookup of the first pair target for relationship `rel` on entity `e`. Primary use case: `GetPairTarget(r, inst, turretPrefab)` resolves the slot to the copied turret instance child.
+- **`(*World).SlotOf() ID`** — returns the built-in `SlotOf` relationship entity (index 47; user entities now start at index 48).
+
+### Implementation notes
+
+1. **Two-pass subtree copy**: `allocSubtreeEntities` pre-allocates all instance entity IDs before `copyPrefabChildComponents` begins, ensuring sibling forward-references (`(R, sibling)` where sibling hasn't been copied yet) can be rewritten correctly.
+2. **Slot resolution**: only the direct `(SlotOf, directParent)` case is handled. Nested-slot (`(SlotOf, grandparentPrefab)`) and prefab-of-prefab instantiation are deferred to a future phase.
+3. **Marshal fix**: built-in tag entities (e.g., `Prefab`, `Disabled`) applied to user entities produce a `TypeInfo` with `Name == "tag"` sentinel via `EnsureID`. These are now skipped during `MarshalJSON` component serialization so they don't appear as unresolvable `"tag": {}` entries in the JSON output.
+4. **Built-in entity count**: 47; `SlotOf` occupies index 47; user entities start at index 48.
+
 ## v0.68.0 — 2026-05-14 — Phase 16.13: Runtime dynamic component registration
 
 Ports runtime (dynamic) component registration from upstream C flecs. A dynamic

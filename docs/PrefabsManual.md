@@ -14,6 +14,8 @@ See the [Quickstart](Quickstart.md#prefabs-isa) for a hands-on introduction, [Re
 - [Prefab variants](#prefab-variants)
 - [Prefab traversal](#prefab-traversal)
 - [OnInstantiate traits](#oninstantiate-traits)
+- [Prefab hierarchies](#prefab-hierarchies)
+- [Prefab slots](#prefab-slots)
 - [Not yet ported](#not-yet-ported)
 
 ---
@@ -410,12 +412,97 @@ flecs.IsPrefab(r, instance) // → false (Prefab tag is not inherited via IsA)
 
 ---
 
+## Prefab hierarchies
+
+When a prefab has children (entities with a `(ChildOf, prefab)` pair), instantiating the prefab via `AddID(e, MakePair(w.IsA(), prefab))` replicates the entire child subtree onto the instance. Each prefab child gets a fresh entity on the instance; the new entities have `(ChildOf, instance)` (or `(ChildOf, instanceParent)` for grandchildren) added automatically.
+
+```go
+type HP struct{ Value int }
+w := flecs.New()
+flecs.RegisterComponent[HP](w)
+
+var tank, turret, tracks, inst flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    // Build the prefab hierarchy.
+    tank = fw.NewEntity()
+    flecs.MarkPrefab(fw, tank)
+
+    turret = fw.NewEntity()
+    flecs.MarkPrefab(fw, turret)
+    flecs.AddID(fw, turret, flecs.MakePair(w.ChildOf(), tank))
+    flecs.Set(fw, turret, HP{Value: 10})
+
+    tracks = fw.NewEntity()
+    flecs.MarkPrefab(fw, tracks)
+    flecs.AddID(fw, tracks, flecs.MakePair(w.ChildOf(), tank))
+    flecs.Set(fw, tracks, HP{Value: 20})
+
+    // Instantiate: spawns instTurret and instTracks as children of inst.
+    inst = fw.NewEntity()
+    flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), tank))
+})
+
+w.Read(func(r *flecs.Reader) {
+    // inst now has two children — copies of turret and tracks.
+    var children []flecs.ID
+    w.EachChild(inst, func(c flecs.ID) bool {
+        children = append(children, c)
+        return true
+    })
+    // len(children) == 2
+    // children[0] != turret && children[1] != tracks (fresh entities)
+})
+```
+
+The replication is recursive: grandchildren, great-grandchildren, and so on are all copied. Each level respects the same rules — `DontInherit` components are skipped, `(ChildOf, *)` and `(IsA, *)` pairs are not blindly forwarded to the copy.
+
+**Cross-reference rewriting.** If a prefab child carries a pair whose target is another entity in the same prefab subtree — e.g. child A has `(Targets, B)` and B is also a child of the prefab — the copy of A will have `(Targets, copyOfB)`, not `(Targets, B)`. References to entities outside the subtree (global entities, unrelated prefabs) are left unchanged.
+
+**OrderedChildren propagation.** If the prefab has the `OrderedChildren` trait (see [HierarchiesManual.md § OrderedChildren](HierarchiesManual.md#orderedchildren)), the instance is marked ordered before children are added, preserving insertion order.
+
+---
+
+## Prefab slots
+
+Slots provide O(1) named access to specific children of an instance without a name lookup. A slot is declared by adding `(SlotOf, prefab)` to a prefab child; the instantiation pipeline then adds `(prefabChild, instanceChild)` to the instance root.
+
+```go
+var tank, turret, inst flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    tank = fw.NewEntity()
+    flecs.MarkPrefab(fw, tank)
+
+    turret = fw.NewEntity()
+    flecs.MarkPrefab(fw, turret)
+    flecs.AddID(fw, turret, flecs.MakePair(w.ChildOf(), tank))
+    flecs.AddID(fw, turret, flecs.MakePair(w.SlotOf(), tank)) // declare slot
+
+    inst = fw.NewEntity()
+    flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), tank))
+})
+
+w.Read(func(r *flecs.Reader) {
+    // Resolve the slot: inst has pair (turret, instTurret).
+    instTurret, ok := flecs.GetPairTarget(r, inst, turret)
+    // ok == true; instTurret is the copied child, not turret itself
+    _ = instTurret
+})
+```
+
+The slot relationship is exclusive: only one slot per prefab child is permitted on any instance (enforced by the `Exclusive` trait on `SlotOf`).
+
+`w.SlotOf()` returns the built-in `SlotOf` relationship entity (index 47). It is bootstrapped with the `Exclusive`, `Relationship`, and `PairIsTag` traits, mirroring C `bootstrap.c:1274,1282,1324`.
+
+> **Note:** The nested-slot variant — where `(SlotOf, grandparent)` names a prefab higher up the hierarchy — is not yet ported. Only `(SlotOf, directParent)` is handled.
+
+---
+
 ## Not yet ported
 
 The following C flecs prefab features have no equivalent in the current Go port:
 
-- **Prefab hierarchies** — in C flecs, instantiating a prefab that has `(ChildOf, prefab)` children copies the entire subtree to the instance. Go flecs does not replicate children on IsA instantiation. not yet ported in Go flecs.
-- **Prefab slots** — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1). not yet ported in Go flecs.
+- **Prefab-of-prefab instantiation** — a prefab `B` that inherits from another prefab `A` via `(IsA, A)` does not trigger recursive subtree copying from `A` when `B` is instantiated. Deferred to a future phase.
+- **Nested slots** — `(SlotOf, grandparentPrefab)` where the slot targets a prefab higher than the immediate parent. Only `(SlotOf, directParent)` is currently resolved. Deferred to a future phase.
 
 ---
 
