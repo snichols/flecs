@@ -561,6 +561,110 @@ The `*flecs.Table` pointer passed to the handler is the same type exposed by `w.
 
 ---
 
+## Custom Events {#custom-events}
+
+**Events are entities.** In upstream C flecs — and in Go flecs since v0.63.0 — an event is just an entity used as a dispatch key. The four built-in events (`OnAdd`, `OnSet`, `OnRemove`, `OnTableCreate`) are pre-allocated built-in entities accessible via `w.EventOnAdd()`, `w.EventOnSet()`, `w.EventOnRemove()`, `w.EventOnTableCreate()`. A custom event is a user-allocated entity that plays the same role.
+
+### Registering a custom event
+
+```go
+w := flecs.New()
+
+var playerDied flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    playerDied = flecs.RegisterEvent(fw, "PlayerDied")
+})
+// playerDied is a regular entity tagged with the built-in Event tag.
+// HasID(playerDied, w.Event()) == true
+```
+
+`RegisterEvent` allocates a new entity, optionally names it, and applies the built-in `Event` tag so you can distinguish event entities from ordinary entities:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    fmt.Println(flecs.HasID(r, playerDied, w.Event())) // true
+})
+```
+
+### Subscribing to a custom event
+
+```go
+type DeathPayload struct {
+    Killer flecs.ID
+    Weapon string
+}
+
+flecs.ObserveEventTyped[DeathPayload](w, playerDied, func(fw *flecs.Writer, e flecs.ID, d DeathPayload) {
+    fmt.Printf("entity %v died — killed by %v with %q\n", e, d.Killer, d.Weapon)
+})
+```
+
+For dynamically typed payloads use the untyped form:
+
+```go
+flecs.ObserveEvent(w, playerDied, func(fw *flecs.Writer, e flecs.ID, payload interface{}) {
+    if d, ok := payload.(DeathPayload); ok {
+        fmt.Println("weapon:", d.Weapon)
+    }
+})
+```
+
+Both return an `*Observer` handle — call `Unsubscribe()` to cancel. `SetEnabled(false)` pauses without removing (same as component observers).
+
+### Emitting a custom event
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    target := fw.NewEntity()
+    flecs.EmitTyped(fw, playerDied, target, DeathPayload{
+        Killer: someEntity,
+        Weapon: "sword",
+    })
+})
+```
+
+`Emit` (and `EmitTyped`) dispatch is **synchronous**: all subscribed observers fire in registration order before `Emit` returns. Re-entrant emit — calling `Emit` from within an observer callback — is safe and also fires synchronously.
+
+For the untyped form:
+
+```go
+flecs.Emit(fw, playerDied, target, DeathPayload{...})
+```
+
+### Payload semantics
+
+The payload is **shallow-copied** at the `Emit` call site: each observer receives its own copy of the `interface{}` value. Mutations to the interface value itself do not leak to subsequent observers. Mutations to a pointed-to struct inside the payload are visible to all observers (it is a shallow, not deep, copy).
+
+### Built-in event entities
+
+The four built-in events are accessible as regular entity IDs:
+
+| Accessor | Fires when |
+|---|---|
+| `w.EventOnAdd()` | A component/tag is added to an entity |
+| `w.EventOnSet()` | A component value is written |
+| `w.EventOnRemove()` | A component/tag is removed from an entity |
+| `w.EventOnTableCreate()` | A new archetype table is created |
+
+These entity IDs can be used with `Emit` and `ObserveEvent` like any custom event entity. Note: component-based observers registered via `Observe[T]` use a dispatch key of `{componentID, eventEntityID}`, so `ObserveEvent(w, w.EventOnAdd(), fn)` subscribes to explicit `Emit(fw, w.EventOnAdd(), ...)` calls, **not** to all component OnAdd events.
+
+### Deleting a custom event entity
+
+Deleting a custom event entity automatically removes its observer registrations. Any subsequent `Emit` for the deleted event entity is a no-op.
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    fw.Delete(playerDied)
+    // Emit(fw, playerDied, e, payload) is now a no-op.
+})
+```
+
+### yield_existing on custom events
+
+`ObserveEvent` does not accept `ObserverOptions` directly. Custom events have no "currently matching" concept, so `WithYieldExisting()` is intentionally not wired to the custom-event path — there is nothing to sweep at registration time. Observers registered for a custom event will only fire for future `Emit` calls.
+
+---
+
 ## Deferred Execution
 
 Observers fire synchronously when the triggering operation is executed. When operations are inside a `Write` scope (which is always the case in Go flecs), the mutations are queued in the deferred command queue and the observers fire when the queue is flushed:
@@ -679,7 +783,7 @@ C flecs can fire events when an archetype table transitions between empty and no
 
 ### Custom Events
 
-C flecs lets you create arbitrary event entities and emit them with `ecs_emit`. Go flecs has no `emit` API. Only the three built-in events (`EventOnAdd`, `EventOnSet`, `EventOnRemove`) are supported.
+✅ **Shipped in v0.63.0.** See [Custom Events](#custom-events) above. `RegisterEvent`, `Emit`, `EmitTyped[T]`, `ObserveEvent`, `ObserveEventTyped[T]`, and built-in event entity accessors (`w.EventOnAdd()` etc.) are all available.
 
 ### Term-Set Observer Filters (Multi-Term Observers)
 
