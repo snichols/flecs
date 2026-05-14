@@ -30,7 +30,8 @@ type Reader struct {
 // All structural mutations are queued in a defer scope and flushed when fn returns.
 type Writer struct {
 	Reader
-	stage *stage // routes mutations to this stage's command queue
+	stage      *stage // routes mutations to this stage's command queue
+	scopeStack []ID   // per-Writer entity scope stack; auto-(ChildOf,top) on NewEntity/RangeNew
 }
 
 // scope is satisfied by both *Reader and *Writer, allowing read free-functions
@@ -351,9 +352,14 @@ func (r *Reader) Stats() Stats {
 // ── Writer methods ────────────────────────────────────────────────────────────
 
 // NewEntity allocates a new entity, places it in the empty-signature table,
-// and returns its ID.
+// and returns its ID. If a scope is active (see WithinScope / PushScope),
+// automatically adds (ChildOf, scope) to the new entity.
 func (fw *Writer) NewEntity() ID {
-	return fw.world.newEntityInternal()
+	e := fw.world.newEntityInternal()
+	if len(fw.scopeStack) > 0 {
+		AddID(fw, e, MakePair(fw.world.childOfID, fw.scopeStack[len(fw.scopeStack)-1]))
+	}
+	return e
 }
 
 // AddID adds the component or tag identified by id to entity e.

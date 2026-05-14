@@ -225,7 +225,7 @@ w.Read(func(r *flecs.Reader) {
 
 Pass `0` as the parent to search the root scope — alive entities with no ChildOf relationship.
 
-> **Not yet ported:** Per-hierarchy name scoping (`ecs_set_scope` / `ecs_get_scope`) — push/pop a parent scope so that newly created entities automatically receive `(ChildOf, scope)` without explicit `AddID` calls. See [Not yet ported](#not-yet-ported).
+> **Entity scoping shipped:** Use `WithinScope` to push a parent so that newly created entities automatically receive `(ChildOf, scope)` without explicit `AddID` calls. See [Entity scoping](#entity-scoping).
 
 ---
 
@@ -327,11 +327,54 @@ w.Read(func(r *flecs.Reader) {
 
 ---
 
+## Entity scoping
+
+`WithinScope` pushes a parent onto the Writer's scope stack. Every `NewEntity` (and `RangeNew`) call inside the callback automatically receives `(ChildOf, parent)` without an explicit `AddID`:
+
+```go
+parent := flecs.NewEntity(fw)
+flecs.WithinScope(fw, parent, func(fw *flecs.Writer) {
+    child1 := fw.NewEntity() // auto-(ChildOf, parent)
+    child2 := fw.NewEntity() // auto-(ChildOf, parent)
+})
+```
+
+Scopes nest: the inner-most scope wins for entities created during its callback. When the inner `WithinScope` returns, the outer scope is restored:
+
+```go
+flecs.WithinScope(fw, parent1, func(fw *flecs.Writer) {
+    flecs.WithinScope(fw, parent2, func(fw *flecs.Writer) {
+        inner := fw.NewEntity() // (ChildOf, parent2)
+    })
+    outer := fw.NewEntity() // (ChildOf, parent1) — restored
+})
+```
+
+For advanced callers who need to cross function boundaries where a closure is awkward, `PushScope` / `PopScope` provide the same semantics:
+
+```go
+prev := flecs.PushScope(fw, parent)
+// ... create entities ...
+flecs.PopScope(fw, prev)
+```
+
+`GetScope` returns the current top of the stack (zero if no scope is active):
+
+```go
+flecs.WithinScope(fw, parent, func(fw *flecs.Writer) {
+    current := flecs.GetScope(fw) // == parent
+})
+```
+
+**Opt-out:** `MakeAlive` ignores the scope (explicit ID claim bypasses auto-ChildOf, mirroring the Phase 16.16 range-bypass precedent). `RangeNew` respects the scope (fresh allocation, range-constrained).
+
+**Stack lifetime:** the scope stack is per-Writer and is reset to empty at the start of each top-level `w.Write(...)` call. Nested `w.Write` calls from the same goroutine share the Writer and therefore its stack.
+
+---
+
 ## Not yet ported
 
 The following upstream C features are not yet implemented in Go flecs:
-
-- **Entity scoping** (`ecs_set_scope` / `ecs_get_scope`) — push/pop a default ChildOf parent so that newly created entities automatically become children of the current scope without an explicit `AddID` call. Not yet ported in Go flecs.
 
 - **`Parent` hierarchy storage** — C flecs provides a second, non-fragmenting storage for small structured hierarchies where children of multiple parents can share the same archetype table. Not yet ported in Go flecs; all Go flecs hierarchies use the ChildOf (fragmenting archetype) storage.
 

@@ -84,7 +84,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Union relationships** (`EcsUnion`) — **shipped in v0.54.0** via `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`. At-most-one-target per relationship per entity; stored in a per-relationship side map — no archetype fragmentation. See [ComponentTraits.md § Union](ComponentTraits.md#union).
 - **Wildcard / Any queries** (`EcsWildcard`, `EcsAny` as query terms) — **shipped in v0.38.0** via `w.Wildcard()`, `w.Any()`, `MatchedTarget`, `MatchedID`, `FieldByMatch`. See [`docs/Queries.md`](Queries.md#wildcard-and-any-query-terms-phase-156-v0380).
 - **World snapshots** (beyond JSON serialization) — not ported.
-- **Entity scoping** (`ecs_set_scope` / push-pop) — not ported.
+- **Entity scoping** (`ecs_set_scope` / push-pop) — ✅ **shipped in v0.74.0** via `WithinScope` / `PushScope` / `PopScope` / `GetScope`. See [docs/HierarchiesManual.md § Entity scoping](HierarchiesManual.md#entity-scoping).
 - **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — **shipped in v0.44.0** via `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`. Go semantic: at most one holder (vs. C must-be-self). See [ComponentTraits.md#singleton](ComponentTraits.md#singleton).
 - **Timer addon** (independent rate control per system) — partial (`timer.go` exists; full addon API pending).
 - **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only.

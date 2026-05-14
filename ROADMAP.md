@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.73.0)
+## Shipped (through v0.74.0)
 
 The following features are available in the current release:
 
@@ -73,6 +73,9 @@ The following features are available in the current release:
 - **Prefab hierarchies + slots** _(v0.69.0, Phase 16.14)_ — `AddID(e, MakePair(w.IsA(), prefab))` now replicates the prefab's full child subtree onto the instance (two-pass: pre-allocate all instance IDs, then copy components with same-subtree cross-reference rewriting). `SlotOf` relationship (index 47, bootstrapped Exclusive+Relationship+PairIsTag): a prefab child with `(SlotOf, prefab)` causes `(prefabChild, instanceChild)` to be added to the instance root. `GetPairTarget(scope, inst, prefabChild)` resolves the slot in O(1). `w.SlotOf()` returns the built-in entity. Nested-slot and prefab-of-prefab instantiation deferred. Closes `docs/README.md` prefab hierarchies and prefab slots gap entries.
 - **Multi-term observers** _(v0.70.0, Phase 16.15)_ — `ObserveQuery(w, event, terms, fn)` / `ObserveQueryID` / `ObserveQueryEvents` / `ObserveQueryWithOptions`. The first term is the trigger (dispatch key); remaining terms are filter terms evaluated per-entity at dispatch time via `entityMatchesTerms`. Supports TermAnd / TermNot / TermOr / wildcard pairs / DontFragment / Sparse triggers. `observerNode` extended with `*multiTermFilter` (nil for single-term observers; zero overhead on existing observers). `dispatchObservers` runs filter before callback, short-circuits on first fail. `yield_existing` sweeps tables via `termsMatchTable`, per-entity via `entityMatchesTerms` in sparseMode. `WithSource` + multi-term: O(1) fixed-source check. Critical fix: `rec.Table` / `rec.Row` updated before `fireOnAdd` in `commitBatch` and `migrate` so multi-term filters see the fully-migrated entity state at dispatch time. Closes `docs/README.md` term-set observer filters gap entry.
 - **Entity ID ranges** _(v0.71.0, Phase 16.16)_ — `RangeSet(fw, min, max)` / `RangeClear(fw)` / `RangeGet(scope)` / `RangeNew(fw, min, max)`. Constrains `NewEntity` to issue IDs in `[min, max)` for per-owner ID partitioning (networked games: server reserves `1..65535`; each client gets a contiguous slice). Go simplifications vs upstream: no persistent range objects, no multi-range registry, no per-range recycle pools. Out-of-range recycled IDs skipped (not lost) during range-constrained allocation. JSON marshal/unmarshal round-trips the active range. Closes `docs/README.md` entity ID ranges gap entry.
+- **Observer propagation along IsA** _(v0.72.0, Phase 16.17)_ — `OnAdd`/`OnSet`/`OnRemove` and custom `Emit` propagate to inheritors along IsA edges; `DontInherit` gate; override gate; BFS cache. Closes `docs/README.md` IsA observer gap entry.
+- **Fixed per-term source** _(v0.73.0, Phase 16.18)_ — `WithSourceTerm(componentID, sourceEntity)` / `(Term).Source(e)`. A term bound to a named entity snapshots its component once at iter start; absent required source → zero results; optional absent source → `FieldMaybe` nil/false. Closes `docs/README.md` fixed-source query gap entry.
+- **Entity scoping** _(v0.74.0, Phase 16.19)_ — `WithinScope(fw, parent, fn)` / `PushScope(fw, parent) ID` / `PopScope(fw, prev)` / `GetScope(scope) ID`. While a scope is active, `NewEntity` and `RangeNew` automatically add `(ChildOf, parent)`. Scope stack per-Writer; reset at each top-level `w.Write` entry. `MakeAlive` bypasses scope; `RangeNew` respects it. Closes `docs/README.md` entity scoping gap entry.
 
 ## Documentation
 
