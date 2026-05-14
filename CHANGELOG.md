@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.60.0 — 2026-05-14 — Phase 16.5: Observer lifecycle bundle (yield_existing + observer disabling)
+
+Ports two upstream C flecs observer features that both live on the observer-registration and observer-fire plumbing in `observer.go`. Closes `docs/README.md` gap lines 156 (yield_existing) and 159 (observer disabling).
+
+**C upstream references verified:**
+- `yield_existing` field: `include/flecs.h:1389` on `ecs_observer_desc_t`.
+- `yield_existing` implementation: `src/observer.c:761` (`flecs_observer_yield_existing`), triggered at `src/observer.c:1270-1272` after observer construction.
+- Observer fire-path Disabled gate: `src/observer.c:342`; bit flipper: `src/observer.c:1491`; same `EcsDisabled` tag reused for observers and systems: `src/bootstrap.c:542`.
+
+### Added
+
+- **`ObserverOptions`** — zero-value struct for `ObserveWithOptions[T]`. Construct via `WithYieldExisting()` or use the zero value for no options.
+- **`WithYieldExisting() ObserverOptions`** — returns options that retroactively fire the observer for every entity that already carries the component at registration time. The sweep targets only the newly-registered observer (peer observers subscribed to the same event are not re-fired). Supported events: OnAdd and OnSet; OnRemove-only panics at construction. Skips tables tagged Disabled or Prefab. Synchronous: `ObserveWithOptions` returns only after all entities are visited.
+- **`ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKind, fn func(fw *Writer, event EventKind, e ID, v T)) *Observer`** — multi-event observer registration with optional configuration. When `opts` carries no options (zero value), behaves identically to `Observe2[T]`. The generic, multi-event form mirrors `Observe2[T]` plus options, following the `NewCachedQueryFromTermsWithOptions` introduction pattern.
+- **`(*Observer).SetEnabled(v bool)`** — enable or disable this observer for event dispatch. A disabled observer is silently skipped in `dispatchObservers` but remains registered and can be re-enabled at any time. Default is true (enabled). Idempotent. Mirrors `(*System).SetEnabled` from Phase 16.3.
+- **`(*Observer).IsEnabled() bool`** — reports whether this observer is currently enabled for dispatch.
+
+### Changed
+
+- **`Observer` struct** — extended with `enabled bool` field. Initialised `true` in all constructors (`Observe[T]`, `ObserveID`, `Observe2[T]`, `ObserveWithOptions[T]`).
+- **`observerNode` struct** — extended with `observer *Observer` back-pointer. Set at registration; used by `dispatchObservers` to read the enabled flag with one pointer deref per node.
+- **`dispatchObservers`** — now skips nodes where `n.observer != nil && !n.observer.enabled` in addition to `n.removed`. Hook callers (`fireOnAdd`, `fireOnSet`, `fireOnRemove`) are unaffected.
+
+### Design decisions recorded
+
+1. **Plain `bool` (not `atomic.Bool`)** — matches Phase 16.3 (`*System.enabled`). Observer fire-path is gated by the world's exclusive-access invariant; concurrent toggle from outside an active Write violates that invariant regardless.
+2. **Back-pointer on `observerNode`** — one word per node; cleaner than threading the flag separately and avoids a map lookup on the hot dispatch path.
+3. **Direct callback invocation in yield sweep** — sweep does NOT route through `dispatchObservers`. Only the newly-registered observer's callback fires; peer observers on the same event are not re-fired. Mirrors upstream `it.callback = flecs_default_uni_observer_run_callback`.
+4. **`ObserveWithOptions` as a new entry point** — existing `Observe[T]` / `ObserveID` / `Observe2[T]` remain unchanged. Mirrors `NewCachedQueryFromTermsWithOptions` introduction style from Phase 16.4.
+5. **No free-function aliases for enable/disable** — Phase 16.3 chose methods-only; mirrored exactly. No `DisableObserver` / `EnableObserver` free functions.
+
+---
+
 ## v0.59.0 — 2026-05-14 — Phase 16.4: Sorted cached queries (order_by_callback port)
 
 Ports upstream flecs' `order_by_callback` to Go flecs. A cached query can supply a

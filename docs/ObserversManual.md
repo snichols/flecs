@@ -365,6 +365,117 @@ obs := flecs.Observe2[Position](w,
 
 ---
 
+## Disabling an Observer {#disabling-an-observer}
+
+An observer can be paused without removing it using `SetEnabled(false)`. A disabled observer is silently skipped in the dispatch path but remains registered; it can be re-enabled at any time with `SetEnabled(true)`. This mirrors system disabling (see [Systems.md § Disabling a System](Systems.md#disabling-a-system)).
+
+```go
+type Position struct{ X, Y float32 }
+
+w := flecs.New()
+
+var obs *flecs.Observer
+w.Write(func(fw *flecs.Writer) {
+    obs = flecs.Observe[Position](w, flecs.EventOnSet, func(fw *flecs.Writer, e flecs.ID, v Position) {
+        fmt.Printf("Position set: {%.1f, %.1f}\n", v.X, v.Y)
+    })
+    e := fw.NewEntity()
+    flecs.Set(fw, e, Position{X: 1, Y: 2}) // fires
+})
+
+obs.SetEnabled(false)
+w.Write(func(fw *flecs.Writer) {
+    e := fw.NewEntity()
+    flecs.Set(fw, e, Position{X: 3, Y: 4}) // does NOT fire — observer is disabled
+})
+
+obs.SetEnabled(true)
+w.Write(func(fw *flecs.Writer) {
+    e := fw.NewEntity()
+    flecs.Set(fw, e, Position{X: 5, Y: 6}) // fires again
+})
+```
+
+`IsEnabled()` returns the current state:
+
+```go
+obs.SetEnabled(false)
+fmt.Println(obs.IsEnabled()) // false
+obs.SetEnabled(true)
+fmt.Println(obs.IsEnabled()) // true
+```
+
+**Key properties:**
+
+- Default is enabled (`true`). All constructors (`Observe[T]`, `ObserveID`, `Observe2[T]`, `ObserveWithOptions[T]`) create enabled observers.
+- Multiple observers on the same event are independent; disabling one does not affect others.
+- Toggling mid-dispatch is safe: a callback that disables a later observer in the same dispatch suppresses it for that dispatch. Observers already fired in the current event are unaffected.
+- `SetEnabled` / `IsEnabled` are plain field access, not atomic. Intended for serial use outside an active dispatch; the world's exclusive-access model ensures no concurrent observer dispatch.
+- Unlike `Unsubscribe`, `SetEnabled(false)` is fully reversible.
+
+---
+
+## yield_existing {#yield-existing}
+
+Registering a `WithYieldExisting()` observer retroactively fires the observer's callback for every entity that already matches the component at registration time. This is the canonical "catch up to existing state" mechanism from upstream C flecs (`yield_existing` field on `ecs_observer_desc_t`).
+
+Use `ObserveWithOptions[T]` with `WithYieldExisting()`:
+
+```go
+type Position struct{ X, Y float32 }
+
+w := flecs.New()
+
+// Populate the world before the observer is registered.
+w.Write(func(fw *flecs.Writer) {
+    for i := 0; i < 100; i++ {
+        e := fw.NewEntity()
+        flecs.Set(fw, e, Position{X: float32(i), Y: 0})
+    }
+})
+
+// Register an OnAdd observer with yield_existing.
+// The sweep fires immediately for all 100 existing entities.
+var obs *flecs.Observer
+w.Write(func(fw *flecs.Writer) {
+    obs = flecs.ObserveWithOptions[Position](w,
+        flecs.WithYieldExisting(),
+        []flecs.EventKind{flecs.EventOnAdd},
+        func(fw *flecs.Writer, ev flecs.EventKind, e flecs.ID, v Position) {
+            fmt.Printf("entity %d has Position {%.1f, %.1f}\n", e, v.X, v.Y)
+        },
+    )
+    // All 100 invocations complete before ObserveWithOptions returns (synchronous).
+})
+```
+
+**Supported events:** OnAdd and OnSet. The sweep fires one invocation per entity per event kind; a registration with `[]EventKind{EventOnAdd, EventOnSet}` produces 2×N total invocations for N existing entities. OnRemove events are skipped silently in the sweep; if the events list contains only OnRemove, `ObserveWithOptions` panics with a clear message.
+
+**Exclusion semantics:** The sweep skips tables carrying the `Disabled` or `Prefab` tag, matching ordinary query-exclusion semantics (Phase 16.2). The sweep targets **only** the newly-registered observer; peer observers already subscribed to the same event are not re-fired.
+
+**Sweep is synchronous.** `ObserveWithOptions` returns only after all matching entities are visited.
+
+**Iteration order:** archetype-table order (the order tables were registered in the component index). This matches normal query iteration order.
+
+**Multi-event registration:**
+
+```go
+obs = flecs.ObserveWithOptions[Position](w,
+    flecs.WithYieldExisting(),
+    []flecs.EventKind{flecs.EventOnAdd, flecs.EventOnSet},
+    func(fw *flecs.Writer, ev flecs.EventKind, e flecs.ID, v Position) {
+        // Called twice per existing entity: once with EventOnAdd, once with EventOnSet.
+    },
+)
+```
+
+**Notes:**
+
+- If the observer is disabled (`SetEnabled(false)`) at the time `ObserveWithOptions` would run the sweep, the sweep is suppressed. This is reachable only via concurrent goroutine patterns that violate the world's exclusive-access model; in normal use the observer is always enabled at construction time.
+- For OnRemove-only registrations with `WithYieldExisting()`, the function panics immediately (upstream C only yields OnRemove on observer-deletion, which is out of scope).
+
+---
+
 ## Deferred Execution
 
 Observers fire synchronously when the triggering operation is executed. When operations are inside a `Write` scope (which is always the case in Go flecs), the mutations are queued in the deferred command queue and the observers fire when the queue is flushed:
@@ -485,7 +596,7 @@ C flecs observers can match a query with multiple terms (e.g., "fire when Positi
 
 ### Yield-on-Create
 
-C flecs has a `yield_existing` flag that retroactively fires an observer for all entities that already match the query at registration time. Not ported to Go flecs.
+✅ **Shipped in v0.60.0.** See [yield_existing](#yield-existing) above for the `ObserveWithOptions[T]` + `WithYieldExisting()` API.
 
 ### Observer Propagation / Forwarding
 
@@ -497,7 +608,7 @@ C flecs has a `Monitor` event that fires when an entity starts or stops matching
 
 ### Observer Disabling
 
-C flecs can disable an observer (pause it without removing it) with `ecs_enable`. Go flecs requires `Unsubscribe` + re-registration to approximate this.
+✅ **Shipped in v0.60.0.** See [Disabling an Observer](#disabling-an-observer) above for `(*Observer).SetEnabled(bool)` / `(*Observer).IsEnabled() bool`. Cross-link: [Systems.md § Disabling a System](Systems.md#disabling-a-system).
 
 ### Fixed-Source Observer Terms
 
@@ -515,7 +626,11 @@ C flecs observers can match a component on a specific entity (not `$this`). Not 
 | `Observe[T](w, event, fn)` | Subscribe typed observer; returns `*Observer` |
 | `ObserveID(w, id, event, fn)` | Subscribe raw-ID observer; returns `*Observer` |
 | `Observe2[T](w, events, fn)` | Subscribe to multiple events; single `*Observer` handle |
+| `ObserveWithOptions[T](w, opts, events, fn)` | Subscribe with options (e.g. `WithYieldExisting()`); returns `*Observer` |
+| `WithYieldExisting()` | Option: retroactively fire for all existing matching entities at registration |
 | `(*Observer).Unsubscribe()` | Cancel subscription (idempotent; safe from callback) |
+| `(*Observer).SetEnabled(bool)` | Enable or disable observer dispatch; default true |
+| `(*Observer).IsEnabled() bool` | Report whether observer is currently enabled |
 | `EventOnAdd` | Event fired on first component add |
 | `EventOnSet` | Event fired on every component set |
 | `EventOnRemove` | Event fired before component remove |

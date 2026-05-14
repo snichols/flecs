@@ -153,10 +153,10 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`OnTableEmpty` / `OnTableFill` events** — fire when an archetype table transitions between empty and non-empty. not yet ported in Go flecs.
 - **Custom events** — create arbitrary event entities and emit them with `ecs_emit`; Go flecs supports only the three built-in events (`EventOnAdd`, `EventOnSet`, `EventOnRemove`). not yet ported in Go flecs.
 - **Term-set observer filters (multi-term observers)** — C observers can match a query with multiple terms (e.g., "fire when Position is set but only if entity also has Velocity"). Go flecs observers subscribe to a single component at a time. not yet ported in Go flecs.
-- **Yield-on-create** — `yield_existing` flag retroactively fires an observer for entities already matching the query at registration time. not yet ported in Go flecs.
+- **Yield-on-create** — `yield_existing` flag retroactively fires an observer for entities already matching the query at registration time. ✅ **shipped in v0.60.0** via `ObserveWithOptions[T]` + `WithYieldExisting()`. See [ObserversManual.md § yield_existing](ObserversManual.md#yield-existing).
 - **Observer propagation / forwarding** — events propagate along relationship edges (e.g., `OnSet(Position)` on a parent notifies children inheriting `Position`). not yet ported in Go flecs.
 - **Monitor observers** — `EcsMonitor` event fires when an entity starts or stops matching a query. not yet ported in Go flecs.
-- **Observer disabling** — pause an observer without removing it (analogous to system disabling). not yet ported in Go flecs.
+- **Observer disabling** — pause an observer without removing it (analogous to system disabling). ✅ **shipped in v0.60.0** via `(*Observer).SetEnabled(bool)` / `(*Observer).IsEnabled() bool`. See [ObserversManual.md § Disabling an Observer](ObserversManual.md#disabling-an-observer).
 - **Fixed-source observer terms** — observer terms that match a component on a specific entity (not `$this`). not yet ported in Go flecs.
 
 ### Additional gaps discovered in Phase 14.8 (ComponentTraits port)
