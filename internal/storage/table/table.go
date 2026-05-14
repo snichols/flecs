@@ -366,6 +366,59 @@ func (t *Table) EnableRow(id ids.ID, row int) {
 	bs[row>>6] |= uint64(1) << (uint(row) & 63)
 }
 
+// GetBitsetsCopy returns a deep copy of the CanToggle bitset map.
+// Returns nil if no bitsets have been allocated.
+func (t *Table) GetBitsetsCopy() map[ids.ID][]uint64 {
+	if len(t.bitsets) == 0 {
+		return nil
+	}
+	out := make(map[ids.ID][]uint64, len(t.bitsets))
+	for id, words := range t.bitsets {
+		cp := make([]uint64, len(words))
+		copy(cp, words)
+		out[id] = cp
+	}
+	return out
+}
+
+// SetBitsets directly replaces the table's bitset map with a deep copy of bs.
+// Intended for snapshot restore only; normal code should use DisableRow/EnableRow.
+func (t *Table) SetBitsets(bs map[ids.ID][]uint64) {
+	if len(bs) == 0 {
+		t.bitsets = nil
+		return
+	}
+	t.bitsets = make(map[ids.ID][]uint64, len(bs))
+	for id, words := range bs {
+		cp := make([]uint64, len(words))
+		copy(cp, words)
+		t.bitsets[id] = cp
+	}
+}
+
+// PruneUserEntities removes all entity rows whose raw index is >= firstUser
+// from the entity column. Returns the removed entity IDs. Valid only for tables
+// with no columns (i.e. the empty/root archetype table). The caller must update
+// entity-index Record.Row for any remaining entities whose row position changed.
+func (t *Table) PruneUserEntities(firstUser uint32) []ids.ID {
+	var removed []ids.ID
+	write := 0
+	for _, e := range t.entities {
+		if e.Index() >= firstUser {
+			removed = append(removed, e)
+		} else {
+			t.entities[write] = e
+			write++
+		}
+	}
+	for i := write; i < len(t.entities); i++ {
+		t.entities[i] = 0
+	}
+	t.entities = t.entities[:write]
+	t.changeCount++
+	return removed
+}
+
 // IsRowEnabled reports whether row is enabled for component id.
 // Returns true when no bitset exists for id (all rows enabled by default).
 //

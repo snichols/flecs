@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.78.0)
+## Shipped (through v0.79.0)
 
 The following features are available in the current release:
 
@@ -80,6 +80,7 @@ The following features are available in the current release:
 - **Query equality operators** _(v0.76.0, Phase 16.21)_ — `IsEntity(e ID) Term` / `NotEntity(e ID) Term` / `NameMatches(pattern string) Term`. Per-entity identity equality and case-insensitive substring name-match predicates. Mirrors upstream `EcsPredEq` / `EcsPredMatch` (`include/flecs.h:1979-1986`, `eval_pred.c:8-303`). All three terms compose inside `WithoutScope`. `CachedQuery` with `NameMatches` subscribes to `OnSet[Name]` for change detection. `EcsPredLookup` deliberately omitted. Closes `docs/README.md` equality-operators gap entry.
 - **AndFrom / OrFrom / NotFrom operators** _(v0.77.0, Phase 16.22)_ — `AndFrom(source ID) Term` / `OrFrom(source ID) Term` / `NotFrom(source ID) Term`. Type-list expansion operators: at construction the source entity's component list is snapshotted and expanded into N TermAnd / one OR-group / N TermNot requirements respectively. DontInherit components (`Prefab`, `Disabled`) are filtered from expansion. Snapshot-at-construction deliberately diverges from upstream C's live re-read. Closes `docs/README.md` AndFrom/OrFrom/NotFrom gap entry.
 - **World-level pre/post merge hooks** _(v0.78.0, Phase 16.23)_ — `OnPreMerge(w, fn) int` / `OnPostMerge(w, fn) int` / `RemovePreMergeHook(w, id)` / `RemovePostMergeHook(w, id)`. Persistent callbacks at every deferred-command merge boundary. Pre-hook mutations batch with the current merge; post-hook mutations queue for next. Hooks fire once per merge boundary (not once per worker stage for multi-threaded systems). `ErrMergeReentry` guard prevents re-entrant `w.Write` from inside hooks. Deliberate divergence from upstream C which has no persistent merge-hook API. Closes `docs/README.md` world-level merge hooks gap entry.
+- **Binary world snapshots** _(v0.79.0, Phase 16.24)_ — `TakeSnapshot(w) *Snapshot` / `RestoreSnapshot(w, s)` / `Bytes(s) ([]byte, error)` / `LoadSnapshot(data []byte) (*Snapshot, error)`. Fast in-memory point-in-time world snapshot with binary serialisation. Captures entity index, archetype component columns, disabled-component bitsets, sparse/DontFragment side-maps, union relationship maps, entity ID range, cleanup/instantiate/OneOf policies, ordered-children lists. Observers and systems are not captured (code, not data). Same-world restriction enforced via worldID token. Closes `docs/README.md` world snapshots gap entry. See [docs/Snapshots.md](docs/Snapshots.md).
 
 ## Documentation
 
