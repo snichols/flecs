@@ -141,8 +141,15 @@ func sparseSetInsert(w *World, e ID, componentID ID, srcPtr unsafe.Pointer) {
 	} else {
 		// New entry: allocate a heap copy for pointer stability. Bump version so
 		// CachedQuery.Changed() detects the structural change.
-		pv := reflect.New(info.Type)
-		dst := pv.UnsafePointer()
+		var dst unsafe.Pointer
+		if info.Type != nil {
+			pv := reflect.New(info.Type)
+			dst = pv.UnsafePointer()
+		} else {
+			// Dynamic component: synthesize [size]byte backing.
+			pv := reflect.New(reflect.ArrayOf(int(info.Size), reflect.TypeOf(byte(0))))
+			dst = pv.UnsafePointer()
+		}
 		copy(unsafe.Slice((*byte)(dst), info.Size), unsafe.Slice((*byte)(srcPtr), info.Size))
 		slot := len(ss.dense)
 		ss.dense = append(ss.dense, sparseEntry{entity: e, data: dst})

@@ -17,10 +17,11 @@ var tagType = reflect.TypeFor[struct{}]()
 // entity ID for reverse lookups.
 // The registry is single-threaded by contract; concurrent access is not supported.
 type Registry struct {
-	m       map[reflect.Type]*TypeInfo
-	order   []reflect.Type
-	byID    map[ids.ID]*TypeInfo
-	idOrder []ids.ID // all IDs added to byID in insertion order
+	m         map[reflect.Type]*TypeInfo
+	order     []reflect.Type
+	byID      map[ids.ID]*TypeInfo
+	idOrder   []ids.ID // all IDs added to byID in insertion order
+	byDynName map[string]*TypeInfo
 }
 
 // NewRegistry returns a new, empty Registry.
@@ -131,6 +132,25 @@ func (r *Registry) EnsureID(id ids.ID) *TypeInfo {
 		Type:  tagType,
 	}
 	r.AssociateID(info, id)
+	return info
+}
+
+// RegisterDynamicByName records a dynamic (runtime-typed) component in r.
+// TypeInfo is created with Hooks zero and Type nil (no backing Go type).
+// Panics if name is already registered via RegisterDynamicByName.
+func (r *Registry) RegisterDynamicByName(name string, size, alignment uintptr) *TypeInfo {
+	if _, exists := r.byDynName[name]; exists {
+		panic(fmt.Sprintf("component: RegisterDynamicByName: name %q is already registered", name))
+	}
+	info := &TypeInfo{
+		Size:  size,
+		Align: alignment,
+		Name:  name,
+	}
+	if r.byDynName == nil {
+		r.byDynName = make(map[string]*TypeInfo)
+	}
+	r.byDynName[name] = info
 	return info
 }
 
