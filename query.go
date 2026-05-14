@@ -593,6 +593,12 @@ type QueryIter struct {
 	allUnion       bool         // all And terms are union pairs; iterate union store directly
 	unionDriver    []unionEntry // snapshot of the smallest union store (allUnion mode)
 	unionDriverPos int          // current position in unionDriver; -1 = before first
+	// sorted iteration state — set by CachedQuery.Iter() when the query has an
+	// order_by comparator. Entities are pre-sorted; yields one entity per Next().
+	sortedMode     bool             // true = walk sortedEntities in order
+	sortedPos      int              // current position; -1 = before first
+	sortedEntities []ID             // sorted entity list (reference into CachedQuery)
+	sortedRows     []sortedFieldRow // parallel (table, row) for each sorted entity
 }
 
 // Next advances to the next matching table (or next wildcard expansion row
@@ -611,6 +617,9 @@ type QueryIter struct {
 // entity at a time (not one table at a time). Count() returns 1 and Entities()
 // returns a single-element slice for each step.
 func (it *QueryIter) Next() bool {
+	if it.sortedMode {
+		return it.nextSorted()
+	}
 	if it.allSparse {
 		return it.nextSparseOnly()
 	}

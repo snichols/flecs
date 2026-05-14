@@ -125,6 +125,13 @@ type CachedQuery struct {
 	// so they never appear in cq.tables. This is cheaper than per-iter filtering.
 	skipDisabled bool
 	skipPrefab   bool
+	// Sorted-iteration state — non-nil only when WithOrderBy was used.
+	orderBy             ID                      // sort-by component ID
+	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
+	sortedEntities      []ID                    // entities in sorted order; rebuilt lazily
+	sortedRows          []sortedFieldRow        // parallel (table, row) for each sorted entity
+	sortedLastChange    map[*table.Table]uint64 // per-table ChangeCount at last rebuild
+	sortedLastSparseVer map[ID]uint64           // per-sparse-set version at last rebuild (sparseAndOnly)
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -336,6 +343,37 @@ func (cq *CachedQuery) TermsFull() []Term {
 func (cq *CachedQuery) Iter() *QueryIter {
 	if cq.removed {
 		return &QueryIter{pos: -1}
+	}
+
+	// Sorted iteration: lazily rebuild the sorted entity list and return a
+	// sorted iterator. Wildcard expansion is incompatible with sorted mode and
+	// is disabled (wildcardTermIdx = -1).
+	if cq.orderByCmp != nil {
+		if cq.needsSortRebuild() {
+			cq.rebuildSorted()
+		}
+		hasSparseTerms := false
+		for _, t := range cq.terms {
+			if t.Kind == TermAnd && (t.Sparse || t.Union) {
+				hasSparseTerms = true
+				break
+			}
+		}
+		return &QueryIter{
+			world:           cq.w,
+			terms:           cq.terms,
+			orGroups:        cq.orGroups,
+			sortedMode:      true,
+			sortedPos:       -1,
+			sortedEntities:  cq.sortedEntities,
+			sortedRows:      cq.sortedRows,
+			allSparse:       cq.sparseAndOnly,
+			hasSparseTerms:  hasSparseTerms,
+			cached:          true,
+			pos:             -1,
+			wildcardTermIdx: -1,
+			wildcardPairPos: -1,
+		}
 	}
 
 	wildcardIdx := findWildcardTermIdx(cq.w, cq.terms)

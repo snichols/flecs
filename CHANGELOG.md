@@ -1,5 +1,76 @@
 # Changelog
 
+## v0.59.0 — 2026-05-14 — Phase 16.4: Sorted cached queries (order_by_callback port)
+
+Ports upstream flecs' `order_by_callback` to Go flecs. A cached query can supply a
+comparator function and a sort-by component ID; the query yields its matched entities
+in sorted order on each `Iter()` call. The sort is lazy: it runs only when the underlying
+data has changed (table `ChangeCount` increased or a new table was added), not on every
+iteration. Closes the gap entry at `docs/README.md` line 110.
+
+### Added
+
+- **`OrderByFunc`** — comparator type `func(eA ID, vA unsafe.Pointer, eB ID, vB unsafe.Pointer) int`.
+  Negative means A < B, zero means equal, positive means A > B. `vA`/`vB` point to the
+  sort-by component value for each entity; they are `nil` when the sort-by component is
+  `TermOptional` (i.e., `Maybe`) and not present on that entity.
+- **`OrderBy[T](cmp func(eA ID, vA *T, eB ID, vB *T) int) OrderByFunc`** — typed convenience
+  wrapper that casts the raw `unsafe.Pointer` arguments to `*T`. Nil pointers are forwarded as
+  nil `*T` (the optional-absent case).
+- **`CachedQueryOptions`** — zero-value struct for `NewCachedQueryFromTermsWithOptions`. Construct
+  via `WithOrderBy` or use the zero value for no sort.
+- **`WithOrderBy(componentID ID, cmp OrderByFunc) CachedQueryOptions`** — returns options that
+  sort the query by `componentID` using `cmp`. `componentID` must appear as a `With` or `Maybe`
+  term; pair IDs are not supported in v0.59.0 (panics at construction with a clear message).
+- **`NewCachedQueryFromTermsWithOptions(w *World, opts CachedQueryOptions, terms ...Term) *CachedQuery`** —
+  new constructor that accepts optional configuration before the term list. When `opts` carries
+  no sort (zero value), behaves identically to `NewCachedQueryFromTerms`.
+
+### Changed
+
+- **`CachedQuery`** — extended with `orderBy ID`, `orderByCmp OrderByFunc`, `sortedEntities []ID`,
+  `sortedRows []sortedFieldRow`, `sortedLastChange map[*table.Table]uint64`,
+  `sortedLastSparseVer map[ID]uint64`. Fields are zero / nil when no sort is configured; no
+  overhead for unsorted queries.
+- **`QueryIter`** — extended with `sortedMode bool`, `sortedPos int`, `sortedEntities []ID`,
+  `sortedRows []sortedFieldRow`. When `sortedMode` is true, `Next()` dispatches to `nextSorted`
+  which yields one entity at a time in sort order, wiring the worker-clip trick
+  (`wFirst=row, wCount=1, workerTotal=1`) so that `Field[T]` returns a length-1 slice over the
+  entity's archetype column row as usual.
+- **`CachedQuery.Iter()`** — sorted path runs before all other paths. Calls `needsSortRebuild()`
+  and `rebuildSorted()` lazily, then returns an iterator in `sortedMode`.
+
+### Design decisions recorded
+
+1. **Global `sort.SliceStable` instead of upstream's two-step algorithm.** Upstream uses per-table
+   in-place quicksort + k-way merge. Go flecs uses a single `sort.SliceStable` over all matched
+   entities. Observable ordering is identical and the implementation is far simpler. The
+   performance difference is a future optimization target if benchmarks show it matters.
+2. **`NewCachedQueryFromTermsWithOptions` as a new constructor** rather than variadic options
+   appended to `NewCachedQueryFromTerms`. Keeps the existing call sites unmodified and avoids
+   ambiguity between option structs and term values at the call site.
+3. **Panic at construction if sort-by component is absent.** Matches Go flecs' strict-validation
+   precedent in `validateAndSortTerms`. Clear error message at construction beats a silent
+   wrong-result or nil-dereference at iteration time.
+4. **Pair IDs as sort-by component deferred to v0.60.0+.** Pair storage is in archetype columns
+   or union store; the extra dispatch is straightforward but not needed for the primary use case.
+   Users can work around with a packed struct component for multi-key sort.
+5. **`ChangeCount`-based invalidation** rather than upstream's `OnSet` monitor subscription.
+   `ChangeCount` covers all column writes and structural changes (entity add/remove) in one
+   monotonic counter per table; no observer subscription overhead per sorted query.
+
+### Changed (docs)
+
+- `docs/Queries.md` — new § **Sorted queries** section added (above Performance Notes) with
+  `OrderBy[T]` and raw `OrderByFunc` examples, lazy-invalidation explanation, optional sort-by
+  component usage, and constraints. The "Not Yet Ported" stub for sorted queries replaced with a
+  cross-reference to the new section.
+- `docs/README.md` — line 110 flipped to ✅ shipped (v0.59.0) with anchor link to the new
+  Queries.md section.
+- `README.md` — new feature-list row for sorted cached queries.
+- `ROADMAP.md` — "Shipped (through v0.58.0)" heading bumped to "through v0.59.0"; v0.59.0
+  entry added.
+
 ## v0.58.0 — 2026-05-14 — Phase 16.3: System lifecycle bundle (disabling, single-Run, pipeline introspection)
 
 Ships three independent system-side features as a bundle, closing three entries

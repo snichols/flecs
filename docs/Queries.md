@@ -744,6 +744,95 @@ if cq.Changed() { /* true — sparse-set was modified */ }
 
 ---
 
+## Sorted queries
+
+Sorted cached queries yield their matched entities in a user-defined order, re-sorted lazily whenever the underlying data changes. Sorting is a `CachedQuery`-only feature; non-cached queries do not support it (sorting a non-cached query would re-sort on every iteration call).
+
+### Creating a sorted cached query
+
+Use `NewCachedQueryFromTermsWithOptions` with the `WithOrderBy` option:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+velID := flecs.RegisterComponent[Velocity](w)
+
+cq := flecs.NewCachedQueryFromTermsWithOptions(w,
+    flecs.WithOrderBy(posID, flecs.OrderBy[Position](func(eA flecs.ID, vA *Position, eB flecs.ID, vB *Position) int {
+        if vA.X < vB.X { return -1 }
+        if vA.X > vB.X { return 1 }
+        return 0
+    })),
+    flecs.With(posID),
+    flecs.With(velID),
+)
+defer cq.Close()
+
+it := cq.Iter()
+for it.Next() {
+    pos := flecs.Field[Position](it, posID)
+    fmt.Printf("entity %v at X=%.1f\n", it.Entities()[0], pos[0].X)
+}
+```
+
+`OrderBy[T]` wraps a typed comparator `func(eA ID, vA *T, eB ID, vB *T) int`. The return convention is the same as `cmp.Compare`: negative if A < B, zero if equal, positive if A > B.
+
+### Raw OrderByFunc
+
+For lower-level use (e.g. a component registered by ID without the Go type), use `OrderByFunc` directly:
+
+```go
+import "unsafe"
+
+var cmpByX flecs.OrderByFunc = func(eA flecs.ID, vA unsafe.Pointer, eB flecs.ID, vB unsafe.Pointer) int {
+    pa, pb := (*Position)(vA), (*Position)(vB)
+    if pa.X < pb.X { return -1 }
+    if pa.X > pb.X { return 1 }
+    return 0
+}
+
+cq := flecs.NewCachedQueryFromTermsWithOptions(w,
+    flecs.WithOrderBy(posID, cmpByX),
+    flecs.With(posID),
+)
+```
+
+### Lazy invalidation
+
+The sorted order is cached: the list is rebuilt only when the data has changed, not on every `Iter()` call. A rebuild is triggered when:
+
+- Any matching table's `ChangeCount` has increased since the last sort (a component column was written, or an entity was structurally changed within that table).
+- A new table matching the query was added since the last sort (`tablesAdded` flag).
+
+If neither condition holds, the cached sorted list is returned directly at zero cost.
+
+### Field access in sorted iteration
+
+Each `Next()` call yields exactly one entity. `Entities()` returns a length-1 slice. `Field[T]` and `FieldMaybe[T]` read the component value for that entity as usual. This differs from the default table-walk iteration (where `Entities()` can yield a whole table row slice), but keeps the API uniform: `Each1`/`Each2`/etc. work unchanged.
+
+### Optional sort-by component
+
+The sort-by component may be a `Maybe` term. Entities that do not carry the optional component receive a `nil` pointer in the comparator's `vA`/`vB` arguments; handle the nil case in your comparator:
+
+```go
+cq := flecs.NewCachedQueryFromTermsWithOptions(w,
+    flecs.WithOrderBy(tagID, flecs.OrderBy[Tag](func(eA flecs.ID, vA *Tag, eB flecs.ID, vB *Tag) int {
+        if vA == nil { return -1 } // entities without Tag sort first
+        if vB == nil { return 1 }
+        return cmp.Compare(vA.Priority, vB.Priority)
+    })),
+    flecs.With(baseID),
+    flecs.Maybe(tagID),
+)
+```
+
+### Constraints
+
+- The sort-by component (`WithOrderBy(componentID, cmp)`) must appear as a `With` or `Maybe` term in the query term set. Using a component not in the term set or using `Without` panics at construction.
+- Pair IDs as the sort-by component are not supported in v0.59.0. Use a packed struct to sort by multiple fields at once.
+- Unlike upstream C flecs' two-step per-table quicksort + k-way merge, Go flecs uses a single `sort.SliceStable` over all matched entities. Observable ordering is identical; the design decision is recorded in CHANGELOG v0.59.0.
+
+---
+
 ## Performance Notes
 
 - **Uncached query iteration** is O(smallest-matching-set × terms) per `Iter()` call. The seed term is the TermAnd component with the fewest matching tables. For all-sparse queries the driver is the smallest sparse-set, so iteration is proportional to that set size. For dense queries the inner-loop cost dominates.
@@ -814,7 +903,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Query variables** — `$Var` named variables in the Flecs Query Language constrain results across related entities (e.g., "spaceships docked to a planet"). Not yet ported in Go flecs.
 
-**Sorted queries** — `order_by_callback` sorts matched entities by a component value. Not yet ported in Go flecs.
+**Sorted queries** — ✅ shipped in v0.59.0. See [§ Sorted queries](#sorted-queries) below.
 
 **Query groups** — `group_by_callback` partitions the query cache by a computed group ID, enabling O(1) group-iterator lookups. Not yet ported in Go flecs. (`Cascade` provides hierarchy-depth ordering as a special built-in case.)
 
