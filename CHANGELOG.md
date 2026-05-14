@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.83.0 — 2026-05-14 — Phase 16.28: Alerts addon
+
+Ports the C flecs Alerts addon to Go. Alerts are registered query + severity + message rules; the world automatically tracks which entities satisfy the query and exposes the active set as `AlertInstance` snapshots.
+
+### API additions
+
+- **`RegisterAlert(w *Writer, desc AlertDesc) ID`** — register an alert; returns the alert entity ID. Internally installs a hidden monitor observer over `desc.Query`. Entities already matching the query at registration time are swept synchronously.
+- **`AlertDesc`** — descriptor struct: `Name string`, `Query []Term`, `Severity int`, `Message string`.
+- **`AlertInstance`** — snapshot struct: `Entity ID`, `Alert ID`, `Severity int`, `Message string`, `RaisedAt time.Time`.
+- **`AlertInfo` / `AlertWarning` / `AlertError` / `AlertCritical`** — severity constants (int 0–3).
+- **`(*World).Alerts() []AlertInstance`** — snapshot of all currently-active alert instances (undefined order).
+- **`(*World).AlertsBySeverity(sev int) []AlertInstance`** — filter by severity.
+- **`(*World).AlertsForEntity(e ID) []AlertInstance`** — filter by subject entity.
+
+### Semantics
+
+- **Lifecycle** — monitor observer fires on archetype migration and sparse/union changes (Phase 16.10 infrastructure). Entry: instance created with `RaisedAt = time.Now()`. Exit or entity delete: instance removed.
+- **Message templates** — static string or single `%d` replaced with the entity's raw uint64 ID. Full component-value interpolation deferred to a future phase.
+- **Instance storage** — internal `map[alertKey]*AlertInstance` keyed on `(alertID, entityID)`; not first-class entities (deliberate divergence from C's child-entity model).
+- **Marshal round-trip** — alert definitions are serialized in `MarshalJSON` and restored in `UnmarshalJSON`. Instances are not stored; they are recomputed from entity state via `WithYieldExisting` on restore.
+
+### Decision lock-ins
+
+1. Instance map (not child entities) — avoids entity-index churn for transient warnings.
+2. Monitor observer lifecycle — reuses Phase 16.10 infrastructure; no dedicated sweep system.
+3. Int severity constants 0–3 — ergonomic for comparison and filter helpers; C uses tag entities.
+4. `WithYieldExisting` on restore — instances immediately available after `UnmarshalJSON`.
+
+### v1 non-goals
+
+No alert delivery API, no first-class instance entities, no member-field ranges, no per-alert severity filters, no retain period, no alert ordering, no full message interpolation.
+
+### Documentation
+
+- **`docs/Alerts.md`** — new addon documentation.
+- **`docs/README.md`** — line 76 flipped to ✅ shipped (v0.83.0).
+- **`README.md`** — feature-list entry added.
+- **`ROADMAP.md`** — heading bumped to "through v0.83.0"; Phase 16.28 entry added.
+
 ## v0.82.0 — 2026-05-14 — Phase 16.27: RunSystemWorker — explicit thread dispatch
 
 Adds `RunSystemWorker`, the out-of-pipeline counterpart to within-system multi-threaded dispatch. Callers fan out N goroutines each processing a disjoint slice of the system's matched entities, without the pipeline scheduler.

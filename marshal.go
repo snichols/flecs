@@ -39,6 +39,24 @@ type jsonWorld struct {
 	EntityRangeMin uint32 `json:"entity_range_min,omitempty"`
 	EntityRangeMax uint32 `json:"entity_range_max,omitempty"`
 	EntityRangeSet bool   `json:"entity_range_set,omitempty"`
+	// Alerts holds registered alert definitions. Instances are not stored; they
+	// are recomputed from the query via WithYieldExisting during UnmarshalJSON.
+	Alerts []jsonAlertDef `json:"alerts,omitempty"`
+}
+
+// jsonAlertDef is the serialised form of one registered alert.
+type jsonAlertDef struct {
+	EntitySerial int             `json:"entity_serial"`
+	Severity     int             `json:"severity"`
+	Message      string          `json:"message,omitempty"`
+	Terms        []jsonAlertTerm `json:"terms"`
+}
+
+// jsonAlertTerm is the serialised form of one alert query term.
+// Only terms whose ID is a registered component (non-pair) are supported in v1.
+type jsonAlertTerm struct {
+	Kind          int    `json:"kind"`
+	ComponentName string `json:"component_name"`
 }
 
 // jsonEntity is the JSON representation of a single entity.
@@ -457,6 +475,39 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			}
 		}
 
+		// Serialize alert definitions. Only terms with registered component IDs
+		// (non-pair) are supported; alerts with unsupported terms are silently skipped.
+		var alertDefs []jsonAlertDef
+		for _, def := range w.alertDefs {
+			serial, ok := m.idToSerial[def.alertID]
+			if !ok {
+				continue
+			}
+			terms := make([]jsonAlertTerm, 0, len(def.desc.Query))
+			valid := true
+			for _, term := range def.desc.Query {
+				if term.ID.IsPair() {
+					valid = false
+					break
+				}
+				info, hasInfo := fr.ComponentInfo(term.ID)
+				if !hasInfo {
+					valid = false
+					break
+				}
+				terms = append(terms, jsonAlertTerm{Kind: int(term.Kind), ComponentName: info.Name})
+			}
+			if !valid {
+				continue
+			}
+			alertDefs = append(alertDefs, jsonAlertDef{
+				EntitySerial: serial,
+				Severity:     def.desc.Severity,
+				Message:      def.desc.Message,
+				Terms:        terms,
+			})
+		}
+
 		rangeMin, rangeMax, rangeIsSet := w.index.GetRange()
 		jw := jsonWorld{
 			Version:                  1,
@@ -469,6 +520,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			EntityRangeMin:           rangeMin,
 			EntityRangeMax:           rangeMax,
 			EntityRangeSet:           rangeIsSet,
+			Alerts:                   alertDefs,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -725,6 +777,34 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		// allocation during the phases above is unconstrained.
 		if jw.EntityRangeSet {
 			w.index.SetRange(jw.EntityRangeMin, jw.EntityRangeMax)
+		}
+
+		// Phase 4: restore alert definitions. Instances are recomputed via
+		// WithYieldExisting inside registerAlertInternal.
+		for _, ja := range jw.Alerts {
+			alertID, ok := serialToID[ja.EntitySerial]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: alert entity serial %d not found", ja.EntitySerial)
+				return
+			}
+			terms := make([]Term, 0, len(ja.Terms))
+			for _, jt := range ja.Terms {
+				info, ok := compByName[jt.ComponentName]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: alert term component %q is not registered", jt.ComponentName)
+					return
+				}
+				terms = append(terms, Term{ID: info.ID, Kind: TermKind(jt.Kind)})
+			}
+			desc := AlertDesc{
+				Query:    terms,
+				Severity: ja.Severity,
+				Message:  ja.Message,
+			}
+			if name, ok := fw.GetName(alertID); ok {
+				desc.Name = name
+			}
+			registerAlertInternal(fw, alertID, desc)
 		}
 
 		if w.logger != nil {

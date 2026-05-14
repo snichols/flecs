@@ -73,7 +73,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Reflection / meta cursor** (`ecs_meta_cursor`, `ecs_meta_type_op`) — not ported.
 - **Sparse storage** (`EcsSparse` component trait opt-in) — **fully shipped in v0.52.0** — storage, write/read/remove API, and query integration (all-sparse, mixed, and all-archetype iterator modes; `Field[T]`/`FieldMaybe[T]` sparse branches; `Not`/`Optional` on sparse terms; `CachedQuery.Changed()` via version counter). See [ComponentTraits.md § Sparse](ComponentTraits.md#sparse) and [Queries.md § Sparse-aware queries](Queries.md#sparse-aware-queries).
 - **World-level pre/post merge hooks** — **shipped in v0.78.0** via `OnPreMerge` / `OnPostMerge` / `RemovePreMergeHook` / `RemovePostMergeHook`. See [Systems.md § Merge hooks](Systems.md#merge-hooks).
-- **Alerts addon** — not ported.
+- **Alerts addon** — ✅ **shipped in v0.83.0** via `RegisterAlert` / `Alerts` / `AlertsBySeverity` / `AlertsForEntity`. Query-driven entry/exit lifecycle via monitor observer; `AlertInfo`/`AlertWarning`/`AlertError`/`AlertCritical` constants; `%d` entity-ID interpolation; definitions survive JSON round-trip. See [docs/Alerts.md](Alerts.md).
 - **Monitor addon** — not ported.
 - **Units addon** — not ported.
 - **Query groups** — not ported.

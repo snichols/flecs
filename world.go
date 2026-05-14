@@ -151,6 +151,8 @@ type World struct {
 	inheritorCache map[ID][]ID
 	preMergeHooks  []func(*Writer) // nil slots are tombstones; slice index = registration ID
 	postMergeHooks []func(*Writer) // nil slots are tombstones; slice index = registration ID
+	alertDefs      []*alertDef
+	alertInstances map[alertKey]*AlertInstance
 }
 
 // New initializes and returns an empty World.
