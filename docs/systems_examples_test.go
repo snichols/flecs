@@ -494,3 +494,134 @@ func TestSystems_SystemCountInPhase(t *testing.T) {
 		}
 	})
 }
+
+// TestSystems_SetEnabled verifies the code example in the "Disabling a System"
+// section of Systems.md: SetEnabled(false) pauses, SetEnabled(true) resumes.
+func TestSystems_SetEnabled(t *testing.T) {
+	type Tag struct{}
+
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Tag{})
+	})
+
+	var runs int
+	q := flecs.NewCachedQuery(w, tagID)
+	sys := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			runs++
+		}
+	})
+
+	sys.SetEnabled(false)
+	if sys.IsEnabled() {
+		t.Error("IsEnabled() = true after SetEnabled(false)")
+	}
+
+	w.Progress(0.016)
+	if runs != 0 {
+		t.Errorf("disabled system runs = %d, want 0", runs)
+	}
+
+	sys.SetEnabled(true)
+	w.Progress(0.016)
+	if runs != 1 {
+		t.Errorf("re-enabled system runs = %d, want 1", runs)
+	}
+}
+
+// TestSystems_RunSystem verifies the code example in the "Single-system Run"
+// section of Systems.md: RunSystem invokes once with the given dt.
+func TestSystems_RunSystem(t *testing.T) {
+	type Counter struct{ N int }
+
+	w := flecs.New()
+	ctrID := flecs.RegisterComponent[Counter](w)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, Counter{N: 0})
+	})
+
+	q := flecs.NewCachedQuery(w, ctrID)
+	sys := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			counters := flecs.Field[Counter](it, ctrID)
+			for i := range counters {
+				counters[i].N++
+			}
+		}
+	})
+
+	flecs.RunSystem(sys, 1.0/60.0)
+
+	w.Read(func(r *flecs.Reader) {
+		c, ok := flecs.Get[Counter](r, e)
+		if !ok {
+			t.Fatal("Counter not found")
+		}
+		if c.N != 1 {
+			t.Errorf("Counter.N = %d after RunSystem, want 1", c.N)
+		}
+	})
+}
+
+// TestSystems_PipelineIntrospection verifies the code examples in the
+// "Pipeline Introspection" section of Systems.md.
+func TestSystems_PipelineIntrospection(t *testing.T) {
+	type Tag struct{}
+
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Tag{})
+	})
+
+	q := flecs.NewCachedQuery(w, tagID)
+	sysA := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+		}
+	})
+	sysB := flecs.NewSystemInPhase(w, w.PreUpdate(), q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+		}
+	})
+	sysB.SetEnabled(false) // introspection must still list it
+
+	w.Read(func(r *flecs.Reader) {
+		// Phases() returns four IDs in execution order.
+		phases := r.Phases()
+		if len(phases) != 4 {
+			t.Fatalf("Phases() len = %d, want 4", len(phases))
+		}
+		if phases[0] != w.PreUpdate() {
+			t.Errorf("phases[0] = %v, want PreUpdate", phases[0])
+		}
+		if phases[2] != w.OnUpdate() {
+			t.Errorf("phases[2] = %v, want OnUpdate", phases[2])
+		}
+
+		// SystemsInPhase lists all non-closed systems including disabled.
+		onUpdateSystems := r.SystemsInPhase(w.OnUpdate())
+		if len(onUpdateSystems) != 1 || onUpdateSystems[0] != sysA {
+			t.Errorf("SystemsInPhase(OnUpdate) = %v, want [sysA]", onUpdateSystems)
+		}
+		preUpdateSystems := r.SystemsInPhase(w.PreUpdate())
+		if len(preUpdateSystems) != 1 || preUpdateSystems[0] != sysB {
+			t.Errorf("SystemsInPhase(PreUpdate) = %v, want [sysB]", preUpdateSystems)
+		}
+
+		// EachSystem halts on false return.
+		var seen int
+		r.EachSystem(w.OnUpdate(), func(_ *flecs.System) bool {
+			seen++
+			return false
+		})
+		if seen != 1 {
+			t.Errorf("EachSystem halted after %d calls, want 1", seen)
+		}
+	})
+}

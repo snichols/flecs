@@ -286,6 +286,49 @@ func (r *Reader) SystemCountInPhase(phase ID) int {
 	return r.world.SystemCountInPhase(phase)
 }
 
+// Phases returns the four built-in pipeline phase IDs in execution order:
+// PreUpdate, OnFixedUpdate, OnUpdate, PostUpdate.
+func (r *Reader) Phases() []ID {
+	w := r.world
+	return []ID{w.preUpdateID, w.onFixedUpdateID, w.onUpdateID, w.postUpdateID}
+}
+
+// SystemsInPhase returns a snapshot of all registered non-closed systems in
+// the given phase, in registration order. Disabled systems are included.
+// Returns an empty (non-nil) slice when no systems are registered for the phase.
+// Panics if phase is not one of the four built-in phases.
+func (r *Reader) SystemsInPhase(phase ID) []*System {
+	w := r.world
+	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
+		panic(fmt.Sprintf("flecs: SystemsInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+	}
+	out := make([]*System, 0)
+	for _, s := range w.systems {
+		if !s.removed && s.phase == phase {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// EachSystem calls fn for each registered non-closed system in the given phase,
+// in registration order. Disabled systems are included. fn returning false halts
+// iteration early.
+// Panics if phase is not one of the four built-in phases.
+func (r *Reader) EachSystem(phase ID, fn func(*System) bool) {
+	w := r.world
+	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
+		panic(fmt.Sprintf("flecs: EachSystem: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+	}
+	for _, s := range w.systems {
+		if !s.removed && s.phase == phase {
+			if !fn(s) {
+				return
+			}
+		}
+	}
+}
+
 // GetByID reads the value of the component identified by id from entity e.
 func (r *Reader) GetByID(e ID, id ID) (any, bool) {
 	return r.world.GetByID(e, id)

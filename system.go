@@ -33,6 +33,7 @@ type System struct {
 	fn            func(dt float32, it *QueryIter)
 	phase         ID // which pipeline phase this system belongs to
 	removed       bool
+	enabled       bool            // false = skip during pipeline dispatch; default true
 	parallel      bool            // opt-in parallel dispatch; default false
 	multiThreaded bool            // opt-in within-system row-range split; default false
 	writeSetFixed bool            // true after SetWriteSet called
@@ -79,7 +80,7 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 	}
 	w.systems = live
 
-	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdateID}
+	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdateID, enabled: true}
 	w.systems = append(w.systems, sys)
 	if w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
@@ -123,7 +124,7 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	}
 	w.systems = live
 
-	sys := &System{w: w, query: q, fn: fn, phase: phase}
+	sys := &System{w: w, query: q, fn: fn, phase: phase, enabled: true}
 	w.systems = append(w.systems, sys)
 	if w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
@@ -131,6 +132,20 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 	}
 	return sys
 }
+
+// SetEnabled enables or disables this system for pipeline dispatch.
+// A disabled system is excluded from Progress runs but remains registered and
+// is visible to pipeline introspection (SystemsInPhase, EachSystem).
+// Default is true (enabled). Idempotent.
+//
+// Unlike Close, SetEnabled(false) is reversible: calling SetEnabled(true)
+// restores the system to full dispatch.
+//
+// Note: RunSystem bypasses this flag — explicit invocation always runs the system.
+func (s *System) SetEnabled(v bool) { s.enabled = v }
+
+// IsEnabled reports whether this system is enabled for pipeline dispatch.
+func (s *System) IsEnabled() bool { return s.enabled }
 
 // SetParallel sets whether this system is eligible for parallel dispatch.
 // Default is false (serial). When true and the world's WorkerCount is > 0,
@@ -265,7 +280,7 @@ func (w *World) Progress(dt float32) {
 		w.deferScope(func() {
 			active := make([]*System, 0, len(w.systems))
 			for _, s := range w.systems {
-				if !s.removed && s.phase == p {
+				if !s.removed && s.enabled && s.phase == p {
 					active = append(active, s)
 				}
 			}
@@ -380,7 +395,7 @@ func (w *World) Progress(dt float32) {
 	countPhase := func(p ID) int {
 		n := 0
 		for _, s := range w.systems {
-			if !s.removed && s.phase == p {
+			if !s.removed && s.enabled && s.phase == p {
 				n++
 			}
 		}
@@ -442,6 +457,30 @@ func (w *World) SystemCount() int {
 		}
 	}
 	return n
+}
+
+// RunSystem invokes s once synchronously with the given dt, outside the normal
+// pipeline. The system's query and callback run exactly as in a Progress call,
+// but phase ordering, parallel batching, and multi-threaded splitting are all
+// bypassed. The disabled flag (SetEnabled) is also bypassed — explicit
+// invocation always runs the system regardless of its enabled state.
+//
+// Mutations are deferred and flushed before RunSystem returns, matching the
+// flecs_defer_begin / flecs_defer_end wrap in C ecs_run.
+//
+// Panics if s is nil or s is closed (IsClosed() == true).
+func RunSystem(s *System, dt float32) {
+	if s == nil {
+		panic("flecs: RunSystem: system must not be nil")
+	}
+	if s.removed {
+		panic("flecs: RunSystem: system is closed")
+	}
+	s.w.checkExclusiveAccessWrite()
+	s.w.deferScope(func() {
+		it := s.query.Iter()
+		s.fn(dt, it)
+	})
 }
 
 // phaseName returns a human-readable name for the given pipeline phase ID.
