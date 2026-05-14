@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.72.0 — 2026-05-14 — Phase 16.17: Observer propagation along IsA
+
+Ports the upstream C flecs observer-propagation mechanism (`observable.c:1083`).
+When a component is mutated on a prefab entity, the same observer event now fires
+once on the source entity and once per transitive inheritor via BFS over IsA edges.
+
+### Added
+
+- **`observer_propagation.go`** — new file containing the propagation engine:
+  - `(*World).propagateEvent(componentID, eventEntity, sourceEntity ID, ptr)` — BFS over IsA inheritors; fires `dispatchObserversForPropagation` for each live, non-override inheritor.
+  - `(*World).dispatchObserversForPropagation(componentID, eventEntity, inh ID, ptr)` — propagation-aware variant of `dispatchObservers`; multi-term observers skip the trigger-component term in their filter (it is auto-satisfied since the inheritor has the component via IsA).
+  - `entityMatchesTermsForPropagation(w, terms, orGroups, e, inheritedID)` — like `entityMatchesTerms` but treats `inheritedID` (the propagated trigger) as automatically satisfied for `TermAnd`.
+  - `(*World).propagateReplaceHook(componentID, sourceEntity ID, fn)` — propagates `OnReplace` hook calls to inheritors.
+  - `(*World).inheritorsBFS(prefab ID) []ID` — cache-backed BFS result; entire cache cleared on any `(IsA, *)` structural change.
+  - `buildInheritorsBFS(w, prefab)` — BFS with visited-set for cycle safety (handles `(IsA, self)` loops).
+  - `(*World).invalidateInheritorCache()` — clears the entire inheritor BFS cache; O(1).
+- **`world.go`** — added `inheritorCache map[ID][]ID` field to `World` struct.
+- **`hooks.go`** — `fireOnAdd`, `fireOnSet`, `fireOnRemove`, `fireOnReplace` each call the corresponding propagation function after local dispatch.
+- **`id_ops.go`** — `addIDImmediate` and `removeIDImmediate` call `invalidateInheritorCache` when an `(IsA, prefab)` pair is added or removed.
+- **`observer_custom.go`** — `Emit` calls `propagateEvent` when `entity != 0`, so custom events also propagate along IsA.
+
+### Behaviour
+
+- **DontInherit gate**: if the component is marked `DontInherit`, `propagateEvent` returns immediately — no inheritors receive the event.
+- **Override gate**: inheritors that own their own local copy of the component are skipped; other inheritors still receive the event.
+- **Multi-term filter**: the trigger component term is treated as auto-satisfied for propagated dispatch; remaining terms are evaluated against the inheritor's own archetype.
+- **BFS cache**: computed once per prefab, shared across calls within a Write scope. Invalidated entirely (set to nil) on any `(IsA, *)` structural change to guarantee correctness for multi-level chains.
+- **Cycle safety**: the BFS visited set prevents infinite loops when entities form `(IsA, self)` cycles.
+
+### Tests
+
+- **`observer_propagation_test.go`** — 24 tests covering: single/multiple/recursive/diamond inheritors, DontInherit gate, override gate, OnAdd/OnSet/OnRemove/OnReplace propagation, pair components, multi-term per-inheritor filter, disabled observer, 1 000-inheritor performance, marshal round-trip, cache invalidation, custom event propagation, TermNot filter, OnReplace DontInherit/override blocks, fixed-source observer in propagation, OR-group table match/fail, wildcard TermAnd/TermNot in propagated dispatch, disabled fixed-source observer skipped, fixed-source multiFilter mismatch skipped. Package coverage: 95.0%.
+
+### Documentation
+
+- **`docs/ObserversManual.md`** — new `## Propagation along IsA` section (gates, supported events, multi-term filter, BFS cache, example); status table entry flipped to shipped (v0.72.0).
+- **`docs/PrefabsManual.md`** — cross-link to `ObserversManual.md § Propagation along IsA` added.
+- **`docs/README.md`** — propagation gap entry flipped to shipped (v0.72.0).
+- **`README.md`** — observer propagation row added to the feature table.
+- **`ROADMAP.md`** — heading bumped to "through v0.72.0"; propagation entry marked shipped.
+
 ## v0.71.0 — 2026-05-14 — Phase 16.16: Entity ID ranges
 
 Ports the entity ID range API from upstream C flecs. A `Writer` can now be

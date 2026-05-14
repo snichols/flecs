@@ -145,6 +145,10 @@ type World struct {
 	lastFramePhases      []PhaseStats                    // per-phase timing from the most recent Progress call; one entry per phase in topo order
 	logger               *slog.Logger                    // optional structured logger; nil means no logging
 	dynamicMarshalers    map[ID]dynamicMarshalHooks      // optional custom JSON hooks for dynamic components
+	// inheritorCache caches BFS-ordered inheritor slices keyed by prefab entity.
+	// Evicted in full whenever any (IsA, *) pair is added or removed — correct for
+	// transitive chains (e.g. C IsA B IsA P: adding C invalidates P's entry too).
+	inheritorCache map[ID][]ID
 }
 
 // New initializes and returns an empty World.

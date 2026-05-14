@@ -134,46 +134,59 @@ func OnReplaceID(w *World, componentID ID, fn func(fw *Writer, e ID, oldPtr, new
 	}
 }
 
-// fireOnReplace invokes the OnReplace hook (if set) for id on entity e.
-// oldPtr points to the current slot value; newPtr to the incoming value.
-// Both are valid only for the duration of the call. No observer dispatch:
-// OnReplace has no observer event in upstream C flecs.
+// fireOnReplace invokes the OnReplace hook (if set) for id on entity e, then
+// propagates the hook call to each transitive inheritor of e that does not own
+// its own copy of id (override gate). No observer dispatch: OnReplace has no
+// observer event in upstream C flecs; propagation here is hook-only.
 func (w *World) fireOnReplace(info *component.TypeInfo, id ID, e ID, oldPtr, newPtr unsafe.Pointer) {
-	if info != nil && info.Hooks.OnReplace != nil {
-		info.Hooks.OnReplace(&w.writeCapability, e, oldPtr, newPtr)
+	if info == nil || info.Hooks.OnReplace == nil {
+		return
 	}
+	info.Hooks.OnReplace(&w.writeCapability, e, oldPtr, newPtr)
+	w.propagateReplaceHook(id, e, func(inh ID) {
+		info.Hooks.OnReplace(&w.writeCapability, inh, oldPtr, newPtr)
+	})
 }
 
-// fireOnAdd invokes the OnAdd hook (if set) then dispatches observers for id.
-// Dispatch order: hook first, then observers in registration order.
-// id must be the component/tag/pair entity ID being added; info may be nil
-// (e.g. raw tag IDs with no TypeInfo), in which case only observers fire.
-// ptr is a pointer to the newly-added slot; nil for zero-size components.
+// fireOnAdd invokes the OnAdd hook (if set) then dispatches observers for id,
+// then propagates the event to each transitive inheritor of e.
+// Dispatch order: hook first, then observers in registration order, then
+// inheritors in BFS order. id must be the component/tag/pair entity ID being
+// added; info may be nil (e.g. raw tag IDs with no TypeInfo), in which case
+// only observers fire. ptr is a pointer to the newly-added slot; nil for
+// zero-size components.
 func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnAdd != nil {
 		info.Hooks.OnAdd(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, w.eventOnAddID, e, ptr)
+	w.propagateEvent(id, w.eventOnAddID, e, ptr)
 }
 
-// fireOnSet invokes the OnSet hook (if set) then dispatches observers for id.
-// Dispatch order: hook first, then observers in registration order.
-// id must be the component/pair entity ID being set; info may be nil.
-// ptr is a pointer to the component slot after the value was written.
+// fireOnSet invokes the OnSet hook (if set) then dispatches observers for id,
+// then propagates the event to each transitive inheritor of e.
+// Dispatch order: hook first, then observers in registration order, then
+// inheritors in BFS order. id must be the component/pair entity ID being set;
+// info may be nil. ptr is a pointer to the component slot after the value was
+// written.
 func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnSet != nil {
 		info.Hooks.OnSet(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, w.eventOnSetID, e, ptr)
+	w.propagateEvent(id, w.eventOnSetID, e, ptr)
 }
 
-// fireOnRemove invokes the OnRemove hook (if set) then dispatches observers for id.
-// Dispatch order: hook first, then observers in registration order.
-// id must be the component/tag/pair entity ID being removed; info may be nil.
-// ptr is a pointer to the source slot; the value is still valid at call time.
+// fireOnRemove invokes the OnRemove hook (if set) then dispatches observers for
+// id, then propagates the event to each transitive inheritor of e.
+// Dispatch order: hook first, then observers in registration order, then
+// inheritors in BFS order. id must be the component/tag/pair entity ID being
+// removed; info may be nil. ptr is a pointer to the source slot; the value is
+// still valid at call time.
 func (w *World) fireOnRemove(info *component.TypeInfo, id ID, e ID, ptr unsafe.Pointer) {
 	if info != nil && info.Hooks.OnRemove != nil {
 		info.Hooks.OnRemove(&w.writeCapability, e, ptr)
 	}
 	w.dispatchObservers(id, w.eventOnRemoveID, e, ptr)
+	w.propagateEvent(id, w.eventOnRemoveID, e, ptr)
 }

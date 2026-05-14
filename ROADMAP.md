@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.71.0)
+## Shipped (through v0.72.0)
 
 The following features are available in the current release:
 
@@ -110,7 +110,7 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.9 candidate.)
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
 - ~~**Multi-term observers**~~ — ✅ shipped in v0.70.0 (Phase 16.15).
-- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.13 candidate.)
+- ~~**Observer propagation along relationship edges**~~ — ✅ shipped in v0.72.0 (Phase 16.17). `OnAdd`/`OnSet`/`OnRemove`/`OnReplace` and custom `Emit` propagate downward along `IsA` edges; DontInherit and override gates apply; BFS cache with invalidation on structural change.
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
 - **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).
