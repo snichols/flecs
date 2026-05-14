@@ -2,6 +2,7 @@ package flecs
 
 import (
 	"sort"
+	"unsafe"
 
 	"github.com/snichols/flecs/internal/storage/table"
 )
@@ -103,8 +104,9 @@ type CachedQuery struct {
 	// term component ID to resolved source entity (0 = self, non-zero = ancestor).
 	// Nil for queries with no traversal terms.
 	tableUpSources  []map[ID]ID
-	cascadeTermTrav ID   // traversal relationship for the Cascade term; 0 if none
-	removed         bool // set by Close; deferred-removal model (see observer.go)
+	cascadeTermTrav ID        // traversal relationship for the Cascade term; 0 if none
+	removed         bool      // set by Close; deferred-removal model (see observer.go)
+	nameObserver    *Observer // non-nil when any TermNameMatch term is present; unsubscribed on Close
 	// sparseAndOnly is true when all TermAnd terms are sparse. Pure-sparse cached
 	// queries iterate sparse-sets directly at Iter() time and do not cache archetype
 	// tables (tryMatchTable is a no-op for them).
@@ -275,6 +277,18 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 	// Sort once after initial population when Cascade ordering is requested.
 	if cascadeTermTrav != 0 {
 		cq.sortByCascadeDepth()
+	}
+
+	// Subscribe to OnSet[Name] for TermNameMatch change detection.
+	// When any entity's Name component is written, mark the cached query as changed
+	// so that Changed() returns true on the next call.
+	for _, t := range terms {
+		if t.Kind == TermNameMatch {
+			cq.nameObserver = ObserveID(w, w.nameID, EventOnSet, func(_ *Writer, _ ID, _ unsafe.Pointer) {
+				cq.tablesAdded = true
+			})
+			break
+		}
 	}
 
 	// Register with the world, pruning removed entries (amortized compaction).
@@ -517,6 +531,10 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			hasSparseTerms = true
 			break
 		}
+		if t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
+			hasSparseTerms = true
+			break
+		}
 	}
 
 	if hasSparseTerms {
@@ -594,6 +612,10 @@ func (cq *CachedQuery) EntityCount() int {
 // After Close, Iter/Each/Terms/Count/EntityCount return empty results, and
 // future table-creation notifications are ignored. O(1), 0 allocs.
 func (cq *CachedQuery) Close() {
+	if cq.nameObserver != nil {
+		cq.nameObserver.Unsubscribe()
+		cq.nameObserver = nil
+	}
 	cq.removed = true
 }
 
@@ -724,6 +746,17 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 			return // scope never satisfied for any entity in this table
 		}
 	}
+	// Phase 2c: TermEq/TermNotEq/TermNameMatch are per-entity predicates evaluated
+	// in matchesSparseTerms during iteration. No table-level fast-skip is applied
+	// here: a table-level skip based on TermEq's target entity position would
+	// become stale when the entity migrates into an existing table (notifyTableCreated
+	// only fires for newly created tables, so migration into an already-cached table
+	// would not re-run tryMatchTable). Correctness takes priority over the optimisation.
+	//
+	// Future: a TermEq table-level skip is possible if paired with an EventOnAdd
+	// observer on the target entity to trigger cache rebuild on migration.
+	// Similarly, TermNameMatch could skip tables without a Name column.
+
 	// Phase 3: Check traversal And terms; compute per-term resolved sources.
 	var sources map[ID]ID
 	for _, term := range cq.terms {

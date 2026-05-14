@@ -981,6 +981,88 @@ Groups are rebuilt lazily whenever a table's `ChangeCount` changes (any column w
 
 ---
 
+## Equality and name-match filters
+
+**Shipped in v0.76.0.**
+
+Three predicate filter terms let you constrain iteration to a specific entity or to entities whose name contains a substring. These terms are **per-entity filters**, not archetype seeds — they must appear alongside at least one `With` term.
+
+| Builder | Mirrors upstream | Semantics |
+|---|---|---|
+| `flecs.IsEntity(e ID) Term` | `EcsPredEq` | Match only when iterated entity == `e` |
+| `flecs.NotEntity(e ID) Term` | `EcsPredEq + EcsNot` | Match every entity except `e` |
+| `flecs.NameMatches(pattern string) Term` | `EcsPredMatch` | Match entities whose `Name.Value` contains `pattern` (case-insensitive substring) |
+
+### IsEntity
+
+```go
+// Yield only the player entity, even though many entities have Position.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.IsEntity(playerEntity),
+)
+```
+
+`IsEntity` panics at construction if `e` is zero.
+
+### NotEntity
+
+```go
+// Yield every Position-holder except the player.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.NotEntity(playerEntity),
+)
+```
+
+`NotEntity` panics at construction if `e` is zero.
+
+### NameMatches
+
+```go
+// Yield entities whose name contains "Enemy" (case-insensitive).
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.NameMatches("Enemy"),
+)
+```
+
+Substring semantics (mirrors upstream `flecs_query_match_substr_i`, `eval_pred.c:8-41`):
+
+- **Not regex, not glob** — plain substring containment only.
+- **Case-insensitive** — `"ENEMY"` matches `"Enemy1"`.
+- **Empty pattern** — matches every named entity (`""` is a valid pattern).
+- **Unnamed entities** — never match any pattern, including `""`.
+
+### Composing with other terms
+
+All three predicates compose orthogonally with `With`, `Without`, `Maybe`, `Or`, and `WithoutScope`:
+
+```go
+// Position-holders named "Player" that are not the dead player.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.NameMatches("Player"),
+    flecs.NotEntity(deadPlayerEntity),
+)
+```
+
+They also work inside `WithoutScope` sub-expressions (via `ScopeBuilder.IsEntity`, `ScopeBuilder.NotEntity`, `ScopeBuilder.NameMatches`).
+
+### Restrictions
+
+- `TermEq`, `TermNotEq`, and `TermNameMatch` **cannot** carry `.Up()`, `.SelfUp()`, `.Cascade()`, or `.Source()` — panic at validator time.
+- Equality terms are **filters, not seeds** — a query with only equality terms (no `With`) panics with the existing "at least one TermAnd required" message.
+
+### Upstream C references
+
+- `include/flecs.h:1979-1986` — `EcsPredEq` / `EcsPredMatch` marker constants.
+- `src/query/engine/eval_pred.c:8-41` — `flecs_query_match_substr_i`: case-insensitive substring scan.
+- `src/query/engine/eval_pred.c:103-209` — `flecs_query_pred_eq` / `flecs_query_pred_neq`: range-based entity equality.
+- `src/query/compiler/compiler_term.c:640-685` — compile-time lowering to `EcsQueryPredEq` / `EcsQueryPredNeq` / `EcsQueryPredEqMatch`.
+
+---
+
 ## Fixed per-term source
 
 **Shipped in v0.73.0.**
@@ -1144,11 +1226,11 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Query groups** — ✅ shipped in v0.66.0. `GroupByFunc` partitions matched tables into labelled groups; `IterGroup` provides O(1) group-iterator access; `WithGroupBy` + `WithOrderBy` compose (sorted within each group). See [§ Query groups](#query-groups) above. (`Cascade` retains its dedicated implementation; refactor onto `WithGroupBy` is deferred.)
 
-**Equality operators** — `$this == Foo`, `$this ~= "partial"` name-match filters in the Flecs Query Language. Not yet ported in Go flecs.
+**Equality operators** — ✅ **shipped in v0.76.0** via [`IsEntity`](../query.go) / [`NotEntity`](../query.go) / [`NameMatches`](../query.go). See [§ Equality and name-match filters](#equality-and-name-match-filters) above. (`EcsPredLookup` / `$this == "name"` is a deliberate non-goal — use `World.Lookup(path)` + `IsEntity`.)
 
 **AndFrom / OrFrom / NotFrom** — operators that expand a component-list entity into implicit terms. Not yet ported in Go flecs.
 
-**Query scopes** — `scope_open` / `scope_close` to negate a sub-expression. Not yet ported in Go flecs.
+**Query scopes** — ✅ **shipped in v0.75.0** via [`WithoutScope`](../query.go) / `*ScopeBuilder`. See [§ Query scopes](#query-scopes) above.
 
 **Access modifiers** — `In` / `InOut` / `Out` / `None` annotations on terms (used by the C scheduler for pipeline sync-point inference). Go flecs governs mutation via `Read`/`Write` scopes at the world level; per-term access annotations are not ported.
 

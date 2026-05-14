@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.76.0 — 2026-05-14 — Phase 16.21: Query equality operators
+
+Ports the upstream C flecs equality predicates (`include/flecs.h:1979-1986`, `src/query/engine/eval_pred.c:8-303`, `src/query/compiler/compiler_term.c:640-685`) as three new per-entity filter terms. These compose orthogonally with all existing term kinds.
+
+### Added
+
+- **`IsEntity(e ID) Term`** — `TermEq TermKind = 5`. Matches only when the iterated entity equals `e`. Mirrors upstream `EcsPredEq` / `EcsQueryPredEq`. Panics at construction if `e` is zero.
+- **`NotEntity(e ID) Term`** — `TermNotEq TermKind = 6`. Matches every entity except `e`. Mirrors upstream `EcsPredEq+EcsNot` / `EcsQueryPredNeq`. Panics at construction if `e` is zero.
+- **`NameMatches(pattern string) Term`** — `TermNameMatch TermKind = 7`. Matches entities whose `Name.Value` contains `pattern` (case-insensitive substring; no regex, no glob). Empty pattern matches every named entity. Unnamed entities never match. Mirrors upstream `EcsPredMatch` / `EcsQueryPredEqMatch` and `flecs_query_match_substr_i` (`eval_pred.c:8-41`).
+- **`ScopeBuilder.IsEntity`, `.NotEntity`, `.NameMatches`** — equality terms compose inside `WithoutScope` sub-expressions.
+- **`Term.Pattern string`** — new field on `Term`; populated only for `TermNameMatch`; empty string is a valid pattern (matches every named entity).
+- **`CachedQuery` `OnSet[Name]` observer** — cached queries with a `TermNameMatch` term subscribe to `OnSet[Name]` at construction and unsubscribe on `Close()`; `Changed()` returns true after any name write, enabling pattern-sensitive invalidation.
+
+### Behaviour
+
+- Equality terms are **filters, not seeds** — they evaluate per entity after archetype matching. A query with only equality terms (no `With`) panics with the existing "at least one TermAnd required" message.
+- `TermEq` / `TermNotEq` / `TermNameMatch` **cannot** carry `.Up()`, `.SelfUp()`, `.Cascade()`, or `.Source()` — panic at validator time.
+- Sort order: equality terms sort after `TermOr` groups and before `TermOptional`, mirroring the per-entity evaluation ordering.
+- `substrMatchCaseInsensitive` helper mirrors `flecs_query_match_substr_i` exactly: empty pattern → true; otherwise case-fold both sides with `strings.ToLower` and use `strings.Contains`.
+
+### Upstream C references
+
+- `include/flecs.h:1979-1986` — `EcsPredEq`, `EcsPredMatch`, `EcsPredLookup` marker constants.
+- `src/query/engine/eval_pred.c:8-41` — `flecs_query_match_substr_i`: case-insensitive substring scan.
+- `src/query/engine/eval_pred.c:103-209` — `flecs_query_pred_eq` / `flecs_query_pred_neq`: entity range narrowing.
+- `src/query/engine/eval_pred.c:212-303` — `flecs_query_pred_match`: per-entity name scan.
+- `src/query/compiler/compiler_term.c:640-685` — compile-time lowering to `EcsQueryPredEq` / `EcsQueryPredNeq` / `EcsQueryPredEqMatch`.
+- `src/query/validator.c:442-474` — validator rules for predicate terms.
+
+### Deliberate non-goals
+
+- **`EcsPredLookup`** (`$this == "name"`) — overlaps with `World.Lookup(path)` + `IsEntity`; not ported.
+- **Regex / glob matching** — `NameMatches` is substring-only, faithful to upstream.
+- **Component-value comparison** (`Position.X > 100`) — separate concern, out of scope.
+- **`$Var` query variables** — separate future phase.
+
+---
+
 ## v0.75.0 — 2026-05-14 — Phase 16.20: Query scopes (WithoutScope)
 
 Ports the upstream C flecs `EcsScopeOpen` / `EcsScopeClose` scope mechanism (`include/flecs.h:1989–1992`, `src/query/validator.c:1427–1452`, `src/query/compiler/compiler_term.c:785–803`) as a Go-idiomatic closure-based API. A query scope negates a sub-expression of arbitrary terms as a single unit, enabling expressions such as `Position AND NOT (Velocity OR Speed)` that cannot be written as a flat list of `Without` terms.
