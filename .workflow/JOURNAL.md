@@ -1,4 +1,0 @@
-## iterate iteration 1 (2026-05-14)
-
-Implemented Phase 16.4: Sorted cached queries (v0.59.0). New file query_sort.go with OrderByFunc, OrderBy[T], CachedQueryOptions, WithOrderBy, NewCachedQueryFromTermsWithOptions, needsSortRebuild, rebuildSorted, sortMatchesSparseFilter, nextSorted. Extended CachedQuery and QueryIter structs for sorted mode. 21 test cases in query_sort_test.go covering all 11 spec scenarios plus sparseAndOnly, DontFragment TermNot, optional sort-by (nil valPtr), union pair TermNot, invalidation paths, and construction panics. Updated docs/Queries.md (new Sorted queries section), docs/README.md (line 110 flipped to shipped), README.md feature list, CHANGELOG.md (v0.59.0 entry), ROADMAP.md (heading bumped + bullet added). go vet/golangci-lint clean, go test -race -count=3 passing, coverage 95.0%.
-
