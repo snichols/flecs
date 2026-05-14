@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.68.0 — 2026-05-14 — Phase 16.13: Runtime dynamic component registration
+
+Ports runtime (dynamic) component registration from upstream C flecs. A dynamic
+component is registered by name, size, and alignment at runtime with no Go type at
+compile time. All data is treated as opaque bytes and routed through the same
+archetype / sparse / DontFragment machinery as typed components. Closes the dynamic
+component gap in `docs/README.md` line 102.
+
+### Added
+
+- **`RegisterDynamicComponent(fw, name, size, align) ID`** — allocates a new component entity whose layout is determined at runtime by `size` and `alignment`. Panics on name collision.
+- **`RegisterDynamicComponentWithMarshaler(fw, name, size, align, marshal, unmarshal) ID`** — like `RegisterDynamicComponent` but registers custom JSON marshal/unmarshal hooks, overriding the default base64-encoded bytes representation.
+- **`GetIDPtr(s scope, e ID, componentID ID) unsafe.Pointer`** — returns a raw pointer to the component slot for entity `e`, or nil if the entity does not hold the component. Pointer is valid until the next structural change on `e`.
+- **`SetIDPtr(fw, e ID, componentID ID, src unsafe.Pointer)`** — copies `size` bytes from `src` into the component slot for `e`. Fires `OnAdd` / `OnSet` / `OnReplace` exactly like typed `Set`. Honors the defer queue.
+- **`EachByID(s scope, componentID ID, fn func(e ID, ptr unsafe.Pointer))`** — iterates all live entities holding `componentID`, calling `fn` with the entity ID and a raw pointer.
+- **`OnAddByID(w, componentID ID, fn func(fw *Writer, e ID, ptr unsafe.Pointer))`** — registers an `OnAdd` hook for a dynamic component. Pass nil to clear.
+- **`OnSetByID(w, componentID ID, fn func(fw *Writer, e ID, ptr unsafe.Pointer))`** — registers an `OnSet` hook for a dynamic component. Pass nil to clear.
+- **`OnRemoveByID(w, componentID ID, fn func(fw *Writer, e ID, ptr unsafe.Pointer))`** — registers an `OnRemove` hook for a dynamic component. Pass nil to clear.
+- **`dynamicMarshalers map[ID]dynamicMarshalHooks`** field on `World` — stores custom marshal/unmarshal hooks per dynamic component ID.
+- **`unmarshalDynamic`** internal helper — decodes dynamic component JSON (base64 or custom hook) and writes the value via `SetIDPtr`.
+
+### Implementation notes
+
+1. **Nil Type marker**: `TypeInfo.Type == nil` is the sentinel for a dynamic component. All downstream code (`column.go`, `sparse.go`, `materializeByPtr`, `GetByID`) handles nil Type explicitly.
+2. **Storage**: `column.go:newColumn` synthesizes a `reflect.ArrayOf(int(size), byte)` backing type when `elemType == nil`, enabling reuse of the existing reflect-based column machinery.
+3. **Sparse storage**: `sparseSetInsert` synthesizes the same `[size]byte` array type for the boxed pointer when `info.Type == nil`.
+4. **Deferred SetIDPtr**: When the world is deferred (`deferDepth > 0`), `SetIDPtr` copies `src` bytes into the command arena and enqueues a `cmdSetByID` command; matched to `Set[T]` and `SetByID` flush semantics.
+5. **JSON**: Dynamic components in archetype tables are serialized in the entity body with base64 (or custom hook). DontFragment dynamic components appear in `SparseData` with the same encoding.
+6. **No new file needed**: Public API lives in `component_dynamic.go`; internal helpers added to `marshal.go`, `sparse.go`, `internal/component/registry.go`, and `internal/storage/table/column.go`.
+
+### Explicit non-goals (v0.68.0)
+
+- `Get[T]`, `Each[T]`, `Field[T]`, `OnAdd[T]` typed generics are not supported for dynamic components.
+- No automatic size/alignment validation against Go struct layout.
+- No reflection-based introspection of the byte layout.
+
+---
+
 ## v0.67.0 — 2026-05-14 — Phase 16.12: Fixed-source observer terms
 
 Ports fixed-source observer terms from upstream C flecs. An observer registered with `WithSource(e)` fires only when the event lands on the named entity, moving the per-entity filter from application code into the dispatch layer. Closes the fixed-source observer gap in `docs/README.md`.

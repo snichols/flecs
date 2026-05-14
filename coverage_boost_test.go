@@ -1,6 +1,8 @@
 package flecs_test
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 	"unsafe"
 
@@ -1751,5 +1753,112 @@ func TestCovObserver_EventKindStringAndEntity(t *testing.T) {
 	obs2 := flecs.ObserveID(w, id, flecs.EventMonitor, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
 	if obs2 == nil {
 		t.Fatal("ObserveID EventMonitor returned nil")
+	}
+}
+
+// ── hooks.go ──────────────────────────────────────────────────────────────────
+
+// TestCovHooks_OnReplaceID_NilClear covers the fn==nil branch in OnReplaceID
+// (hooks.go:128-131) which clears the OnReplace hook.
+func TestCovHooks_OnReplaceID_NilClear(t *testing.T) {
+	w := flecs.New()
+	type hComp struct{ V int }
+	id := flecs.RegisterComponent[hComp](w)
+	// Set a hook, then clear it via nil fn.
+	flecs.OnReplaceID(w, id, func(_ *flecs.Writer, _ flecs.ID, _, _ unsafe.Pointer) {})
+	flecs.OnReplaceID(w, id, nil) // fn == nil: clears the hook (covers lines 128-131)
+}
+
+// ── value_ops.go ──────────────────────────────────────────────────────────────
+
+// TestCovValueOps_SetByID_DeferredPanics covers the deferred panic paths in
+// World.SetByID (value_ops.go:235 unregistered, :238 type mismatch).
+func TestCovValueOps_SetByID_DeferredPanics(t *testing.T) {
+	w := flecs.New()
+	type vComp struct{ X int }
+	id := flecs.RegisterComponent[vComp](w)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, vComp{X: 1})
+	})
+
+	var badID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		badID = fw.NewEntity() // entity, not a registered component
+	})
+
+	// Unregistered component panic (value_ops.go:235-236).
+	panickedUnreg := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panickedUnreg = true
+			}
+		}()
+		w.Write(func(_ *flecs.Writer) {
+			w.SetByID(e, badID, 42) // calls World.SetByID directly; deferDepth>0 → line 235
+		})
+	}()
+	if !panickedUnreg {
+		t.Error("expected panic for unregistered component ID in deferred SetByID")
+	}
+
+	// Type mismatch panic (value_ops.go:238-240).
+	panickedType := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panickedType = true
+			}
+		}()
+		w.Write(func(_ *flecs.Writer) {
+			w.SetByID(e, id, "wrong type") // deferDepth>0, type mismatch → line 238
+		})
+	}()
+	if !panickedType {
+		t.Error("expected panic for type mismatch in deferred SetByID")
+	}
+}
+
+// TestCovValueOps_SetPairByID_NilPanic covers the nil-value panic in SetPairByID
+// (value_ops.go:80-81).
+func TestCovValueOps_SetPairByID_NilPanic(t *testing.T) {
+	w := flecs.New()
+	type relComp struct{ V int }
+	rel := flecs.RegisterComponent[relComp](w)
+	var e, tgt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		tgt = fw.NewEntity()
+	})
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		w.Write(func(_ *flecs.Writer) {
+			w.SetPairByID(e, rel, tgt, nil) // v==nil → panic at line 80-81
+		})
+	}()
+	if !panicked {
+		t.Error("expected panic for nil v in SetPairByID")
+	}
+}
+
+// ── observer.go ───────────────────────────────────────────────────────────────
+
+// TestCovObserver_LoggerPath covers the observer registration logger path
+// (observer.go:278-282) when the world has a logger installed.
+func TestCovObserver_LoggerPath(t *testing.T) {
+	w := flecs.New()
+	w.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	type logComp struct{ V int }
+	id := flecs.RegisterComponent[logComp](w)
+	obs := flecs.ObserveID(w, id, flecs.EventOnAdd, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	if obs == nil {
+		t.Fatal("ObserveID with logger returned nil")
 	}
 }

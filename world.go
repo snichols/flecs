@@ -143,6 +143,7 @@ type World struct {
 	fixedAccumulator     float32                         // internal accumulator for fixed-step dispatch
 	lastFramePhases      []PhaseStats                    // per-phase timing from the most recent Progress call; one entry per phase in topo order
 	logger               *slog.Logger                    // optional structured logger; nil means no logging
+	dynamicMarshalers    map[ID]dynamicMarshalHooks      // optional custom JSON hooks for dynamic components
 }
 
 // New initializes and returns an empty World.

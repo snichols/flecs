@@ -2,10 +2,12 @@ package flecs
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"unsafe"
 )
 
 // jsonWorld is the top-level JSON envelope for a serialized world.
@@ -301,6 +303,32 @@ func (w *World) MarshalJSON() ([]byte, error) {
 				if !ok {
 					continue
 				}
+				if info.Type == nil && info.Size > 0 {
+					// Dynamic component: serialize as base64-encoded raw bytes (default)
+					// or via a registered custom marshaler.
+					ptr := getIDPtrRaw(w, e, cid)
+					if ptr == nil {
+						continue
+					}
+					var raw json.RawMessage
+					if hooks, hasHooks := w.dynamicMarshalers[cid]; hasHooks {
+						raw, resultErr = hooks.marshal(ptr)
+						if resultErr != nil {
+							return
+						}
+					} else {
+						b64 := base64.StdEncoding.EncodeToString(unsafe.Slice((*byte)(ptr), info.Size))
+						raw, resultErr = json.Marshal(b64)
+						if resultErr != nil {
+							return
+						}
+					}
+					if je.Components == nil {
+						je.Components = make(map[string]json.RawMessage)
+					}
+					je.Components[info.Name] = raw
+					continue
+				}
 				v, ok := fr.GetByID(e, cid)
 				if !ok {
 					continue
@@ -344,7 +372,19 @@ func (w *World) MarshalJSON() ([]byte, error) {
 						// Serialize each entity's data (DontFragment data is NOT in entity body).
 						for _, entry := range ss.dense {
 							if serial, ok := m.idToSerial[entry.entity]; ok {
-								raw, err := json.Marshal(reflect.NewAt(info.Type, entry.data).Elem().Interface())
+								var raw json.RawMessage
+								var err error
+								if info.Type == nil {
+									// Dynamic component: base64 or custom marshaler.
+									if hooks, hasHooks := w.dynamicMarshalers[info.Component]; hasHooks {
+										raw, err = hooks.marshal(entry.data)
+									} else {
+										b64 := base64.StdEncoding.EncodeToString(unsafe.Slice((*byte)(entry.data), info.Size))
+										raw, err = json.Marshal(b64)
+									}
+								} else {
+									raw, err = json.Marshal(reflect.NewAt(info.Type, entry.data).Elem().Interface())
+								}
 								if err != nil {
 									resultErr = err
 									return
@@ -576,6 +616,13 @@ func (w *World) UnmarshalJSON(data []byte) error {
 					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: component %q is not registered in the world", compName)
 					return
 				}
+				if info.Type == nil && info.Size > 0 {
+					// Dynamic component: decode base64 bytes or use custom unmarshaler.
+					if unmarshalErr = unmarshalDynamic(w, fw, e, info.ID, info.Size, raw); unmarshalErr != nil {
+						return
+					}
+					continue
+				}
 				if info.Type == nil {
 					continue
 				}
@@ -631,7 +678,7 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse data component %q is not registered in the world", compName)
 				return
 			}
-			if info.Type == nil || info.Size == 0 {
+			if info.Size == 0 {
 				continue
 			}
 			for serial, raw := range bySerial {
@@ -639,6 +686,13 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				if !ok {
 					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: sparse data for %q references unknown serial %d", compName, serial)
 					return
+				}
+				if info.Type == nil {
+					// Dynamic component.
+					if unmarshalErr = unmarshalDynamic(w, fw, e, info.ID, info.Size, raw); unmarshalErr != nil {
+						return
+					}
+					continue
 				}
 				ptr := reflect.New(info.Type)
 				if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
@@ -656,4 +710,31 @@ func (w *World) UnmarshalJSON(data []byte) error {
 	})
 
 	return unmarshalErr
+}
+
+// unmarshalDynamic decodes a dynamic component value from raw JSON and calls
+// SetIDPtr to write it to the entity's slot. Uses the registered custom unmarshaler
+// if available; otherwise decodes as a base64-encoded raw byte string.
+func unmarshalDynamic(w *World, fw *Writer, e ID, id ID, size uintptr, raw json.RawMessage) error {
+	if hooks, ok := w.dynamicMarshalers[id]; ok {
+		buf := make([]byte, size)
+		if err := hooks.unmarshal(raw, unsafe.Pointer(&buf[0])); err != nil {
+			return fmt.Errorf("flecs: unmarshal failed: dynamic component %d: %w", uint64(id), err)
+		}
+		SetIDPtr(fw, e, id, unsafe.Pointer(&buf[0]))
+		return nil
+	}
+	var b64 string
+	if err := json.Unmarshal(raw, &b64); err != nil {
+		return fmt.Errorf("flecs: unmarshal failed: dynamic component %d (expected base64 string): %w", uint64(id), err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return fmt.Errorf("flecs: unmarshal failed: dynamic component %d (base64 decode): %w", uint64(id), err)
+	}
+	if uintptr(len(decoded)) != size {
+		return fmt.Errorf("flecs: unmarshal failed: dynamic component %d size mismatch: got %d bytes, expected %d", uint64(id), len(decoded), size)
+	}
+	SetIDPtr(fw, e, id, unsafe.Pointer(&decoded[0]))
+	return nil
 }

@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.67.0)
+## Shipped (through v0.68.0)
 
 The following features are available in the current release:
 
@@ -69,6 +69,7 @@ The following features are available in the current release:
 - **Monitor observers** _(v0.65.0, Phase 16.10)_ — `Monitor(w, terms, fn)` / `MonitorWithOptions(w, terms, opts, fn)`. Fires `fn(fw, e, entered bool)` when an entity transitions into (entered=true) or out of (entered=false) a multi-term query match. Hybrid match-state tracking: table-pair check for archetype-only monitors (O(monitors×terms) per migration, no per-entity state); per-entity matched set for sparse/DontFragment/Union monitors. `WithYieldExisting()` sweeps existing entities at registration. Disabled monitor semantics: no catch-up on re-enable. Entity deletion and `Clear` fire exit events before component removal. Unsubscribe via `Observer.Unsubscribe`. Built-in `EventMonitor` entity at index 46; user entities now start at index 47. Closes `docs/README.md` monitor-observers gap entry.
 - **Query groups** _(v0.66.0, Phase 16.11)_ — `WithGroupBy(compID, groupFn)` partitions a cached query's matched tables into labelled groups; `IterGroup(id)` jumps to a group in O(1); `Groups()` returns sorted group IDs. `AndGroupBy`/`AndOrderBy` chaining methods for combining both options. Composes with `WithOrderBy`: groups outer, sort inner. Lazy re-group on ChangeCount change or new-table addition. `Cascade` retains its dedicated `sortByCascadeDepth` path; refactor deferred. Closes `docs/README.md` query-groups gap entry.
 - **Fixed-source observer terms** _(v0.67.0, Phase 16.12)_ — `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions` restricts an observer to fire only when the event lands on the named entity. Dispatch table extended from `map[observerKey][]*observerNode` to `map[observerKey]*observerBucket` with lazy `fixedSource map[ID][]*observerNode`; any-entity path unchanged. `yield_existing + WithSource` is O(1). `ObserveIDWithOptions` new for raw-ID / pair IDs; `ObserveEventWithOptions` new for custom events. Composes with `WithYieldExisting()` via `.AndSource(e)`. Closes `docs/README.md` fixed-source observer gap entry.
+- **Runtime dynamic component registration** _(v0.68.0, Phase 16.13)_ — `RegisterDynamicComponent(fw, name, size, align) ID` / `RegisterDynamicComponentWithMarshaler`. Dynamic components store opaque bytes (size+alignment at registration, no Go type) and route through the same archetype / sparse / DontFragment machinery as typed components. Raw-pointer API: `GetIDPtr` / `SetIDPtr` / `EachByID`. Lifecycle hooks: `OnAddByID` / `OnSetByID` / `OnRemoveByID`. JSON: base64 by default; custom marshal/unmarshal hooks override. Internal: `TypeInfo.Type == nil` sentinel; `reflect.ArrayOf([size]byte)` synthesized backing type; deferred `SetIDPtr` routes through `cmdSetByID` arena. Closes `docs/README.md` dynamic component gap entry.
 
 ## Documentation
 

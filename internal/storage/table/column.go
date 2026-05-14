@@ -34,6 +34,10 @@ type Column struct {
 }
 
 func newColumn(elemType reflect.Type, size uintptr) *Column {
+	if elemType == nil {
+		// Dynamic component: synthesize [size]byte backing so reflect paths work unchanged.
+		elemType = reflect.ArrayOf(int(size), reflect.TypeOf(byte(0)))
+	}
 	// Allocate at full capacity so Len() == Cap() from the start.
 	return &Column{
 		slice: reflect.MakeSlice(reflect.SliceOf(elemType), initialCap, initialCap),

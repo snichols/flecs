@@ -535,6 +535,115 @@ See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for the complete 
 
 ---
 
+## Dynamic Component Registration
+
+Dynamic components let you register components at runtime when the Go type is not
+known at compile time — for example, in scripting layers, data-driven editors, or
+reflection-based serializers.
+
+```go
+w := flecs.New()
+var posID flecs.ID
+
+// Register a 16-byte component with 8-byte alignment.
+w.Write(func(fw *flecs.Writer) {
+    posID = flecs.RegisterDynamicComponent(fw, "scripting/Vec3", 16, 8)
+})
+
+// Optionally apply storage traits (same as typed components).
+// flecs.SetSparse(w, posID)
+// flecs.SetDontFragment(w, posID)
+```
+
+### Setting and reading values
+
+Use raw `unsafe.Pointer` for all data access. The pointer returned by `GetIDPtr` is
+valid until the next structural change to the entity (adding or removing any
+component). Re-fetch after any mutation.
+
+```go
+type Vec3 struct{ X, Y, Z float32; _ float32 } // 16 bytes, 8-byte align
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    v := Vec3{X: 1, Y: 2, Z: 3}
+    flecs.SetIDPtr(fw, e, posID, unsafe.Pointer(&v))
+})
+
+w.Read(func(fr *flecs.Reader) {
+    ptr := flecs.GetIDPtr(fr, e, posID) // nil if e does not hold posID
+    if ptr != nil {
+        got := (*Vec3)(ptr)
+        _ = got.X
+    }
+})
+```
+
+### Iterating all holders
+
+```go
+w.Read(func(fr *flecs.Reader) {
+    flecs.EachByID(fr, posID, func(e flecs.ID, ptr unsafe.Pointer) {
+        v := (*Vec3)(ptr) // ptr valid only for the duration of this call
+        _ = v
+    })
+})
+```
+
+### Lifecycle hooks
+
+```go
+flecs.OnAddByID(w, posID, func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) {
+    // called once when posID is newly added to e
+})
+flecs.OnSetByID(w, posID, func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) {
+    // called every time the value is written
+})
+flecs.OnRemoveByID(w, posID, func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) {
+    // called before posID is removed, including on entity deletion
+})
+// Pass nil to clear a hook.
+flecs.OnAddByID(w, posID, nil)
+```
+
+### JSON marshal / unmarshal
+
+By default, dynamic component data is base64-encoded in the JSON snapshot. Register a
+custom marshaler for human-readable or schema-aware output:
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    posID = flecs.RegisterDynamicComponentWithMarshaler(fw,
+        "scripting/Vec3", 16, 8,
+        func(ptr unsafe.Pointer) (json.RawMessage, error) {
+            v := (*Vec3)(ptr)
+            return json.Marshal(map[string]float32{"x": v.X, "y": v.Y, "z": v.Z})
+        },
+        func(data json.RawMessage, ptr unsafe.Pointer) error {
+            var m map[string]float32
+            if err := json.Unmarshal(data, &m); err != nil {
+                return err
+            }
+            *(*Vec3)(ptr) = Vec3{X: m["x"], Y: m["y"], Z: m["z"]}
+            return nil
+        },
+    )
+})
+```
+
+### Trade-offs vs. typed components
+
+| | Typed (`RegisterComponent[T]`) | Dynamic (`RegisterDynamicComponent`) |
+|---|---|---|
+| Type safety | Compile-time | None — caller's responsibility |
+| Generic API (`Get[T]`, `Each[T]`) | Yes | No — use `GetIDPtr` / `EachByID` |
+| Storage routing | Archetype / Sparse / DontFragment | Same — identical machinery |
+| JSON serialization | Automatic via `encoding/json` | base64 default; custom hooks override |
+| Use case | Game logic, engine types | Scripting, reflection, data-driven editors |
+
+---
+
 ## See Also
 
 - [Quickstart](Quickstart.md) — hands-on introduction to entities, components, queries, and systems.

@@ -122,6 +122,10 @@ func (w *World) GetByID(e ID, id ID) (any, bool) {
 	if !ok {
 		return nil, false
 	}
+	if info.Type == nil {
+		// Dynamic component: no Go type. Use GetIDPtr for raw pointer access.
+		return nil, false
+	}
 	// Sparse or DontFragment: fetch from sparse-set.
 	if !id.IsPair() {
 		iIdx := ID(id.Index())
@@ -149,7 +153,11 @@ func (w *World) GetByID(e ID, id ID) (any, bool) {
 // materializeByPtr boxes the value at ptr using info.Type.
 // When ptr is nil (zero-size / tag component), returns the zero value of the
 // registered type so the caller always receives a non-nil any.
+// Returns nil for dynamic components (info.Type == nil); callers should use GetIDPtr instead.
 func materializeByPtr(info *component.TypeInfo, ptr unsafe.Pointer) any {
+	if info.Type == nil {
+		return nil // dynamic component; use GetIDPtr for raw pointer access
+	}
 	if ptr == nil {
 		return reflect.Zero(info.Type).Interface()
 	}
