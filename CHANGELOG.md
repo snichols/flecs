@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.82.0 — 2026-05-14 — Phase 16.27: RunSystemWorker — explicit thread dispatch
+
+Adds `RunSystemWorker`, the out-of-pipeline counterpart to within-system multi-threaded dispatch. Callers fan out N goroutines each processing a disjoint slice of the system's matched entities, without the pipeline scheduler.
+
+### API additions
+
+- **`RunSystemWorker(w *World, sys *System, workerIndex, workerCount int, dt float32)`** — synchronous, single-system entry point for explicit goroutine fan-out. Worker `i` of `n` processes the disjoint row slice allocated to it by the per-table `count/n` + remainder distribution.
+
+### Semantics
+
+- **Partition algorithm** — per archetype table, `q, r := count/workerCount, count%workerCount`; workers `[0, r)` receive `q+1` rows, workers `[r, workerCount)` receive `q` rows. Deterministic per archetype-table iteration order; matches upstream `ecs_worker_next` and the existing Go pipeline `clippedCopy` path.
+- **Per-call stage** — each call allocates a fresh command queue (`stage.deferDepth == 1`). Deferred mutations from `it.Writer()` go to this private queue and are never shared across goroutines.
+- **Flush** — the per-call command queue is flushed before `RunSystemWorker` returns. Concurrent callers flush in undefined order; each flush is serialized by the world write mutex (`w.mu.Lock()`).
+- **Disabled flag bypassed** — mirrors `RunSystem`; explicit invocation always runs the system regardless of `SetEnabled(false)`.
+- **Sparse-only queries not partitioned** — the `nextSparseOnly` path iterates the sparse driver without consulting `workerTotal`; all workers see all sparse-only entities. Callers must coordinate externally if sparse partitioning is needed.
+- **No merge hooks fired** — per-worker flush does not fire `OnPreMerge` / `OnPostMerge`; the caller owns merge-boundary coordination.
+
+### Parity notes
+
+Mirrors upstream `ecs_run_worker` (`include/flecs/addons/system.h:337–343`, `src/addons/system/system.c:161–178`). Key differences from C:
+- `param` argument dropped (Go callbacks close over their environment).
+- `stage_index` / `stage_count` replaced by `workerIndex` / `workerCount` (same semantics, Go naming).
+- Per-call private stage instead of a pooled stage array.
+
+### Decision lock-ins
+
+1. Equal-slice partition (per-table q/r), deterministic, matches upstream and the existing Go pipeline path. No work-stealing.
+2. Each call gets a fresh per-call stage; flush happens before the call returns; ordering across concurrent calls is undefined.
+3. Disabled systems still run (mirrors `RunSystem`).
+4. No automatic worker pool — caller owns goroutine spawn/join.
+
+### Documentation
+
+- **`docs/Systems.md`** — new § RunSystemWorker with goroutine fan-out example, partition algorithm, per-call stage semantics, and sparse-query semantics decision.
+- **`docs/README.md`** — line 146 flipped to ✅ shipped in v0.82.0.
+- **`README.md`** — feature-list entry added.
+- **`ROADMAP.md`** — heading bumped to "through v0.82.0"; Phase 16.27 entry added.
+
 ## v0.81.0 — 2026-05-14 — Phase 16.26: Multi-variable query support
 
 Extends the Phase 16.25 single-variable engine to support **N named variables** in a single query, enabling multi-hop relational joins such as "spaceships docked to a planet that orbits a star." Closes the multi-variable carve-out that was deferred from v0.80.0.

@@ -242,6 +242,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | System disabling _(v0.58.0)_ | `sys.SetEnabled(false)` / `sys.IsEnabled()` — pause/resume without removing; `RunSystem` ignores the flag |
 | Rate filters _(v0.61.0)_ | `sys.SetInterval(d)` / `sys.SetRate(n)` — run a system every N ticks or at most once per wall-clock duration; gates compose with AND semantics; counters freeze while disabled |
 | Single-system Run _(v0.58.0)_ | `RunSystem(s, dt)` — invoke one system synchronously, outside the pipeline; mutations flushed before return |
+| Explicit thread dispatch _(v0.82.0)_ | `RunSystemWorker(w, sys, workerIndex, workerCount, dt)` — out-of-pipeline fan-out: each goroutine gets a disjoint row slice; fresh per-call command queue flushed before return; disabled flag bypassed. See [Systems.md § RunSystemWorker](docs/Systems.md#runsystemworker). |
 | Pipeline introspection _(v0.58.0)_ | `r.Phases() []*Phase`, `r.SystemsInPhase(phase *Phase) []*System`, `r.EachSystem(phase *Phase, fn)` — inspect registered systems in execution order |
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
 | Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |

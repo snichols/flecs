@@ -367,6 +367,50 @@ Mutations performed inside the callback are deferred and flushed before `RunSyst
 
 ---
 
+## RunSystemWorker
+
+`RunSystemWorker(w, sys, workerIndex, workerCount, dt)` is the out-of-pipeline counterpart to within-system multi-threaded dispatch. Callers fan out N goroutines, each calling `RunSystemWorker` with a distinct `workerIndex` in `[0, workerCount)`, and each goroutine processes a **disjoint slice** of `sys`'s matched entities.
+
+### Goroutine fan-out example
+
+```go
+const workers = 4
+var wg sync.WaitGroup
+for i := range workers {
+    wg.Add(1)
+    go func(idx int) {
+        defer wg.Done()
+        flecs.RunSystemWorker(w, sys, idx, workers, 1.0/60.0)
+    }(i)
+}
+wg.Wait()
+// All workers have completed and their deferred mutations are flushed.
+```
+
+### Partition algorithm
+
+Per archetype table, the row range is split as `count / workerCount` with the first `count % workerCount` workers each receiving one extra row — the same algorithm as the pipeline's multi-threaded dispatcher and upstream `ecs_worker_next`. The partition is **deterministic** for a given world state.
+
+### Per-call stage
+
+Each `RunSystemWorker` call allocates a fresh per-call command queue owned exclusively by the calling goroutine. Deferred mutations (via `it.Writer()`) go into this private queue and are flushed before the call returns. Concurrent callers flush in undefined order; each flush is serialized by the world write mutex so concurrent flushes do not race each other or a simultaneous `World.Write` scope.
+
+### Semantics decisions
+
+- **Disabled flag bypassed** — like `RunSystem`, `RunSystemWorker` runs the system regardless of `SetEnabled(false)`.
+- **No worker pool** — the caller owns goroutine spawn/join; `RunSystemWorker` is a synchronous single-call primitive.
+- **Sparse-only queries not partitioned** — for pure-DontFragment (sparse-only) queries, the sparse driver is iterated in full by every worker. Callers who need sparse partitioning must coordinate assignment externally.
+- **Flush ordering undefined across concurrent callers** — each worker's deferred mutations are applied atomically (under the world write mutex), but the order in which concurrent workers flush is unspecified.
+
+### Panics
+
+- `w` or `sys` is nil
+- `sys` is closed (`IsClosed() == true`)
+- `workerCount ≤ 0`
+- `workerIndex < 0` or `workerIndex ≥ workerCount`
+
+---
+
 ## Pipeline Introspection
 
 `Reader` exposes three methods for inspecting the registered system list at runtime without mutating world state.
