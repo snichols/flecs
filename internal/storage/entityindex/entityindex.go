@@ -250,3 +250,76 @@ func (idx *Index) EachID(fn func(id ids.ID) bool) {
 		}
 	}
 }
+
+// GetCurrentByIndex returns the currently alive entity at rawIndex, or (0, false)
+// if the slot is dead or has never been allocated.
+func (idx *Index) GetCurrentByIndex(rawIndex uint32) (ids.ID, bool) {
+	r := idx.tryGetRecord(rawIndex)
+	if r == nil {
+		return 0, false
+	}
+	return idx.dense[r.Dense], true
+}
+
+// MakeAlive claims a specific entity ID at the requested generation.
+//
+// Slot free (or never allocated): marks the slot alive at the requested
+// generation, removes the slot from the recycle queue if present, and
+// returns (id, true).
+//
+// Slot alive at the same generation: no-op, returns (id, true).
+//
+// Slot alive at a different generation: returns (currentID, false); the
+// caller is responsible for reporting the conflict.
+func (idx *Index) MakeAlive(id ids.ID) (ids.ID, bool) {
+	rawIdx := id.Index()
+	if rawIdx == 0 {
+		return 0, false
+	}
+
+	r := idx.tryGetRecord(rawIdx)
+	if r != nil {
+		// Slot already has an alive entity.
+		currentID := idx.dense[r.Dense]
+		if currentID.Generation() == id.Generation() {
+			return id, true
+		}
+		return currentID, false
+	}
+
+	// Slot is free or never allocated. Remove from FIFO recycle queue if present.
+	for i, rID := range idx.recycle {
+		if rID.Index() == rawIdx {
+			idx.recycle = append(idx.recycle[:i], idx.recycle[i+1:]...)
+			break
+		}
+	}
+
+	if rawIdx > idx.maxID {
+		idx.maxID = rawIdx
+	}
+
+	p := idx.ensurePage(rawIdx)
+	rec := &p[rawIdx&entityPageMask]
+
+	newID := ids.MakeEntity(rawIdx, id.Generation())
+	if idx.aliveCount < len(idx.dense) {
+		// Reuse the stale slot at dense[aliveCount] left by a previous Free+swap.
+		idx.dense[idx.aliveCount] = newID
+	} else {
+		idx.dense = append(idx.dense, newID)
+	}
+	rec.Dense = uint32(idx.aliveCount)
+	idx.aliveCount++
+
+	return newID, true
+}
+
+// SetVersion updates the generation counter stored in the dense vector for the
+// slot at rawIndex. The slot must be alive (Dense != 0) — the caller is
+// responsible for enforcing that precondition.
+func (idx *Index) SetVersion(rawIndex uint32, newGen uint32) {
+	pageIdx := int(rawIndex >> 6)
+	rec := &idx.pages[pageIdx][rawIndex&entityPageMask]
+	idx.dense[rec.Dense] = ids.MakeEntity(rawIndex, newGen)
+}

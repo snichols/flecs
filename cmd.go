@@ -12,6 +12,7 @@ const (
 	cmdDelete                  // Delete(e) — no payload
 	cmdSetPair                 // SetPair[T](e,rel,tgt,v) — id=pairID; payload in arena
 	cmdModified                // synthetic: value already in column; fire OnSet+BumpChange
+	cmdClear                   // Clear(e) — remove all components, entity stays alive
 )
 
 // cmd is a single deferred operation.

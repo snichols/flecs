@@ -67,7 +67,27 @@ w.Delete(e1) // OK: post condition (e1 not alive) already satisfied
 
 ### Clearing
 
-> **Not yet ported in Go flecs** — `Clear(e)` removes all components from an entity without deleting it. This is more efficient than removing components one by one. See the [feature-gap list](README.md) for details.
+`Clear` removes all components, tags, and pairs from an entity without deleting it. The entity stays alive in the empty archetype; `OnRemove` fires for each component removed.
+
+```go
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    flecs.Set[Position](fw, e, Position{1, 2})
+    flecs.Set[Velocity](fw, e, Velocity{3, 4})
+})
+
+w.Write(func(fw *flecs.Writer) {
+    flecs.Clear(fw, e) // fires OnRemove for Position and Velocity
+})
+
+w.Read(func(r *flecs.Reader) {
+    r.IsAlive(e)         // true — entity is still alive
+    flecs.Has[Position](r, e) // false — all components removed
+})
+```
+
+Inside a deferred scope all `AddID`/`Set` commands queued *before* the `Clear` are superseded; commands queued *after* the `Clear` apply on top of the empty archetype.
 
 ### Liveliness Checking
 
@@ -87,11 +107,41 @@ w.IsAlive(e2) // true  — still alive
 
 ### Manual IDs
 
-> **Not yet ported in Go flecs** — `MakeAlive(id)` lets applications claim a specific entity ID (useful for networked synchronisation where both sides must share the same ID). See the [feature-gap list](README.md).
+`MakeAlive` claims a specific entity ID, useful for networked scenarios where both peers must share the same entity IDs.
+
+```go
+// Claim raw index 42 at generation 0.
+target := flecs.MakeEntity(42, 0)
+fw := flecs.WriterForTest(w)    // call outside w.Write — MakeAlive cannot be deferred
+got := flecs.MakeAlive(fw, target)
+// got == target; the entity is now alive in the world
+```
+
+- If the slot is already alive at the **same generation**: no-op, returns `id`.
+- If the slot is free: the registry advances to the requested generation and marks the slot alive.
+- If the slot is alive at a **different generation**: panics with a descriptive message.
+
+`MakeAlive` panics when called inside a deferred scope (`w.Write`); call it from outside any `Write` block.
 
 ### Manual Versioning
 
-> **Not yet ported in Go flecs** — `SetVersion(versionedID)` overrides the generation counter of an entity, enabling manual version synchronisation for networked IDs. See the [feature-gap list](README.md).
+`SetVersion` overrides the generation counter on an alive entity. After the call, the old ID is invalid and the new versioned ID is alive.
+
+```go
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
+
+newID := flecs.MakeEntity(e.Index(), e.Generation()+10)
+fw := flecs.WriterForTest(w)  // call outside w.Write — SetVersion cannot be deferred
+flecs.SetVersion(fw, newID)
+
+w.IsAlive(e)     // false — old generation is now stale
+w.IsAlive(newID) // true  — new generation is canonical
+```
+
+The requested generation must be ≥ the current generation. A decrease panics; use `Delete` + `MakeAlive` to reset to a lower generation deliberately.
+
+`SetVersion` panics when called inside a deferred scope (`w.Write`).
 
 ### Entity Ranges
 

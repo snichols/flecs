@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.55.0)
+## Shipped (through v0.56.0)
 
 The following features are available in the current release:
 
@@ -57,6 +57,7 @@ The following features are available in the current release:
 - **DontFragment trait** _(v0.53.0, Phase 15.21)_ — `SetDontFragment(w, compID)` / `IsDontFragment(scope, compID)` / `w.DontFragment()` (index 35). Suppresses archetype transitions: entity does NOT transition tables when a DontFragment component is added/removed. Data stored in sparse-set (same backing as Sparse). Canonical pattern: `SetSparse + SetDontFragment` together matches v0.51.0–v0.52.0 `Sparse` behavior. `isDontFragmentTermID` drives pure-sparse query iteration mode. BREAKING: splits upstream `EcsSparse + EcsIdDontFragment`; `SetSparse` alone no longer suppresses archetype transitions. See `MIGRATING.md`. Built-in entity count: 37; user entities now start at index 38.
 - **Union relationship trait** _(v0.54.0, Phase 15.22)_ — `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`. At-most-one-target per relationship per entity, stored in a per-relationship side map (`unionStore` — dense slice + index map). Union pairs never trigger archetype transitions. Implies Exclusive. Tag-only: data-bearing `SetPair[T]` panics. `OnAdd`/`OnRemove` fire on target set, replace, and entity delete. Pure-union query iteration via `nextUnionOnly`. `CachedQuery.unionAndOnly` skips archetype tracking for all-union queries. Marshal round-trip via `union_relationship_serials` + `union_relationships` fields. Built-in entity count: 37 (unchanged); no new built-in entity; `SetUnion` registers policies at runtime.
 - **OnReplace hook** _(v0.55.0, Phase 16.0)_ — `OnReplace[T](w, fn)` / `OnReplaceID(w, id, fn)`. Fires when `Set[T]` overwrites an existing component value; receives both the previous (`old`) and incoming (`new`) value before the slot is written. Does not fire on first Set. Dispatch order on overwrite: OnReplace → column write → OnSet. Wired into archetype, sparse-only, DontFragment, pair, and deferred (`cmdModified`) paths. Deferred coalescing fires OnReplace once per surviving `cmdModified`; first write to a just-migrated slot is not a replace. Mirrors C flecs `ti->hooks.on_replace`. No `EventOnReplace` observer event.
+- **Clear / MakeAlive / SetVersion** _(v0.56.0, Phase 16.1)_ — `Clear(fw, e)` removes all components from an entity, leaving it alive; deferred coalescer support; fires `OnRemove` per component. `MakeAlive(fw, id)` claims a specific entity ID for networked ID synchronisation; panics on generation conflict or in deferred scope. `SetVersion(fw, versionedID)` overrides the generation counter (monotonic; panics on decrease or in deferred scope). Mirrors C `ecs_clear`, `ecs_make_alive`, `ecs_set_version`.
 
 ## Documentation
 

@@ -93,9 +93,9 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.1 (EntitiesComponents port)
 
-- **`Clear(e)`** — remove all components from an entity without deleting it; more efficient than removing one by one. not yet ported in Go flecs.
-- **`MakeAlive(id)`** — claim a specific entity ID (e.g. for networked ID synchronisation). not yet ported in Go flecs.
-- **`SetVersion(versionedID)`** — override the generation counter on an entity. not yet ported in Go flecs.
+- **`Clear(e)`** — ✅ **shipped in v0.56.0**. Removes all components from an entity without deleting it; fires `OnRemove` per component; deferred coalescer support.
+- **`MakeAlive(id)`** — ✅ **shipped in v0.56.0**. Claims a specific entity ID (e.g. for networked ID synchronisation); panics on generation conflict or inside deferred scope.
+- **`SetVersion(versionedID)`** — ✅ **shipped in v0.56.0**. Overrides the generation counter on an entity (monotonic; panics on decrease or inside deferred scope).
 - **Entity ID ranges** (`range_new` / `range_set`) — constrain which IDs `NewEntity` issues; enables per-owner ID partitioning. not yet ported in Go flecs.
 - **Entity disabling** (`Enable` / `Disable`) — exclude entities from queries temporarily via a `Disabled` tag without deleting them. not yet ported in Go flecs.
 - **`on_replace` hook** — ✅ **shipped in v0.55.0** as `OnReplace[T]` / `OnReplaceID`. Receives both the previous and new component value when a component is overwritten via `Set`. Fires only on overwrites (not on first Set). See [ObserversManual.md § OnReplace Hook](ObserversManual.md#onreplace-hook).

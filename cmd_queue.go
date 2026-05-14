@@ -131,6 +131,8 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 
 	deleted := false
 	hasSet := false
+	cleared := false
+	var clearCmdIdx int32 = -1
 
 	idx := entry.first
 	for {
@@ -138,6 +140,12 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		switch c.kind {
 		case cmdDelete:
 			deleted = true
+		case cmdClear:
+			// Reset net archetype to empty. Prior cmds are superseded.
+			cleared = true
+			clearCmdIdx = idx
+			q.scratch1 = q.scratch1[:0]
+			c.kind = cmdSkip
 		case cmdAddID:
 			// Union pair: do not modify archetype; dispatch will call addIDImmediate
 			// which routes to the union store. Union pairs never appear in archetypes.
@@ -255,6 +263,26 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			idx2 = ni
 		}
 		return
+	}
+
+	if cleared {
+		// Mark all cmds submitted before the (last) cmdClear as cmdSkip so that
+		// non-archetype cmds such as union AddID or sparse RemoveID that were not
+		// yet rewritten in pass 1 are not dispatched after the clear.
+		idx2 := entry.first
+		for idx2 != clearCmdIdx {
+			c2 := &q.cmds[idx2]
+			c2.kind = cmdSkip
+			ni, hasNi := nextInChain(c2.nextForEntity)
+			if !hasNi {
+				break
+			}
+			idx2 = ni
+		}
+		// Perform the full immediate clear (fires OnRemove, cleans sparse/union/etc.).
+		clearImmediate(w, entity)
+		// Entity is now in the empty table; subsequent adds in scratch1 apply to [].
+		oldSig = w.empty.Type()
 	}
 
 	// newSig is scratch1 — already sorted, no extra allocation.
@@ -499,6 +527,9 @@ func (q *cmdQueue) dispatch(w *World, c *cmd) {
 
 	case cmdDelete:
 		deleteImmediate(w, c.entity)
+
+	case cmdClear:
+		clearImmediate(w, c.entity)
 
 	case cmdModified:
 		// Write this cmd's specific value into the column (last write wins when
