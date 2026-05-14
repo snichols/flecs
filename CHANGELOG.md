@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.73.0 — 2026-05-14 — Phase 16.18: Fixed per-term source
+
+Ports the upstream C flecs fixed-source query mechanism (`compiler.c:833-882`,
+`eval.c:940-962`). A query term can now bind its component to a specific named
+entity rather than the iterated entity (`$this`).
+
+### Added
+
+- **`WithSourceTerm(componentID, sourceEntity ID) Term`** — top-level builder that returns a `TermAnd` with a fixed source entity. Panics if either ID is zero.
+- **`(Term).Source(e ID) Term`** — chained builder; panics if `e` is zero or if the term already has traversal flags (`.Up()` / `.SelfUp()` / `.Cascade()`).
+- **Fixed-source iteration machinery** in `query.go` and `cached_query.go`:
+  - Fixed-source terms do **not** contribute to the `$this` archetype-filter set.
+  - Component pointer resolved once at `Iter()` start (`buildFixedSourcePtrs`); `Field[T]` returns a 1-element slice backed by the snapshot pointer.
+  - Absent required source → entire query yields zero results (matches upstream `eval.c:114-117`).
+  - `CachedQuery.Iter()` re-reads the source pointer on each call so updates between iterations are visible.
+- **`(Term).TermOptional` + fixed source** (`Maybe(id).Source(e)`): absent component on source yields `FieldMaybe → (nil, false)` — entities still match. Deliberate divergence from upstream's uniform treatment of optional fixed-source; the Go `FieldMaybe`-friendly behaviour is the natural fit.
+
+### Naming rationale
+
+The new query-side helper is `WithSourceTerm` to avoid collision with the existing observer-side `WithSource(e ID) ObserverOptions` (which accepts a single entity and returns `ObserverOptions`). The two APIs serve different scopes (query term vs observer options) and intentionally keep distinct names. `WithSource` is **not** renamed; no deprecation is introduced.
+
+### Behaviour
+
+- **No archetype-filter contribution**: the fixed-source term is resolved once at iter start via `buildFixedSourcePtrs`; the `$this` seed and `matchesTable` checks ignore it entirely.
+- **Snapshot-at-iter-start**: the data pointer is captured at `Iter()` time; mid-iteration mutations to the source entity are not reflected until the next `Iter()` call. `CachedQuery` re-reads at each `Iter()`.
+- **Dead-source → dead iter**: if any `TermAnd` fixed-source component is absent on its source entity, `Iter()` returns a dead iterator immediately (zero `Next()` calls).
+- **Optional divergence**: `Maybe(id).Source(e)` caches `nil` for the absent case; `FieldMaybe` returns `(nil, false)` and entities continue to match.
+- **Validation**: panics at query-construction time if (a) source entity is dead, (b) `TermNot` or `TermOr` used with fixed source (out of scope for this phase), or (c) traversal flags combined with `.Source()`.
+- **Sorting**: fixed-source `TermAnd` terms sort to the head of the And-block (parallels upstream's `setfixed` plan order).
+
+### Tests
+
+`query_fixed_source_test.go` — 19 new test functions covering basic, no-component-on-source, mixed `$this`+fixed, snapshot, sparse, DontFragment, zero-source panic, dead-entity panic, cached-query source update, OrderBy composition, multiple sources, pair form, optional divergence, TermNot panic, union-term (present + absent + no-store), cached dead iter, method zero panic, and chained builder.
+
+---
+
 ## v0.72.0 — 2026-05-14 — Phase 16.17: Observer propagation along IsA
 
 Ports the upstream C flecs observer-propagation mechanism (`observable.c:1083`).
