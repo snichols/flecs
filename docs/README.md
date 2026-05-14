@@ -162,7 +162,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.8 (ComponentTraits port)
 
 - **`Constant` component trait** — marks a component read-only after its initial write; subsequent `Set` calls would be a fatal error. not yet ported in Go flecs.
-- **`DontFragment` component trait** — opt a component into non-fragmenting sparse storage; sparse but does not create new archetype tables. not yet ported in Go flecs.
+- **`DontFragment` component trait** — opt a component into non-fragmenting sparse storage; entity does not transition archetype tables on add/remove. **Shipped in v0.53.0** via `SetDontFragment(w, cid)` / `IsDontFragment(scope, cid)` / `w.DontFragment()`. See [ComponentTraits.md § DontFragment](ComponentTraits.md#dontfragment).
 - **`Singleton` component trait** (`EcsSingleton`) — **shipped in v0.44.0** via `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`. At-most-one-holder semantic (deliberately different from C must-be-self). See [ComponentTraits.md § Singleton](ComponentTraits.md#singleton).
 - **`Union` relationship trait** — union-pair semantics: only one of several targets may be active for a given relationship on an entity; stored to minimise table fragmentation. not yet ported in Go flecs.
 - **`Final` entity trait** — **shipped in v0.42.0** via `SetFinal(w, entityID)` / `IsFinal(scope, entityID)` / `w.Final()`. Write-time enforcement: adding `(IsA, target)` panics if target is Final. See [ComponentTraits.md § Final](ComponentTraits.md#final) and [PrefabsManual.md § Sealing prefabs with Final](PrefabsManual.md#sealing-prefabs-with-final).
