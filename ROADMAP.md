@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.82.0)
+## Shipped (through v0.83.0)
 
 The following features are available in the current release:
 
@@ -84,6 +84,7 @@ The following features are available in the current release:
 - **Query variables ($Var, single-variable v1)** _(v0.80.0, Phase 16.25)_ — `WithVar(componentID, varName)` / `WithPairTgtVar(rel, varName)` / `(Term).SrcVar(name)` / `(Term).TgtVar(name)` / `(*QueryIter).Var(name) ID`. Named query variables enable relational joins: a variable name acts as a runtime entity slot constrained by one or more terms. Single-variable v1: one user variable plus the implicit `$this`; first-defined variable is the driver; domain enumerated at `Iter()` time; results pre-materialised per-row; 8-variable cap. `CachedQuery` with variables re-executes bindings per `Iter()`. Closes `docs/README.md` query variables gap entry. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables).
 - **Multi-variable query support** _(v0.81.0, Phase 16.26)_ — extends Phase 16.25 to N named variables per query. Variables form a dependency graph (variable B depends on A when a term has `srcVar=A, tgtVar=B`); a topo-sort determines the nested join order; cycles panic at construction with the cycle path. Variable cap bumped from 8 to 16 (upstream `EcsQueryMaxVarCount = 64` allows further increases). Fixed-source terms may carry `TgtVar` to constrain a variable's domain from a specific entity's pairs. Closes the multi-variable carve-out in `docs/README.md`. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables).
 - **`RunSystemWorker` — explicit thread dispatch** _(v0.82.0, Phase 16.27)_ — `RunSystemWorker(w, sys, workerIndex, workerCount, dt)` for manual entity-range partitioning outside the pipeline. Fresh per-call command queue; flush before return; partition via `clippedCopy`; disabled flag bypassed. Closes `docs/README.md` gap line 146. See [docs/Systems.md § RunSystemWorker](docs/Systems.md#runsystemworker).
+- **Alerts addon** _(v0.83.0, Phase 16.28)_ — `RegisterAlert` / `Alerts` / `AlertsBySeverity` / `AlertsForEntity`; query-driven raise/clear lifecycle via monitor observer; `AlertInfo`/`AlertWarning`/`AlertError`/`AlertCritical` severity constants; `%d` entity-ID message interpolation; definitions survive JSON round-trip. Closes `docs/README.md` gap line 76. See [docs/Alerts.md](docs/Alerts.md).
 
 ## Documentation
 
