@@ -758,6 +758,10 @@ type sparseTag struct{ Z float32 }
 // sparseArch is an archetype (non-sparse) component for mixed-query tests.
 type sparseArch struct{ W float32 }
 
+// sparseArch2 is a second archetype (non-sparse) component used in multi-table
+// mixed-query tests that require some archetype tables to be excluded by Not terms.
+type sparseArch2 struct{ V float32 }
+
 // TestSparse_QueryPureSparse verifies that a pure-sparse query over three sparse
 // components yields exactly the entities that have all three, in dense order.
 func TestSparse_QueryPureSparse(t *testing.T) {
@@ -1314,4 +1318,186 @@ func TestSparse_QueryMarshalRoundTrip(t *testing.T) {
 	_ = posID
 	_ = e1
 	_ = e2
+}
+
+// TestSparse_QueryIterSparseCountTableEntities verifies the iterator API on
+// pure-sparse iterators: Count() returns 1, Table() panics, and Entities()
+// returns nil after exhaustion.
+func TestSparse_QueryIterSparseCountTableEntities(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	flecs.SetSparse(w, posID)
+
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, sparsePos{X: 1})
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+
+	// Count() must return 1 for pure-sparse iterators (entity-at-a-time mode).
+	q.Each(func(it *flecs.QueryIter) {
+		if c := it.Count(); c != 1 {
+			t.Errorf("sparse Count(): got %d, want 1", c)
+		}
+	})
+
+	// Table() must panic on a pure-sparse iterator (no archetype table).
+	it := q.Iter()
+	it.Next()
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Table() on sparse iterator: expected panic, got none")
+			}
+		}()
+		_ = it.Table()
+	}()
+
+	// After the iterator is exhausted, Entities() returns nil (sparseEntity == 0).
+	it2 := q.Iter()
+	for it2.Next() {
+	}
+	if got := it2.Entities(); got != nil {
+		t.Errorf("Entities() after exhaustion on sparse iter: got %v, want nil", got)
+	}
+}
+
+// TestSparse_QueryMixedNonMatchingTable verifies that nextMixed skips archetype
+// tables that fail matchesTable (archetype Not term excludes a table) and that
+// the sparse-Not short-circuit in matchesTable is exercised.
+func TestSparse_QueryMixedNonMatchingTable(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID)
+	arch1ID := flecs.RegisterComponent[sparseArch](w)
+	arch2ID := flecs.RegisterComponent[sparseArch2](w)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		// e1: arch1 + posID — should match (no arch2, no velID)
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparseArch{W: 1})
+		flecs.Set(fw, e1, sparsePos{X: 1})
+
+		// e2: arch1 + arch2 + posID — excluded by Without(arch2ID)
+		// e2's table [arch1, arch2] fails matchesTable → exercises nextMixed line 624
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparseArch{W: 2})
+		flecs.Set(fw, e2, sparseArch2{V: 2})
+		flecs.Set(fw, e2, sparsePos{X: 2})
+	})
+
+	// Without(arch2ID): archetype Not term — e2's table fails matchesTable (line 624).
+	// Without(velID): sparse Not term — exercises the sparse-Not skip in matchesTable (line 785).
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(arch1ID),
+		flecs.Without(arch2ID),
+		flecs.With(posID),
+		flecs.Without(velID),
+	)
+
+	found := make(map[flecs.ID]bool)
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = true
+		}
+	})
+
+	if !found[e1] || found[e2] {
+		t.Errorf("mixed non-matching table: expected only e1; got e1=%v e2=%v", found[e1], found[e2])
+	}
+}
+
+// TestSparse_QueryMixedOptionalTerms verifies that updateOptionalPresenceMixed is
+// called correctly for mixed queries containing both sparse and archetype Optional
+// terms, including the cleanup of the optionalPresent map between entities.
+func TestSparse_QueryMixedOptionalTerms(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetSparse(w, velID) // velID is a sparse Optional
+	archID := flecs.RegisterComponent[sparseArch](w)  // required archetype And
+	tagID := flecs.RegisterComponent[sparseTag](w)    // archetype Optional (not sparse)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		// e1: archID + tagID (archetype) + posID + velID (sparse) — both optionals present
+		// e1 ends up in table [archID, tagID]; e2 in table [archID]: different tables.
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, sparseArch{W: 1})
+		flecs.Set(fw, e1, sparseTag{Z: 1})
+		flecs.Set(fw, e1, sparsePos{X: 1})
+		flecs.Set(fw, e1, sparseVel{DX: 1})
+
+		// e2: archID + posID only — optional components absent
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, sparseArch{W: 2})
+		flecs.Set(fw, e2, sparsePos{X: 2})
+	})
+
+	// Maybe(velID): sparse Optional — exercises sparse branch in updateOptionalPresenceMixed.
+	// Maybe(tagID): archetype Optional — exercises archetype branch.
+	// Two distinct entities in different tables ensure the cleanup loop (delete) is exercised
+	// on the second updateOptionalPresenceMixed call.
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(archID),
+		flecs.With(posID),
+		flecs.Maybe(velID),
+		flecs.Maybe(tagID),
+	)
+
+	found := make(map[flecs.ID]struct{})
+	q.Each(func(it *flecs.QueryIter) {
+		for _, e := range it.Entities() {
+			found[e] = struct{}{}
+		}
+	})
+
+	if _, ok := found[e1]; !ok {
+		t.Error("mixed optional: e1 not found")
+	}
+	if _, ok := found[e2]; !ok {
+		t.Error("mixed optional: e2 not found")
+	}
+}
+
+// TestSparse_IsFieldSelfBasic verifies IsFieldSelf for TraverseSelf terms, exercising
+// the loop-continue path (first term does not match requested id) and the
+// not-in-query panic path.
+func TestSparse_IsFieldSelfBasic(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[sparsePos](w)
+	velID := flecs.RegisterComponent[sparseVel](w)
+	// Both registered as archetype (not sparse).
+
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, sparsePos{X: 1})
+		flecs.Set(fw, e, sparseVel{DX: 1})
+	})
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(velID))
+	it := q.Iter()
+	it.Next()
+
+	// IsFieldSelf for velID requires skipping posID first (exercises the continue path
+	// in the loop: term.ID != velID → continue, then term.ID == velID → return true).
+	if !flecs.IsFieldSelf(it, velID) {
+		t.Error("IsFieldSelf velID: expected true for self-owned component")
+	}
+
+	// IsFieldSelf with an id not in the query must panic.
+	badID := flecs.RegisterComponent[sparseArch](w)
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("IsFieldSelf bad id: expected panic, got none")
+			}
+		}()
+		flecs.IsFieldSelf(it, badID)
+	}()
 }
