@@ -2,11 +2,14 @@ package flecs
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,16 +34,18 @@ import (
 //
 // # Routes
 //
-//	GET /stats              — world stats JSON (200)
-//	GET /stats/world        — WorldStats snapshot as JSON; Cache-Control: no-store (200 or 503)
-//	GET /stats/pipeline     — PipelineStats snapshot as JSON; Cache-Control: no-store (200 or 503)
-//	GET /components         — all registered component infos (200)
-//	GET /components/{id}    — single component by uint64 ID (200 or 404)
-//	GET /entities           — alive entities; optional ?limit=N (default 1000, max 10000) (200 or 400)
-//	GET /entities/{id}      — entity detail (200 or 404)
-//	GET /snapshot           — full world MarshalJSON output (200 or 500)
-//	PUT /snapshot           — replace world state; body is MarshalJSON output (204, 400)
-//	GET /type_info/{path}   — reflection schema for a named component (200, 404)
+//	GET /stats                   — world stats JSON (200)
+//	GET /stats/world             — WorldStats snapshot as JSON; Cache-Control: no-store (200 or 503)
+//	GET /stats/pipeline          — PipelineStats snapshot as JSON; Cache-Control: no-store (200 or 503)
+//	GET /components              — all registered component infos (200)
+//	GET /components/{id}         — single component by uint64 ID (200 or 404)
+//	GET /entities                — alive entities; optional ?limit=N (default 1000, max 10000) (200 or 400)
+//	GET /entities/{id}           — entity detail (200 or 404)
+//	GET /snapshot                — full world MarshalJSON output (200 or 500)
+//	PUT /snapshot                — replace world state; body is MarshalJSON output (204, 400)
+//	GET /type_info/{path}        — reflection schema for a named component (200, 404)
+//	PUT /entity                  — create or claim entity; JSON body {id?,name?,parent?} (200, 400, 404, 409, 503)
+//	DELETE /entity/{path...}     — delete entity by dot-separated path (200, 400, 404, 503)
 func NewRESTHandler(w *World) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", restStats(w))
@@ -53,6 +58,11 @@ func NewRESTHandler(w *World) http.Handler {
 	mux.HandleFunc("GET /snapshot", restSnapshotGet(w))
 	mux.HandleFunc("PUT /snapshot", restSnapshotPut(w))
 	mux.HandleFunc("GET /type_info/{path...}", restTypeInfo(w))
+	// writeMu serializes concurrent w.Write calls; w.Write is not goroutine-safe
+	// when called from multiple goroutines simultaneously (pre-existing inMerge race).
+	var writeMu sync.Mutex
+	mux.HandleFunc("PUT /entity", restPutEntity(w, &writeMu))
+	mux.HandleFunc("DELETE /entity/{path...}", restDeleteEntity(w, &writeMu))
 	return mux
 }
 
@@ -381,6 +391,19 @@ func restSnapshotPut(w *World) http.HandlerFunc {
 	}
 }
 
+// putEntityRequest is the JSON body for PUT /entity.
+type putEntityRequest struct {
+	ID     *uint64 `json:"id"`
+	Name   string  `json:"name"`
+	Parent string  `json:"parent"`
+}
+
+// putEntityResponse is the JSON body returned by PUT /entity.
+type putEntityResponse struct {
+	ID   uint64 `json:"id"`
+	Name string `json:"name"`
+}
+
 func restTypeInfo(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		path, _ := url.PathUnescape(r.PathValue("path"))
@@ -436,5 +459,109 @@ func restTypeInfo(w *World) http.HandlerFunc {
 		}
 		rw.Header().Set("Cache-Control", "max-age=300")
 		writeJSON(rw, http.StatusOK, resp)
+	}
+}
+
+func restPutEntity(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		var req putEntityRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(rw, http.StatusBadRequest, "malformed JSON body")
+			return
+		}
+
+		var parentID ID
+		if req.Parent != "" {
+			var found bool
+			w.Read(func(fr *Reader) {
+				parentID, found = fr.Lookup(req.Parent)
+			})
+			if !found {
+				writeError(rw, http.StatusNotFound, "parent not found")
+				return
+			}
+		}
+
+		var resp putEntityResponse
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(func(fw *Writer) {
+				var e ID
+				if req.ID != nil {
+					// MakeAlive requires deferDepth==0; w.Write sets deferDepth=1.
+					// Temporarily step outside the deferred scope for this call.
+					var maErr any
+					func() {
+						fw.stage.deferDepth--
+						defer func() {
+							maErr = recover()
+							fw.stage.deferDepth++
+						}()
+						e = MakeAlive(fw, ID(*req.ID))
+					}()
+					if maErr != nil {
+						panic(maErr)
+					}
+				} else {
+					e = fw.NewEntity()
+				}
+				if req.Name != "" {
+					fw.SetName(e, req.Name)
+				}
+				if parentID != 0 {
+					fw.AddID(e, MakePair(w.ChildOf(), parentID))
+				}
+				resp = putEntityResponse{ID: uint64(e), Name: req.Name}
+			})
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			if strings.HasPrefix(fmt.Sprint(panicVal), "flecs: MakeAlive:") {
+				writeError(rw, http.StatusConflict, "entity alive at different generation")
+				return
+			}
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		writeJSON(rw, http.StatusOK, resp)
+	}
+}
+
+func restDeleteEntity(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		path, _ := url.PathUnescape(r.PathValue("path"))
+		if path == "" {
+			writeError(rw, http.StatusBadRequest, "path is required")
+			return
+		}
+
+		var e ID
+		var found bool
+		w.Read(func(fr *Reader) {
+			e, found = fr.Lookup(path)
+		})
+		if !found {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(func(fw *Writer) {
+				fw.Delete(e)
+			})
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		rw.WriteHeader(http.StatusOK)
 	}
 }
