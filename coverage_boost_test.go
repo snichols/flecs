@@ -121,7 +121,7 @@ func TestCovIDOps_AddID_Final(t *testing.T) {
 		flecs.AddID(fw, ent, w.Final())
 	})
 	// Adding (IsA, ent) should now panic — Final() prevents IsA.
-	defer func() { recover() }()
+	defer func() { _ = recover() }()
 	w.Write(func(fw *flecs.Writer) {
 		child := fw.NewEntity()
 		flecs.AddID(fw, child, flecs.MakePair(w.IsA(), ent))
@@ -162,7 +162,7 @@ func TestCovIDOps_AddID_With(t *testing.T) {
 	w := flecs.New()
 	var ent flecs.ID
 	w.Write(func(fw *flecs.Writer) { ent = fw.NewEntity() })
-	defer func() { recover() }() // line 170 (_ = e) runs, then checkUsageConstraints panics
+	defer func() { _ = recover() }() // line 170 (_ = e) runs, then checkUsageConstraints panics
 	w.Write(func(fw *flecs.Writer) {
 		flecs.AddID(fw, ent, w.With())
 	})
@@ -602,11 +602,11 @@ func TestCovQuery_Mixed_DFOptional(t *testing.T) {
 // ── cached_query.go ──────────────────────────────────────────────────────────
 
 // TestCovCQ_SparseAndOnly_WithDFTermNot covers:
-// - newCachedQueryInternal dontFragmentAndCount++ (lines 212-214)
-// - sparseAndOnly block in CachedQuery.Iter (lines 325-361)
-//   incl. TermNot continue (330-331), key/ss lookup (331-334), minLen+copy (336-345)
-// - tryMatchTable sparseAndOnly return (lines 472-474)
-// - Changed() regular-path sparseVersions make (lines 645-647)
+//   - newCachedQueryInternal dontFragmentAndCount++ (lines 212-214)
+//   - sparseAndOnly block in CachedQuery.Iter (lines 325-361)
+//     incl. TermNot continue (330-331), key/ss lookup (331-334), minLen+copy (336-345)
+//   - tryMatchTable sparseAndOnly return (lines 472-474)
+//   - Changed() regular-path sparseVersions make (lines 645-647)
 func TestCovCQ_SparseAndOnly_WithDFTermNot(t *testing.T) {
 	w := flecs.New()
 	type dfCQ struct{ V int }
