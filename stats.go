@@ -34,7 +34,7 @@ type Stats struct {
 	ComponentStats []ComponentStat
 }
 
-// PhaseStats holds per-phase timing for a single Progress call.
+// PhaseStats holds per-phase timing for a single Progress call and cumulative totals.
 type PhaseStats struct {
 	// Name is the phase name: "PreUpdate", "OnFixedUpdate", "OnUpdate", or "PostUpdate".
 	Name string
@@ -45,6 +45,11 @@ type PhaseStats struct {
 	// Zero if the phase had no active systems.
 	// For OnFixedUpdate, this is the sum across all fixed-step iterations.
 	Duration time.Duration
+	// CumulativeDuration is the total wall-clock time spent in this phase across
+	// all Progress calls since world creation.
+	CumulativeDuration time.Duration
+	// Invocations is the number of Progress calls in which this phase was visited.
+	Invocations uint64
 }
 
 // ComponentStat holds per-component table and entity counts.
@@ -86,6 +91,12 @@ func (w *World) Stats() Stats {
 	if w.frameCount > 0 {
 		phases := make([]PhaseStats, len(w.lastFramePhases))
 		copy(phases, w.lastFramePhases)
+		for i, phase := range w.phaseOrder {
+			if i < len(phases) {
+				phases[i].CumulativeDuration = phase.statsCumDuration
+				phases[i].Invocations = phase.statsInvocations
+			}
+		}
 		s.LastFramePhases = phases
 	}
 	s.ComponentStats = w.buildComponentStats()

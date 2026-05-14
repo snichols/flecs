@@ -153,6 +153,16 @@ type World struct {
 	postMergeHooks []func(*Writer) // nil slots are tombstones; slice index = registration ID
 	alertDefs      []*alertDef
 	alertInstances map[alertKey]*AlertInstance
+	// Stats addon fields — protected by statsMu except scratch fields (statsTickDidRun,
+	// statsTickDuration on System) which are only accessed from the Progress goroutine.
+	statsMu             sync.RWMutex
+	statsLastDelta      float64
+	statsEntityCount    int
+	statsTableCount     int
+	statsFrameCount     uint64
+	statsTotalTime      float64
+	statsPhaseSnapshot  []PhaseStats  // cached per-phase snapshot, rebuilt in statsCommit
+	statsSystemSnapshot []SystemStats // cached per-system snapshot, rebuilt in statsCommit
 }
 
 // New initializes and returns an empty World.

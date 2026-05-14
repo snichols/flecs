@@ -43,6 +43,14 @@ type System struct {
 	intervalAccum time.Duration   // accumulated time since last interval fire
 	rate          int32           // 0 or 1 = no rate gate (every tick)
 	rateCounter   int32           // increments each pipeline visit; fires when counter%rate==0
+	// Stats addon fields.
+	statsName          string        // display name; set by SetName or auto-generated
+	statsLastDuration  time.Duration // wall-clock time from the most recent tick this system ran
+	statsTotalDuration time.Duration // cumulative wall-clock time across all invocations
+	statsInvocations   uint64        // total invocations since world creation
+	statsSkipped       uint64        // ticks bypassed by interval or rate gating
+	statsTickDidRun    bool          // scratch: true if this system ran during the current tick
+	statsTickDuration  time.Duration // scratch: duration from the current tick
 }
 
 // NewSystem registers a new system on w in the OnUpdate phase that runs q's
@@ -85,7 +93,7 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 	}
 	w.systems = live
 
-	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdate, enabled: true}
+	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdate, enabled: true, statsName: statsAutoName(len(w.systems))}
 	w.systems = append(w.systems, sys)
 	w.pipelineDirty = true
 	if w.logger != nil {
@@ -133,7 +141,7 @@ func NewSystemInPhase(w *World, phase *Phase, q *CachedQuery, fn func(dt float32
 	}
 	w.systems = live
 
-	sys := &System{w: w, query: q, fn: fn, phase: phase, enabled: true}
+	sys := &System{w: w, query: q, fn: fn, phase: phase, enabled: true, statsName: statsAutoName(len(w.systems))}
 	w.systems = append(w.systems, sys)
 	w.pipelineDirty = true
 	if w.logger != nil {
@@ -371,6 +379,7 @@ func (w *World) Progress(dt float32) {
 				if s.interval > 0 {
 					s.intervalAccum += time.Duration(float64(phaseDT) * float64(time.Second))
 					if s.intervalAccum < s.interval {
+						s.statsSkipped++
 						continue
 					}
 					s.intervalAccum -= s.interval
@@ -381,6 +390,7 @@ func (w *World) Progress(dt float32) {
 				if s.rate > 1 {
 					s.rateCounter++
 					if s.rateCounter%s.rate != 0 {
+						s.statsSkipped++
 						continue
 					}
 				}
@@ -389,8 +399,11 @@ func (w *World) Progress(dt float32) {
 			if w.workerCount == 0 {
 				// Serial dispatch: single-threaded behavior unchanged.
 				for _, s := range active {
+					start := time.Now()
 					it := s.query.Iter()
 					s.fn(phaseDT, it)
+					s.statsTickDuration = time.Since(start)
+					s.statsTickDidRun = true
 				}
 				return
 			}
@@ -410,6 +423,7 @@ func (w *World) Progress(dt float32) {
 					n := w.workerCount
 					base := s.query.Iter()
 					var wg sync.WaitGroup
+					mtStart := time.Now()
 					for wi := 0; wi < n; wi++ {
 						wi := wi
 						workerIt := base.clippedCopy(wi, n)
@@ -421,6 +435,8 @@ func (w *World) Progress(dt float32) {
 						}
 					}
 					wg.Wait()
+					s.statsTickDuration = time.Since(mtStart)
+					s.statsTickDidRun = true
 					// Merge worker stages in ascending id order, then stage 0.
 					// Within each stage the per-entity coalescer applies; across
 					// stages there is no coalescing (two stages mutating the same
@@ -448,8 +464,11 @@ func (w *World) Progress(dt float32) {
 					continue
 				}
 				if !s.parallel {
+					start := time.Now()
 					it := s.query.Iter()
 					s.fn(phaseDT, it)
+					s.statsTickDuration = time.Since(start)
+					s.statsTickDidRun = true
 					i++
 					continue
 				}
@@ -481,8 +500,11 @@ func (w *World) Progress(dt float32) {
 				batch := active[batchStart:i]
 				if len(batch) <= 1 {
 					if len(batch) == 1 {
+						start := time.Now()
 						it := batch[0].query.Iter()
 						batch[0].fn(phaseDT, it)
+						batch[0].statsTickDuration = time.Since(start)
+						batch[0].statsTickDidRun = true
 					}
 					continue
 				}
@@ -493,8 +515,11 @@ func (w *World) Progress(dt float32) {
 					wg.Add(1)
 					w.workerCh <- func() {
 						defer wg.Done()
+						start := time.Now()
 						it := bs.query.Iter()
 						bs.fn(phaseDT, it)
+						bs.statsTickDuration = time.Since(start)
+						bs.statsTickDidRun = true
 					}
 				}
 				wg.Wait()
@@ -549,6 +574,7 @@ func (w *World) Progress(dt float32) {
 			runPhase(phase, dt)
 		}
 	}
+	w.statsCommit(dt)
 }
 
 // SystemCount returns the number of currently registered (non-closed) systems.

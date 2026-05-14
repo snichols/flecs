@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 )
 
 // Phase is an opaque handle for a pipeline phase. Systems registered in a
@@ -17,11 +18,13 @@ import (
 //
 // *Phase is NOT goroutine-safe; external synchronization is required.
 type Phase struct {
-	name           string
-	w              *World
-	predecessors   []*Phase // DependsOn edges: this phase runs after these
-	enabled        bool
-	orderedSystems []*System // cached topo order, set by rebuildPipeline
+	name             string
+	w                *World
+	predecessors     []*Phase // DependsOn edges: this phase runs after these
+	enabled          bool
+	orderedSystems   []*System     // cached topo order, set by rebuildPipeline
+	statsCumDuration time.Duration // cumulative wall-clock time across all Progress calls
+	statsInvocations uint64        // number of Progress calls that visited this phase
 }
 
 // NewPhase creates a new custom pipeline phase in world w with the given name.

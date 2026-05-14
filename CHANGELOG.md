@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.84.0 — 2026-05-14 — Phase 16.29: Stats addon
+
+Ports the upstream FlecsMonitor/FlecsStats addon to Go as the **Stats addon** (renamed from Monitor to avoid collision with Phase 16.10 monitor observers in `monitor_observer.go`). Exposes a goroutine-safe `PipelineStats` snapshot via `(*World).StatsSnapshot()`, collecting per-system execution times, per-phase timings, and world-level counters. Coverage ≥ 95.0%.
+
+### API additions
+
+- **`(*World).StatsSnapshot() PipelineStats`** — goroutine-safe point-in-time snapshot; safe to call from any goroutine (including concurrent with `Progress`); returns a fully copied value with no aliased slices.
+- **`PipelineStats`** — top-level snapshot type: `World WorldStats`, `Systems []SystemStats`, `Phases []PhaseStats`.
+- **`WorldStats`** — `EntityCount`, `TableCount`, `ArchetypeCount`, `FrameCount`, `TotalTime`, `LastTickDelta`.
+- **`SystemStats`** — `Name`, `LastTickDuration`, `Invocations`, `AvgDuration`, `TotalSkipped` (interval/rate-gated skips).
+- **`(*System).SetName(name string) *System`** — set a display name for the system; auto-generated name `"system-N"` is used otherwise.
+- **`PhaseStats`** extended — existing struct gains `CumulativeDuration time.Duration` and `Invocations uint64`; populated by both `Stats()` and `StatsSnapshot()`.
+
+### Semantics
+
+- **Collection** — per-system wall-clock timing is instrumented at all three `runPhase` dispatch paths (serial, multi-threaded, parallel batch). Interval- and rate-gated skips increment `TotalSkipped`; disabled-system ticks do not.
+- **Concurrency** — `statsMu sync.RWMutex` protects the snapshot cache. `statsCommit` (called at end of each `Progress`) acquires the write lock and publishes all metrics atomically; `StatsSnapshot` acquires the read lock and returns a copy.
+- **Snapshot allocation** — `StatsSnapshot` returns a value type with copied slices; retained snapshots are never mutated by subsequent ticks.
+- **Scope** — v1: per-tick + cumulative only. Time-window aggregation (`Period1s`/`1m`/`1h`/`1d`/`1w`), persistence, REST exposure, memory-allocator stats, and alerts-on-threshold are explicitly deferred.
+
 ## v0.83.0 — 2026-05-14 — Phase 16.28: Alerts addon
 
 Ports the C flecs Alerts addon to Go. Alerts are registered query + severity + message rules; the world automatically tracks which entities satisfy the query and exposes the active set as `AlertInstance` snapshots.
