@@ -155,6 +155,8 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.OrderedChildren(): {},
 		w.Sparse():          {},
 		w.DontFragment():    {},
+		w.Disabled():        {},
+		w.Prefab():          {},
 		w.Wildcard():        {},
 		w.Any():             {},
 	}

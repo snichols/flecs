@@ -83,8 +83,10 @@ type World struct {
 	withID               ID                              // built-in With trait entity (index 32)
 	orderedChildrenID    ID                              // built-in OrderedChildren trait entity (index 33)
 	dontFragmentID       ID                              // built-in DontFragment trait entity (index 35)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 36; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 37; _); user entities start at index 38
+	disabledID           ID                              // built-in Disabled tag entity (index 36)
+	prefabID             ID                              // built-in Prefab tag entity (index 37)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 38; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 39; _); user entities start at index 40
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -167,9 +169,11 @@ type World struct {
 //   - Index 33: OrderedChildren built-in trait entity
 //   - Index 34: Sparse built-in trait entity
 //   - Index 35: DontFragment built-in trait entity
-//   - Index 36: Wildcard built-in query-term sentinel (*)
-//   - Index 37: Any built-in query-term sentinel (_)
-//   - Index 38+: user entities (NewEntity)
+//   - Index 36: Disabled built-in tag entity
+//   - Index 37: Prefab built-in tag entity
+//   - Index 38: Wildcard built-in query-term sentinel (*)
+//   - Index 39: Any built-in query-term sentinel (_)
+//   - Index 40+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -389,13 +393,25 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(dontFragment))
 	w.dontFragmentID = dontFragment
-	// Allocate the built-in Wildcard query-term sentinel (gets index 36).
+	// Allocate the built-in Disabled tag entity (gets index 36).
+	disabled := w.index.Alloc()
+	rec = w.index.Get(disabled)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(disabled))
+	w.disabledID = disabled
+	// Allocate the built-in Prefab tag entity (gets index 37).
+	prefab := w.index.Alloc()
+	rec = w.index.Get(prefab)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(prefab))
+	w.prefabID = prefab
+	// Allocate the built-in Wildcard query-term sentinel (gets index 38).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 37).
+	// Allocate the built-in Any query-term sentinel (gets index 39).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -446,6 +462,11 @@ func New() *World {
 	// SlotOf, DependsOn, and Flag are upstream but not yet ported; skip.
 	applyPairIsTagPolicy(w, w.isAID)
 	applyPairIsTagPolicy(w, w.childOfID)
+	// Bootstrap DontInherit on the Prefab tag so that entities inheriting from a
+	// prefab via IsA do NOT acquire the Prefab tag themselves. Mirrors C
+	// ecs_add_pair(world, EcsPrefab, EcsOnInstantiate, EcsDontInherit) at
+	// bootstrap.c:1308.
+	applyInstantiatePolicy(w, w.prefabID, w.dontInheritID)
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}

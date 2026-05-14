@@ -50,7 +50,7 @@ w.Read(func(r *flecs.Reader) {
 
 Both instances share the value stored in `spaceship`'s archetype table. No copy is made until an instance calls `Set` (see [copy-on-write override](#copy-on-write-override)).
 
-> **Go vs C flecs — no Prefab tag.** C flecs has a built-in `EcsPrefab` tag that excludes prefab entities from ordinary queries automatically. Go flecs does not have this tag yet; `spaceship` above participates in queries just like any other entity. See [Not yet ported](#not-yet-ported).
+> **Go flecs v0.57.0: Prefab tag shipped.** Call `flecs.MarkPrefab(fw, spaceship)` to add the built-in `Prefab` tag. Ordinary queries then exclude the prefab entity automatically; use `With(w.Prefab())` in any term to opt back in. See [Prefab tag](#prefab-tag) below.
 
 ---
 
@@ -379,11 +379,41 @@ See [ComponentTraits.md § Final](ComponentTraits.md#final) for the full API ref
 
 ---
 
+## Prefab tag
+
+**Shipped in v0.57.0.** The built-in `Prefab` tag marks an entity as a template, excluding it from ordinary queries. This matches C `EcsPrefab` / `EcsTableIsPrefab` semantics.
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    spaceship = fw.NewEntity()
+    flecs.Set[Speed](fw, spaceship, Speed{100})
+    flecs.MarkPrefab(fw, spaceship)  // add Prefab tag; entity leaves ordinary iteration
+})
+
+// Ordinary queries skip the prefab:
+q := flecs.NewQuery(w, speedID) // does NOT match spaceship
+
+// Opt in to see prefabs:
+q2 := flecs.NewQueryFromTerms(w, flecs.With(speedID), flecs.With(w.Prefab()))
+
+// Instances inherit normally — instance is NOT tagged Prefab (DontInherit):
+w.Write(func(fw *flecs.Writer) {
+    instance = fw.NewEntity()
+    flecs.AddID(fw, instance, flecs.MakePair(w.IsA(), spaceship))
+})
+flecs.IsPrefab(r, instance) // → false (Prefab tag is not inherited via IsA)
+```
+
+**`MarkPrefab` is one-way**: use `flecs.RemoveID(fw, e, w.Prefab())` to un-mark. The naming asymmetry with `DisableEntity`/`EnableEntity` is intentional: disabling is a togglable state, marking-as-prefab is a one-time labelling.
+
+**DontInherit semantics**: the `Prefab` tag is bootstrapped with `DontInherit` (mirroring C `bootstrap.c:1308`). Entities that inherit from a prefab via `IsA` do _not_ acquire the `Prefab` tag, so instances remain visible to ordinary queries.
+
+---
+
 ## Not yet ported
 
 The following C flecs prefab features have no equivalent in the current Go port:
 
-- **Prefab tag** — C flecs has a built-in `EcsPrefab` tag that prevents prefab entities from matching ordinary queries by default. Go flecs has no such tag; prefab entities are indistinguishable from regular entities at query time. not yet ported in Go flecs.
 - **Prefab hierarchies** — in C flecs, instantiating a prefab that has `(ChildOf, prefab)` children copies the entire subtree to the instance. Go flecs does not replicate children on IsA instantiation. not yet ported in Go flecs.
 - **Prefab slots** — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1). not yet ported in Go flecs.
 

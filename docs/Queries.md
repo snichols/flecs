@@ -830,6 +830,33 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 ---
 
+## Disabled and Prefab entities
+
+**Shipped in v0.57.0.** Queries exclude `Disabled` and `Prefab` entities by default. Opt in by mentioning either tag in any term kind (`With`, `Without`, `Maybe`, `Or`).
+
+```go
+// Ordinary query — Disabled and Prefab entities are invisible:
+q := flecs.NewQuery(w, posID)
+
+// Opt in to disabled entities only (Prefab still excluded):
+q2 := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(w.Disabled()))
+
+// Opt in to prefab entities only (Disabled still excluded):
+q3 := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(w.Prefab()))
+
+// Without(Disabled) also opts in — but then explicitly rejects disabled tables:
+q4 := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Without(w.Disabled()))
+
+// Both Disabled + Prefab on same entity: must opt in to both:
+q5 := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(w.Disabled()), flecs.With(w.Prefab()))
+```
+
+The exclusion is O(1) per table: a single `HasComponent` test per table per flag, with no per-entity cost. This mirrors C `EcsTableIsDisabled` / `EcsTableIsPrefab` (eval.c:88).
+
+**Interaction**: `Disabled` and `Prefab` are independent. An entity carrying both must be opted in to both. The opt-in checks are commutative.
+
+---
+
 ## Disabled rows (CanToggle)
 
 When a component is marked with the `CanToggle` trait (`flecs.SetCanToggle(w, compID)`), individual entities can have that component temporarily disabled. `Each1`, `Each2`, `Each3`, and `Each4` **automatically skip rows where the component is disabled**; no extra filtering is needed in the callback.

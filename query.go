@@ -183,6 +183,15 @@ type Query struct {
 	terms    []Term // sorted: And first (by ID), Not second, Or-groups third, Optional last
 	andIDs   []ID   // pre-extracted And-term IDs; returned by Terms() for backward compat
 	orGroups [][]ID // each inner slice is one OR-group; tables must match all groups
+	// skipDisabled and skipPrefab implement the implicit-skip fast path: when no
+	// term mentions Disabled or Prefab (in any kind), tables that contain either
+	// tag are excluded via a single HasComponent test per table — O(1) per table.
+	// This mirrors the C per-table flag mask (EcsTableIsDisabled/EcsTableIsPrefab)
+	// at src/query/engine/eval.c:88. The flag approach is preferred over synthetic
+	// Not terms: no impact on OR-group handling and the original term list remains
+	// unmodified for Terms()/TermsFull() introspection.
+	skipDisabled bool
+	skipPrefab   bool
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -247,7 +256,8 @@ func NewQuery(w *World, ids ...ID) *Query {
 		}
 		applyInheritablePromotion(w, &terms[i])
 	}
-	return &Query{w: w, terms: terms, andIDs: cp}
+	skipDisabled, skipPrefab := computeQuerySkipFlags(w, terms)
+	return &Query{w: w, terms: terms, andIDs: cp, skipDisabled: skipDisabled, skipPrefab: skipPrefab}
 }
 
 // NewQueryFromTerms constructs a query over w for the given structured terms.
@@ -289,7 +299,8 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 		}
 	}
 	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups}
+	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -852,6 +863,14 @@ func (it *QueryIter) updateOptionalPresenceMixed(t *table.Table, e ID) {
 // Sparse terms (term.Sparse == true) are skipped: they do not live in archetype
 // tables and are checked per-entity by matchesSparseTerms instead.
 func (it *QueryIter) matchesTable(t *table.Table) bool {
+	// Implicit skip: exclude tables containing Disabled or Prefab unless the
+	// query explicitly mentioned either tag in any term kind.
+	if it.q.skipDisabled && t.HasComponent(it.world.disabledID) {
+		return false
+	}
+	if it.q.skipPrefab && t.HasComponent(it.world.prefabID) {
+		return false
+	}
 	// Reset traversal sources from any previous table.
 	for k := range it.upSources {
 		delete(it.upSources, k)
@@ -1246,6 +1265,31 @@ func FieldShared[T any](it *QueryIter, id ID) (T, bool) {
 	}
 	panic(fmt.Sprintf("flecs: FieldShared[%s]: id %d is not in this query's term list",
 		reflect.TypeFor[T](), id))
+}
+
+// computeQuerySkipFlags returns (skipDisabled, skipPrefab): true for each tag
+// that is NOT mentioned in any term. When true, tables containing that tag are
+// excluded in matchesTable / tryMatchTable without further per-entity checks.
+// A tag is "mentioned" when any term's raw ID index matches the tag's index,
+// regardless of TermKind (With/Without/Maybe/Or all opt in).
+func computeQuerySkipFlags(w *World, terms []Term) (skipDisabled, skipPrefab bool) {
+	disabledIdx := w.disabledID.Index()
+	prefabIdx := w.prefabID.Index()
+	skipDisabled = true
+	skipPrefab = true
+	for _, t := range terms {
+		idx := t.ID.Index()
+		if idx == disabledIdx {
+			skipDisabled = false
+		}
+		if idx == prefabIdx {
+			skipPrefab = false
+		}
+		if !skipDisabled && !skipPrefab {
+			break
+		}
+	}
+	return
 }
 
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,

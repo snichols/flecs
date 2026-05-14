@@ -97,7 +97,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`MakeAlive(id)`** — ✅ **shipped in v0.56.0**. Claims a specific entity ID (e.g. for networked ID synchronisation); panics on generation conflict or inside deferred scope.
 - **`SetVersion(versionedID)`** — ✅ **shipped in v0.56.0**. Overrides the generation counter on an entity (monotonic; panics on decrease or inside deferred scope).
 - **Entity ID ranges** (`range_new` / `range_set`) — constrain which IDs `NewEntity` issues; enables per-owner ID partitioning. not yet ported in Go flecs.
-- **Entity disabling** (`Enable` / `Disable`) — exclude entities from queries temporarily via a `Disabled` tag without deleting them. not yet ported in Go flecs.
+- **Entity disabling** (`DisableEntity` / `EnableEntity`) — ✅ **shipped in v0.57.0** via [`DisableEntity`](../query_filters.go) / `EnableEntity` / `IsDisabled` and `w.Disabled()`. Ordinary queries silently exclude entities carrying the `Disabled` tag; opt in by adding `With(w.Disabled())` (or any other term kind mentioning the tag). See [Queries.md § Disabled and Prefab entities](Queries.md#disabled-and-prefab-entities).
 - **`on_replace` hook** — ✅ **shipped in v0.55.0** as `OnReplace[T]` / `OnReplaceID`. Receives both the previous and new component value when a component is overwritten via `Set`. Fires only on overwrites (not on first Set). See [ObserversManual.md § OnReplace Hook](ObserversManual.md#onreplace-hook).
 - **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
 - **Cleanup policies / component-delete cascade** — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`. The `OnDelete` and `OnDeleteTarget` traits are now fully configurable with `RemoveAction`, `DeleteAction`, and `PanicAction`.
@@ -132,7 +132,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.5 (PrefabsManual port)
 
-- **Prefab tag** (`EcsPrefab`) — a built-in tag that excludes prefab entities from ordinary queries by default. In Go flecs, prefab entities participate in queries like any other entity. not yet ported in Go flecs.
+- **Prefab tag** (`EcsPrefab`) — ✅ **shipped in v0.57.0** via `MarkPrefab` / `IsPrefab` / `w.Prefab()`. Ordinary queries silently exclude entities carrying the `Prefab` tag; the tag is bootstrapped with `DontInherit` so IsA instances do not acquire it. See [PrefabsManual.md § Prefab tag](PrefabsManual.md#prefab-tag) and [Queries.md § Disabled and Prefab entities](Queries.md#disabled-and-prefab-entities).
 - **Prefab hierarchies** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab replicates the entire child subtree onto the instance. not yet ported in Go flecs.
 - **Prefab slots** (`SlotOf`) — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1) without a name lookup. not yet ported in Go flecs.
 
