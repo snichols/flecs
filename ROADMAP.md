@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.58.0)
+## Shipped (through v0.59.0)
 
 The following features are available in the current release:
 
@@ -60,6 +60,7 @@ The following features are available in the current release:
 - **Clear / MakeAlive / SetVersion** _(v0.56.0, Phase 16.1)_ — `Clear(fw, e)` removes all components from an entity, leaving it alive; deferred coalescer support; fires `OnRemove` per component. `MakeAlive(fw, id)` claims a specific entity ID for networked ID synchronisation; panics on generation conflict or in deferred scope. `SetVersion(fw, versionedID)` overrides the generation counter (monotonic; panics on decrease or in deferred scope). Mirrors C `ecs_clear`, `ecs_make_alive`, `ecs_set_version`.
 - **Disabled + Prefab built-in tags** _(v0.57.0, Phase 16.2)_ — `DisableEntity(fw, e)` / `EnableEntity(fw, e)` / `IsDisabled(scope, e)` and `MarkPrefab(fw, e)` / `IsPrefab(scope, e)` / `w.Disabled()` / `w.Prefab()`. Ordinary queries silently exclude tables containing either tag (O(1) per-table test); opt in by mentioning the tag in any term kind. `Prefab` bootstrapped with `DontInherit` so IsA instances do not inherit it. Mirrors C `EcsDisabled` / `EcsPrefab` / `EcsTableIsDisabled` / `EcsTableIsPrefab`. Built-in entity count: 39; user entities start at index 40.
 - **System lifecycle bundle** _(v0.58.0, Phase 16.3)_ — `(*System).SetEnabled(bool)` / `(*System).IsEnabled() bool` — pause/resume without removing. `RunSystem(s, dt)` — synchronous out-of-pipeline invocation; bypasses phase ordering and the enabled flag. `(*Reader).Phases() []ID`, `(*Reader).SystemsInPhase(phase) []*System`, `(*Reader).EachSystem(phase, fn)` — pipeline introspection in registration order (includes disabled systems). Option A design: bool field on `*System`; no entity allocation per system.
+- **Sorted cached queries** _(v0.59.0, Phase 16.4)_ — `NewCachedQueryFromTermsWithOptions` + `WithOrderBy(compID, cmp)`. `OrderBy[T]` typed wrapper; `OrderByFunc` raw form. Cached; lazily rebuilt on table `ChangeCount` changes or new matching tables. Single `sort.SliceStable` over all matched entities (vs upstream two-step quicksort + k-way merge — future optimization). Closes `docs/README.md` gap line 110.
 
 ## Documentation
 

@@ -107,7 +107,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 - **Fixed per-term source** — a query term can specify any entity as its source (e.g., match `SimTime` on a global `Game` entity rather than the iterated entity). Go flecs only supports the default `$this` source. not yet ported in Go flecs.
 - **Query variables** — `$Var` named variables in the Flecs Query Language constrain results across related entities (e.g., "spaceships docked to a planet"). not yet ported in Go flecs.
-- **Sorted queries** — `order_by_callback` sorts matched entities by a component value (two-step quicksort; cached; change-detection driven). not yet ported in Go flecs.
+- **Sorted queries** — ✅ **shipped in v0.59.0** via `NewCachedQueryFromTermsWithOptions` + `WithOrderBy`. `OrderBy[T]` for typed comparators; `OrderByFunc` for raw pointer form. Cached; lazily re-sorted on table `ChangeCount` changes or when new matching tables are added. Cached queries only (sorting a non-cached query would re-sort on every iteration). See [Queries.md § Sorted queries](Queries.md#sorted-queries).
 - **Query groups** — `group_by_callback` partitions the query cache into labelled groups with O(1) group-iterator access. not yet ported in Go flecs. (`Cascade` provides hierarchy-depth ordering as a special built-in case.)
 - **Equality operators** — `$this == Foo`, `$this != Foo`, `$this ~= "partial"` name-match filter terms in the Flecs Query Language. not yet ported in Go flecs.
 - **AndFrom / OrFrom / NotFrom operators** — expand the component list of a given entity into implicit AND / OR / NOT terms, useful with prefab type-lists. not yet ported in Go flecs.
