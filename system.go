@@ -586,3 +586,68 @@ func RunSystem(s *System, dt float32) {
 		s.fn(dt, it)
 	})
 }
+
+// RunSystemWorker invokes sys once synchronously for the entity slice owned by
+// worker workerIndex of workerCount, outside the normal pipeline. It is the
+// out-of-pipeline counterpart to within-system multi-threaded dispatch: callers
+// fan N goroutines across [0, workerCount), each receiving a disjoint row slice
+// of every matched table.
+//
+// Partition algorithm: per table, the row range is split as count/workerCount
+// with the first (count%workerCount) workers each receiving one extra row —
+// exactly the upstream ecs_worker_next / Go pipeline clippedCopy algorithm.
+// Partition is deterministic per archetype-table iteration order.
+//
+// Each call allocates a fresh per-call stage (command queue) owned exclusively
+// by the calling goroutine. Deferred mutations are flushed before the call
+// returns. Concurrent callers flush in undefined order; each flush is serialized
+// via the world write mutex so concurrent flushes do not race each other or a
+// simultaneous World.Write scope. Pre/post merge hooks do not fire per worker
+// flush — the caller owns merge-boundary coordination.
+//
+// Like RunSystem, this function bypasses the system's enabled flag.
+//
+// Panics if:
+//   - w is nil or sys is nil
+//   - sys is closed (IsClosed() == true)
+//   - workerCount ≤ 0
+//   - workerIndex < 0 or workerIndex ≥ workerCount
+func RunSystemWorker(w *World, sys *System, workerIndex, workerCount int, dt float32) {
+	if w == nil {
+		panic("flecs: RunSystemWorker: world must not be nil")
+	}
+	if sys == nil {
+		panic("flecs: RunSystemWorker: system must not be nil")
+	}
+	if sys.removed {
+		panic("flecs: RunSystemWorker: system is closed")
+	}
+	if workerCount <= 0 {
+		panic("flecs: RunSystemWorker: workerCount must be > 0")
+	}
+	if workerIndex < 0 || workerIndex >= workerCount {
+		panic(fmt.Sprintf("flecs: RunSystemWorker: workerIndex %d out of range [0, %d)", workerIndex, workerCount))
+	}
+
+	// Fresh per-call stage: the calling goroutine is the exclusive owner for
+	// the duration of this call. Concurrent callers each hold disjoint stages,
+	// so deferred mutations on the hot path need no synchronization.
+	ps := &stage{id: -1, queue: acquireCmdQueue(), world: w, deferDepth: 1}
+	pw := Writer{Reader: Reader{world: w}, stage: ps}
+
+	// Build a clipped iterator for this worker's disjoint entity slice.
+	it := sys.query.Iter()
+	workerIt := it.clippedCopy(workerIndex, workerCount)
+	workerIt.workerWriter = &pw
+
+	// Run the system callback with the worker's slice.
+	sys.fn(dt, workerIt)
+
+	// Flush the per-call stage. The world write mutex serializes concurrent
+	// worker flushes and guards against a simultaneous World.Write scope.
+	w.mu.Lock()
+	q := ps.queue
+	q.flush(w)
+	releaseCmdQueue(q)
+	w.mu.Unlock()
+}
