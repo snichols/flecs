@@ -302,8 +302,10 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 	}
 	// Override copy + subtree-copy hooks: after adding (IsA, prefab) to an entity,
 	// eagerly copy Override-marked components and replicate the prefab's child
-	// subtree onto the instance.
+	// subtree onto the instance. Invalidate the propagation inheritor cache so that
+	// the next propagateEvent call rebuilds the BFS-ordered inheritor list.
 	if id.IsPair() && id.First().Index() == w.isAID.Index() {
+		w.invalidateInheritorCache()
 		prefab := id.Second()
 		if w.index.IsAlive(prefab) {
 			overrideCopyForInstance(w, e, prefab, nil)
@@ -467,6 +469,11 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 		if list, ok := w.orderedChildren[ID(parent.Index())]; ok {
 			removeFromOrderedList(list, e)
 		}
+	}
+	// Propagation cache invalidation: removing (IsA, prefab) changes the inheritor
+	// tree — evict the entire inheritor cache so the next propagateEvent call rebuilds.
+	if id.IsPair() && id.First().Index() == w.isAID.Index() {
+		w.invalidateInheritorCache()
 	}
 	// Symmetric mirror: if (R, b) was removed from a, also remove (R, a) from b.
 	// The !HasComponent early-return above provides the idempotence loop-guard:

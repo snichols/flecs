@@ -665,6 +665,92 @@ w.Write(func(fw *flecs.Writer) {
 
 ---
 
+## Propagation along IsA {#propagation-along-isa}
+
+When a component is mutated on a prefab entity, Go flecs automatically fires the same observer event for every transitive inheritor — entities that inherit the prefab via `(IsA, prefab)`, directly or transitively. This mirrors the upstream C flecs `observable.c:1083` behaviour.
+
+### How it works
+
+After the local observer dispatch for the source entity, `propagateEvent` performs a **breadth-first search** (BFS) over the `(IsA, *)` relationship graph starting from the source:
+
+```
+P (prefab, Position set here)
+├── A  (IsA, P)     → also receives OnSet(Position)
+│   └── B  (IsA, A) → also receives OnSet(Position)
+└── C  (IsA, P)     → also receives OnSet(Position)
+```
+
+Two gates suppress propagation for individual inheritors:
+
+| Gate | Behaviour |
+|------|-----------|
+| **DontInherit** | If the component is marked `DontInherit`, propagation is skipped entirely — inheritors do not receive the event for that component. |
+| **Override** | If an inheritor owns its own copy of the component locally (i.e., the component appears in its own archetype table), propagation is skipped for that specific inheritor only. All other inheritors still receive the event. |
+
+### Supported event kinds
+
+Propagation is wired to all four built-in mutation paths:
+
+- **`OnAdd`** — when a component is added to the prefab
+- **`OnSet`** — when a component is set/updated on the prefab
+- **`OnRemove`** — when a component is removed from the prefab
+- **`OnReplace`** hook — called on the inheritor with the same old/new pointers as the prefab
+
+Custom events fired via `Emit` also propagate when a non-zero entity is passed:
+
+```go
+// Custom event fires for P and all transitive inheritors of P.
+w.Write(func(fw *flecs.Writer) {
+    flecs.Emit(fw, myEvent, P, payload)
+})
+```
+
+### Multi-term observers
+
+Multi-term observers (registered via `ObserveQuery` / `ObserveQueryID` / `ObserveQueryWithOptions`) re-evaluate their filter per inheritor at dispatch time. The trigger component term is treated as automatically satisfied (the inheritor "has" it via IsA even though it does not own a local copy), while all other filter terms are evaluated against the inheritor's own archetype:
+
+```go
+// Observer fires for inheritors that own Velocity locally.
+flecs.ObserveQuery(w, flecs.EventOnSet,
+    []flecs.Term{
+        flecs.With(posID),
+        flecs.With(velID),
+    },
+    func(_ *flecs.Writer, e flecs.ID, _ unsafe.Pointer) { /* … */ },
+)
+```
+
+### BFS cache
+
+The transitive inheritor list is computed once per prefab and cached. The cache is **invalidated entirely** whenever any `(IsA, *)` pair is added or removed from any entity — clearing all entries is necessary because adding `(IsA, B)` to `C` also stales the cache for any ancestor of `B`. Invalidation is O(1) (sets the cache map to nil).
+
+### Example
+
+```go
+w := flecs.New()
+
+type Hp struct{ Value int }
+hpID := flecs.RegisterComponent[Hp](w)
+
+var p, inst flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    p = fw.NewEntity()
+    inst = fw.NewEntity()
+    flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), p))
+})
+
+// Observer fires for p (direct) and inst (propagated).
+flecs.Observe[Hp](w, flecs.EventOnSet, func(_ *flecs.Writer, e flecs.ID, v Hp) {
+    fmt.Printf("hp set on %v: %v\n", e, v)
+})
+
+w.Write(func(fw *flecs.Writer) {
+    flecs.Set[Hp](fw, p, Hp{100}) // prints twice: for p and for inst
+})
+```
+
+---
+
 ## Deferred Execution
 
 Observers fire synchronously when the triggering operation is executed. When operations are inside a `Write` scope (which is always the case in Go flecs), the mutations are queued in the deferred command queue and the observers fire when the queue is flushed:
@@ -991,7 +1077,7 @@ C flecs can fire events when an archetype table transitions between empty and no
 
 ### Observer Propagation / Forwarding
 
-C flecs propagates events along relationship edges (e.g., an `OnSet(Position)` on a parent notifies children that inherit `Position` via `ChildOf`). Go flecs does not propagate events.
+✅ **Shipped in v0.72.0.** See [Propagation along IsA](#propagation-along-isa) above. `OnAdd`, `OnSet`, `OnRemove`, `OnReplace` hook, and custom `Emit` events all propagate downward along IsA edges with DontInherit and override gates. BFS cache with O(1) invalidation on structural change.
 
 ### Monitor Observers
 

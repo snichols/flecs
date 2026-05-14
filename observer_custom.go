@@ -56,6 +56,14 @@ func Emit(fw *Writer, eventID ID, entity ID, payload interface{}) {
 		ptr = unsafe.Pointer(&payloadCopy)
 	}
 	fw.world.dispatchObservers(eventID, eventID, entity, ptr)
+	// Propagate to transitive inheritors of entity (IsA-downward). For custom
+	// events the eventID plays the role of both componentID and eventEntity;
+	// the DontInherit gate checks w.instantiatePolicies[eventID] which is
+	// typically unset, so propagation proceeds unless the event entity was
+	// explicitly marked DontInherit.
+	if entity != 0 {
+		fw.world.propagateEvent(eventID, eventID, entity, ptr)
+	}
 }
 
 // EmitTyped is the type-safe variant of Emit. The payload is wrapped in an

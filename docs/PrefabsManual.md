@@ -2,7 +2,7 @@
 
 The built-in `IsA` relationship provides prototype inheritance. A **prefab** is any entity whose components other entities inherit. Instances are entities that carry an `(IsA, prefab)` pair; `Get` and `Has` walk the IsA chain on a local miss so the instance appears to own the prefab's components without storing a copy. `Set` on an instance creates a local copy (copy-on-write override) that shadows the prefab's value for that instance alone.
 
-See the [Quickstart](Quickstart.md#prefabs-isa) for a hands-on introduction, [Relationships](Relationships.md#the-isa-relationship) for IsA pair encoding and traversal details, and the [Phase 13.1 CHANGELOG entry](../CHANGELOG.md) for the `SetInheritable` specification.
+See the [Quickstart](Quickstart.md#prefabs-isa) for a hands-on introduction, [Relationships](Relationships.md#the-isa-relationship) for IsA pair encoding and traversal details, and the [Phase 13.1 CHANGELOG entry](../CHANGELOG.md) for the `SetInheritable` specification. For observer events that propagate to inheritors when a prefab component changes, see [ObserversManual.md § Propagation along IsA](ObserversManual.md#propagation-along-isa).
 
 ## Table of contents
 
