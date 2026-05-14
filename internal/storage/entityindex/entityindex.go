@@ -10,6 +10,8 @@
 package entityindex
 
 import (
+	"fmt"
+
 	"github.com/snichols/flecs/internal/ids"
 	"github.com/snichols/flecs/internal/storage/table"
 )
@@ -58,6 +60,9 @@ type Index struct {
 	pages      []*page  // sparse: pages[id>>6] is *[64]Record
 	aliveCount int      // length of alive section including sentinel at [0]
 	maxID      uint32   // highest raw entity index ever issued
+	rangeMin   uint32   // lower bound of active ID range (inclusive), 0 when no range
+	rangeMax   uint32   // upper bound of active ID range (exclusive), 0 when no range
+	rangeSet   bool     // true when an active range constraint is in effect
 }
 
 // New returns an initialized, empty entity index.
@@ -104,7 +109,58 @@ func (idx *Index) tryGetRecord(rawIdx uint32) *Record {
 // is permanently reserved as the null/invalid entity sentinel, matching ECS
 // convention). The returned ID encodes the raw index in the lower 32 bits and
 // the generation counter in the upper 32 bits.
+//
+// When a range constraint is active (SetRange was called), Alloc scans the
+// recycle queue for the first in-range ID (O(k) where k is the number of
+// out-of-range entries before the first in-range entry). If none, it allocates
+// fresh from [rangeMin, rangeMax), jumping maxID to rangeMin if needed. Panics
+// when the range is exhausted. Mirrors upstream src/storage/entity_index.c:428-459
+// with the Go simplification of a single skipping recycle queue.
 func (idx *Index) Alloc() ids.ID {
+	if idx.rangeSet {
+		// Range-constrained allocation: find the first recycled ID in [rangeMin, rangeMax).
+		// Out-of-range entries are skipped (left in the queue) per the simplification spec.
+		for i, rID := range idx.recycle {
+			if rawIdx := rID.Index(); rawIdx >= idx.rangeMin && rawIdx < idx.rangeMax {
+				idx.recycle = append(idx.recycle[:i], idx.recycle[i+1:]...)
+				p := idx.ensurePage(rawIdx)
+				rec := &p[rawIdx&entityPageMask]
+				rec.Dense = uint32(idx.aliveCount)
+				if idx.aliveCount < len(idx.dense) {
+					idx.dense[idx.aliveCount] = rID
+				} else {
+					idx.dense = append(idx.dense, rID)
+				}
+				idx.aliveCount++
+				return rID
+			}
+		}
+		// No in-range recycled ID — allocate fresh.
+		if idx.maxID+1 < idx.rangeMin {
+			// Jump maxID to just before the range start.
+			idx.maxID = idx.rangeMin - 1
+		}
+		if idx.maxID+1 >= idx.rangeMax {
+			panic(fmt.Sprintf("entityindex: range [%d, %d) exhausted; last issued = %d",
+				idx.rangeMin, idx.rangeMax, idx.maxID))
+		}
+		idx.maxID++
+		id := ids.MakeEntity(idx.maxID, 0)
+		p := idx.ensurePage(idx.maxID)
+		rec := &p[idx.maxID&entityPageMask]
+		rec.Dense = uint32(idx.aliveCount)
+		// There may be stale slots in dense (from out-of-range freed entities that were
+		// skipped above). Reuse the stale slot at dense[aliveCount] when available;
+		// otherwise grow the slice. Mirrors MakeAlive's pattern.
+		if idx.aliveCount < len(idx.dense) {
+			idx.dense[idx.aliveCount] = id
+		} else {
+			idx.dense = append(idx.dense, id)
+		}
+		idx.aliveCount++
+		return id
+	}
+
 	if len(idx.recycle) > 0 {
 		// Recycle: pop oldest freed ID (FIFO).
 		rID := idx.recycle[0]
@@ -114,9 +170,14 @@ func (idx *Index) Alloc() ids.ID {
 		p := idx.ensurePage(rawIdx)
 		rec := &p[rawIdx&entityPageMask]
 		rec.Dense = uint32(idx.aliveCount)
-		// Freeing an entity leaves its slot in dense as stale data without
-		// shrinking the slice, so there is always a reusable slot here.
-		idx.dense[idx.aliveCount] = rID
+		// Normally there is a stale slot at dense[aliveCount] left by a prior Free.
+		// However, a range-constrained fresh alloc may have consumed that stale slot
+		// without growing the slice, so we must guard with a bounds check here.
+		if idx.aliveCount < len(idx.dense) {
+			idx.dense[idx.aliveCount] = rID
+		} else {
+			idx.dense = append(idx.dense, rID)
+		}
 		idx.aliveCount++
 		return rID
 	}
@@ -322,4 +383,77 @@ func (idx *Index) SetVersion(rawIndex uint32, newGen uint32) {
 	pageIdx := int(rawIndex >> 6)
 	rec := &idx.pages[pageIdx][rawIndex&entityPageMask]
 	idx.dense[rec.Dense] = ids.MakeEntity(rawIndex, newGen)
+}
+
+// SetRange constrains Alloc to issue IDs within [min, max). The constraint
+// takes effect immediately on the next Alloc call. Callers are responsible for
+// validating min/max before calling. Mirrors upstream ecs_entity_range_set
+// (src/world.c:1462-1497) with the Go simplification of no per-range recycle pools.
+func (idx *Index) SetRange(min, max uint32) {
+	idx.rangeMin = min
+	idx.rangeMax = max
+	idx.rangeSet = true
+}
+
+// ClearRange removes any active range constraint. Subsequent Alloc calls revert
+// to monotonic-from-current (maxID is preserved; no rewind). Recycled IDs that
+// were skipped due to an active range become eligible again.
+func (idx *Index) ClearRange() {
+	idx.rangeMin = 0
+	idx.rangeMax = 0
+	idx.rangeSet = false
+}
+
+// GetRange returns the active range constraint. set is false when no range is active.
+func (idx *Index) GetRange() (min, max uint32, set bool) {
+	return idx.rangeMin, idx.rangeMax, idx.rangeSet
+}
+
+// AllocInRange issues a single entity ID within [min, max) without modifying
+// the Index's range constraint fields. It walks the recycle queue for the first
+// in-range entry; if none, allocates fresh from max(maxID+1, min). If min >
+// maxID+1, maxID is advanced to min-1 before the fresh allocation (the gap
+// IDs are permanently skipped — this is intentional for the one-shot use case).
+// Panics if the range is exhausted (maxID+1 >= max after any jump).
+// Mirrors the intent of upstream ecs_entity_range_new (src/world.c:1462-1497)
+// reduced to a single one-shot allocation without persistent range object.
+func (idx *Index) AllocInRange(min, max uint32) ids.ID {
+	// Prefer recycled ID in [min, max).
+	for i, rID := range idx.recycle {
+		if rawIdx := rID.Index(); rawIdx >= min && rawIdx < max {
+			idx.recycle = append(idx.recycle[:i], idx.recycle[i+1:]...)
+			p := idx.ensurePage(rawIdx)
+			rec := &p[rawIdx&entityPageMask]
+			rec.Dense = uint32(idx.aliveCount)
+			if idx.aliveCount < len(idx.dense) {
+				idx.dense[idx.aliveCount] = rID
+			} else {
+				idx.dense = append(idx.dense, rID)
+			}
+			idx.aliveCount++
+			return rID
+		}
+	}
+	// Fresh allocation.
+	if idx.maxID+1 < min {
+		// Jump maxID to just before the range start; gap IDs are skipped intentionally.
+		idx.maxID = min - 1
+	}
+	if idx.maxID+1 >= max {
+		panic(fmt.Sprintf("entityindex: AllocInRange [%d, %d) exhausted; last issued = %d",
+			min, max, idx.maxID))
+	}
+	idx.maxID++
+	id := ids.MakeEntity(idx.maxID, 0)
+	p := idx.ensurePage(idx.maxID)
+	rec := &p[idx.maxID&entityPageMask]
+	rec.Dense = uint32(idx.aliveCount)
+	// Reuse a stale slot when present (same pattern as MakeAlive).
+	if idx.aliveCount < len(idx.dense) {
+		idx.dense[idx.aliveCount] = id
+	} else {
+		idx.dense = append(idx.dense, id)
+	}
+	idx.aliveCount++
+	return id
 }

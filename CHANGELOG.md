@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.71.0 — 2026-05-14 — Phase 16.16: Entity ID ranges
+
+Ports the entity ID range API from upstream C flecs. A `Writer` can now be
+constrained to issue entity IDs in a specific `[min, max)` range, enabling
+per-owner ID partitioning for networked games and tooling. Closes the entity
+ID ranges gap entry in `docs/README.md` line 99.
+
+### Added
+
+- **`RangeSet(fw, min, max)`** — constrain `fw`'s allocator to issue IDs in `[min, max)`. Subsequent `NewEntity` calls return IDs within the range. Panics if `min < 1`, `max <= min`, or in a deferred scope.
+- **`RangeClear(fw)`** — remove the active constraint. `NewEntity` resumes from the current `maxID`; no rewind. Recycled IDs skipped during the previous range become eligible again.
+- **`RangeGet(scope)`** — inspect the active range; returns `(min, max ID, set bool)`. Works from both `*Reader` and `*Writer`.
+- **`RangeNew(fw, min, max)`** — one-shot allocation in `[min, max)` without modifying the world's active range constraint. Jumps `maxID` to `min` if the current counter is below the range; panics if the range is exhausted.
+- **`(*Writer).RangeSet` / `(*Writer).RangeClear` / `(*Writer).RangeNew`** — thin shims delegating to the package-level functions; follow the Phase 16.1 `MakeAlive`/`SetVersion` pattern.
+- **`entityindex.SetRange` / `ClearRange` / `GetRange` / `AllocInRange`** — allocator-level plumbing in `internal/storage/entityindex`.
+- **`entity_range_min` / `entity_range_max` / `entity_range_set`** fields in the JSON world snapshot — range state survives marshal/unmarshal round-trips.
+
+### Changed
+
+- **`entityindex.Alloc`** extended: when `rangeSet` is true, scans the recycle queue for the first in-range entry (O(k) where k = out-of-range entries before the first in-range entry); falls through to fresh allocation in `[rangeMin, rangeMax)` if none found; panics with a clear message when the range is exhausted.
+- **`jsonWorld`** extended with `entity_range_min`, `entity_range_max`, `entity_range_set` fields. `UnmarshalJSON` restores the range constraint after entity allocation so restoration is unconstrained.
+
+### Implementation notes
+
+1. **Simplifications vs upstream**: no persistent range objects (`ecs_entity_range_new` step removed), no multi-range registry, no per-range recycle pools. A single `(rangeMin, rangeMax, rangeSet bool)` triple on `*entityindex.Index`. See `docs/EntitiesComponents.md § Entity Ranges`.
+2. **Out-of-range recycled IDs**: skipped (not removed) when scanning the recycle queue. Preserved for reuse after `RangeClear` or range change. Worst-case O(k) alloc where k = out-of-range queue head entries; amortised O(1) for the typical single-static-range-set-at-boot use case.
+3. **`MakeAlive` bypass**: matches upstream — `MakeAlive` does not consult the active range. If it advances `maxID` past `rangeMax`, the next `NewEntity` panics range-exhausted. Documented in `entity_range.go` and `docs/EntitiesComponents.md`.
+4. **Dense-slice invariant**: range-constrained fresh allocation may consume a stale slot (from a prior Free) when `aliveCount < len(dense)`. The no-range recycled path is guarded with the same bounds check to prevent index-out-of-bounds when a stale slot was consumed by an earlier range-constrained alloc.
+5. **Marshal**: range state serialised as three JSON fields; applied after entity restoration so the allocation phase during `UnmarshalJSON` is unconstrained.
+6. **Built-in entity count**: unchanged at 48; user entities still start at index 48.
+
 ## v0.70.0 — 2026-05-14 — Phase 16.15: Multi-term observers
 
 Ports multi-term observer support from upstream C flecs. An `ObserveQuery` observer
