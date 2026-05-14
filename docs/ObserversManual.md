@@ -553,6 +553,8 @@ The yield sweep fires synchronously before `OnTableCreateWithOptions` returns. I
 
 If the handler creates entities (via `fw`) whose component signatures form a new archetype, those commands are deferred and flushed after the outer `Write` scope closes. The resulting new table fires `OnTableCreate` as part of that next flush. This is the same deferred-coalescer path used by `OnAdd`/`OnSet` handlers.
 
+For world-level hooks that fire at every merge boundary regardless of component, see [Systems.md § Merge hooks](Systems.md#merge-hooks).
+
 ### Table type
 
 The `*flecs.Table` pointer passed to the handler is the same type exposed by `w.TablesFor(componentID)` — it is the `table.Table` type aliased at `world.go:23`. Fields are accessible via the public methods `t.Type() []flecs.ID` and `t.Count() int`.
@@ -769,6 +771,8 @@ w.Write(func(fw *flecs.Writer) {
 ```
 
 This is consistent with how hooks work: both hooks and observers are invoked during the flush of the deferred command queue at the close of the `Write` scope.
+
+For world-level callbacks that fire at every merge boundary (not tied to a specific component or event), see [Systems.md § Merge hooks](Systems.md#merge-hooks). Merge hooks (`OnPreMerge` / `OnPostMerge`) are the world-level analog to per-id observers: observers react to specific component add/set/remove events; merge hooks react to the merge boundary itself.
 
 ---
 

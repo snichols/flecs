@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.77.0)
+## Shipped (through v0.78.0)
 
 The following features are available in the current release:
 
@@ -79,6 +79,7 @@ The following features are available in the current release:
 - **Query scopes** _(v0.75.0, Phase 16.20)_ — `WithoutScope(buildFn func(*ScopeBuilder)) Term` / `*ScopeBuilder`. Negates an arbitrary sub-expression of terms as a single unit (`Position AND NOT (Velocity OR Speed)`). Closure-based API prevents unbalanced-scope bugs. Table-level fast path for simple all-TermAnd scopes; per-entity slow path for OR-groups, nested scopes, DontFragment, Union, Sparse, and fixed-source terms. Empty scope panics at construction. Arbitrary nesting depth. Cached queries participate in change tracking for scope-internal component IDs. Closes `docs/README.md` query-scopes gap entry.
 - **Query equality operators** _(v0.76.0, Phase 16.21)_ — `IsEntity(e ID) Term` / `NotEntity(e ID) Term` / `NameMatches(pattern string) Term`. Per-entity identity equality and case-insensitive substring name-match predicates. Mirrors upstream `EcsPredEq` / `EcsPredMatch` (`include/flecs.h:1979-1986`, `eval_pred.c:8-303`). All three terms compose inside `WithoutScope`. `CachedQuery` with `NameMatches` subscribes to `OnSet[Name]` for change detection. `EcsPredLookup` deliberately omitted. Closes `docs/README.md` equality-operators gap entry.
 - **AndFrom / OrFrom / NotFrom operators** _(v0.77.0, Phase 16.22)_ — `AndFrom(source ID) Term` / `OrFrom(source ID) Term` / `NotFrom(source ID) Term`. Type-list expansion operators: at construction the source entity's component list is snapshotted and expanded into N TermAnd / one OR-group / N TermNot requirements respectively. DontInherit components (`Prefab`, `Disabled`) are filtered from expansion. Snapshot-at-construction deliberately diverges from upstream C's live re-read. Closes `docs/README.md` AndFrom/OrFrom/NotFrom gap entry.
+- **World-level pre/post merge hooks** _(v0.78.0, Phase 16.23)_ — `OnPreMerge(w, fn) int` / `OnPostMerge(w, fn) int` / `RemovePreMergeHook(w, id)` / `RemovePostMergeHook(w, id)`. Persistent callbacks at every deferred-command merge boundary. Pre-hook mutations batch with the current merge; post-hook mutations queue for next. Hooks fire once per merge boundary (not once per worker stage for multi-threaded systems). `ErrMergeReentry` guard prevents re-entrant `w.Write` from inside hooks. Deliberate divergence from upstream C which has no persistent merge-hook API. Closes `docs/README.md` world-level merge hooks gap entry.
 
 ## Documentation
 

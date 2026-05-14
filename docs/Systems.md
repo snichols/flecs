@@ -85,6 +85,37 @@ PreUpdate → OnFixedUpdate (accumulator) → OnUpdate → PostUpdate
 
 Deferred commands from each phase are flushed before the next phase starts, so a `PostUpdate` system sees every mutation queued during `OnUpdate`.
 
+### Merge hooks {#merge-hooks}
+
+**Shipped in v0.78.0.** Persistent world-level callbacks that fire at each deferred-command merge boundary.
+
+```go
+// Register — both return an int ID for later removal.
+preID  := flecs.OnPreMerge(w, func(fw *flecs.Writer) { /* fires before flush */ })
+postID := flecs.OnPostMerge(w, func(fw *flecs.Writer) { /* fires after flush */ })
+
+// Remove — idempotent; stale IDs are silent no-ops.
+flecs.RemovePreMergeHook(w, preID)
+flecs.RemovePostMergeHook(w, postID)
+```
+
+**Fire ordering within a merge boundary:**
+1. All pre-merge hooks fire in registration order.
+2. The deferred command queue is flushed (structural mutations applied).
+3. All post-merge hooks fire in registration order.
+
+**Mutation semantics:**
+- *Pre-merge hook mutations* are batched with the current merge: they are queued into the same command queue that is about to be flushed, so they are visible immediately after the enclosing `Write` scope returns.
+- *Post-merge hook mutations* queue for the next merge: they land in the fresh command queue installed after the flush, and are applied when the next `Write` scope exits.
+
+**Multi-stage (multi-threaded systems) policy:** When a multi-threaded system (`SetMultiThreaded(true)`) is active, the worker-stage flush involves N worker queues + stage-0. Hooks fire **once** for this entire merge cycle — pre fires before the first worker-stage flush, post fires after the stage-0 flush. Hooks do not fire once per worker stage.
+
+**Hook registration lifetime:** Hooks persist until removed via `RemovePreMergeHook` / `RemovePostMergeHook`. Registration must happen outside a `Write` scope. A hook registered from inside another hook fires starting on the next merge, not the current one.
+
+**Re-entry guard:** Calling `w.Write` from inside a hook panics with `flecs.ErrMergeReentry`. Use the `*Writer` passed to the hook directly for mutations.
+
+**Upstream C analogy:** Upstream C flecs has no persistent merge-hook API. The closest is `ecs_run_post_frame` (`include/flecs.h:2204-2216`), which is one-shot and per-frame rather than persistent and per-merge. Go flecs merge hooks are a deliberate divergence.
+
 ---
 
 ## Custom Pipeline Phases

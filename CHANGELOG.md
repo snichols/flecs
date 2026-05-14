@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.78.0 — 2026-05-14 — Phase 16.23: World-level pre/post merge hooks
+
+Ports persistent world-level merge-boundary callbacks as a deliberate divergence from upstream C flecs, which has no equivalent persistent hook API. Closes the `docs/README.md` gap entry for world-level pre/post merge hooks.
+
+### Added
+
+- **`OnPreMerge(w *World, fn func(*Writer)) int`** — registers a persistent pre-merge hook; returns an int ID (slice index). Fires immediately before the deferred command queue is flushed. Mutations queued inside the hook are appended to the queue being flushed and participate in the same coalescing pass (visible after the enclosing `Write` scope returns).
+- **`OnPostMerge(w *World, fn func(*Writer)) int`** — registers a persistent post-merge hook; returns an int ID. Fires immediately after the flush completes. Mutations queued inside the hook land in the fresh command queue and are applied on the next merge.
+- **`RemovePreMergeHook(w *World, id int)`** — tombstones the slot (nil entry) so subsequent IDs remain stable. Idempotent; stale or out-of-range IDs are silent no-ops.
+- **`RemovePostMergeHook(w *World, id int)`** — same tombstone semantics as `RemovePreMergeHook`.
+- **`ErrMergeReentry`** (`scope.go`) — panic value raised when `w.Write` is called re-entrantly from inside a pre- or post-merge hook. Mirrors the `ErrExclusiveAccessViolation` pattern.
+- **`stage.inMerge bool`** (`stage.go`) — internal flag set during hook execution; guards against re-entrant `Write` calls.
+
+### Behaviour
+
+- **Fire ordering:** pre hooks → flush → post hooks. All registered hooks of each kind fire in FIFO registration order; nil tombstones are skipped.
+- **Snapshot at fire time:** the hook slice is iterated via a range-captured snapshot, so hooks registered mid-merge (from inside another hook) only take effect on the next merge.
+- **Multi-stage policy:** for multi-threaded systems (`SetMultiThreaded(true)`), hooks fire **once** per Progress-driven merge cycle — pre before the first worker-stage flush, post after stage-0's flush — not once per worker stage.
+- **Re-entry guard:** `w.Write` from inside a hook panics with `ErrMergeReentry` regardless of which merge site triggered the hook.
+- **Registration restriction:** `OnPreMerge` and `OnPostMerge` must be called outside a `Write` scope (enforced via `checkExclusiveAccessWrite`).
+- **Empty merge:** pre and post hooks fire even when the deferred command queue is empty; the merge boundary exists regardless of queue depth.
+
+### Upstream C references
+
+- `src/stage.c:21-67` — `flecs_stage_merge`: the C analog of Go's `flush(w)`; it increments `info.merge_count_total` / `info.merge_time_total` (lines 56-59) for observability without a user callback. Go merge hooks complete that gap.
+- `include/flecs.h:2204-2216` — `ecs_run_post_frame`: registers a **one-shot** post-frame action; drained by `flecs_stage_merge_post_frame` (`src/stage.c:69-81`). This is the closest upstream analog — per-frame and one-shot rather than persistent and per-merge. Phase 16.23 generalizes it to persistent per-merge hooks.
+- `include/flecs.h:4398-4401` — `ecs_set_hooks_id`: per-component lifecycle hooks (construct/copy/move/destruct/add/remove/set); **not** merge-boundary hooks.
+
+---
+
 ## v0.77.0 — 2026-05-14 — Phase 16.22: AndFrom / OrFrom / NotFrom query operators
 
 Ports the three type-list expansion operators from upstream C flecs (`include/flecs.h:723-725`, `src/query/compiler/compiler_term.c:1225-1251`, `src/query/engine/eval.c:427-616`) as new query term kinds. Closes `docs/README.md` gap entry for `AndFrom / OrFrom / NotFrom`.

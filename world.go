@@ -148,7 +148,9 @@ type World struct {
 	// inheritorCache caches BFS-ordered inheritor slices keyed by prefab entity.
 	// Evicted in full whenever any (IsA, *) pair is added or removed — correct for
 	// transitive chains (e.g. C IsA B IsA P: adding C invalidates P's entry too).
-	inheritorCache map[ID][]ID
+	inheritorCache  map[ID][]ID
+	preMergeHooks  []func(*Writer) // nil slots are tombstones; slice index = registration ID
+	postMergeHooks []func(*Writer) // nil slots are tombstones; slice index = registration ID
 }
 
 // New initializes and returns an empty World.
@@ -1689,6 +1691,9 @@ func (w *World) Read(fn func(*Reader)) {
 // exclusive access is held panics with ErrExclusiveAccessViolation.
 func (w *World) Write(fn func(*Writer)) {
 	s0 := w.stages[0]
+	if s0.inMerge {
+		panic(ErrMergeReentry)
+	}
 	id := currentGoid()
 	owner := w.exclusiveAccess.Load()
 	if owner == id {
@@ -1697,10 +1702,14 @@ func (w *World) Write(fn func(*Writer)) {
 		defer func() {
 			s0.deferDepth--
 			if s0.deferDepth == 0 {
+				s0.inMerge = true
+				w.firePreMergeHooks()
 				q := s0.queue
 				s0.queue = acquireCmdQueue()
 				q.flush(w)
 				releaseCmdQueue(q)
+				w.firePostMergeHooks()
+				s0.inMerge = false
 			}
 		}()
 		fn(&w.writeCapability)
@@ -1716,10 +1725,14 @@ func (w *World) Write(fn func(*Writer)) {
 	defer func() {
 		s0.deferDepth--
 		if s0.deferDepth == 0 {
+			s0.inMerge = true
+			w.firePreMergeHooks()
 			q := s0.queue
 			s0.queue = acquireCmdQueue()
 			q.flush(w)
 			releaseCmdQueue(q)
+			w.firePostMergeHooks()
+			s0.inMerge = false
 		}
 		w.ExclusiveAccessEnd(false)
 		w.mu.Unlock()
@@ -1741,10 +1754,14 @@ func (w *World) deferScope(fn func()) {
 		}
 		s0.deferDepth--
 		if s0.deferDepth == 0 {
+			s0.inMerge = true
+			w.firePreMergeHooks()
 			q := s0.queue
 			s0.queue = acquireCmdQueue()
 			q.flush(w)
 			releaseCmdQueue(q)
+			w.firePostMergeHooks()
+			s0.inMerge = false
 		}
 	}()
 	fn()
