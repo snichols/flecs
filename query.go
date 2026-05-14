@@ -427,17 +427,17 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	return &QueryIter{
-		q:                   q,
-		world:               q.w,
-		terms:               q.terms,
-		orGroups:            q.orGroups,
-		candidates:          candidates,
-		pos:                 -1,
-		hasSparseTerms:      hasSparseTerms,
-		sparseTablePos:      -1,
-		sparseDriverPos:     -1,
-		wildcardTermIdx:     wildcardIdx,
-		wildcardPairPos:     -1,
+		q:               q,
+		world:           q.w,
+		terms:           q.terms,
+		orGroups:        q.orGroups,
+		candidates:      candidates,
+		pos:             -1,
+		hasSparseTerms:  hasSparseTerms,
+		sparseTablePos:  -1,
+		sparseDriverPos: -1,
+		wildcardTermIdx: wildcardIdx,
+		wildcardPairPos: -1,
 	}
 }
 
@@ -494,13 +494,13 @@ type QueryIter struct {
 	// sparse iteration state — set by Iter() when one or more And terms are sparse.
 	// allSparse: ALL And terms are sparse; no archetype seed, iterate sparse-sets directly.
 	// hasSparseTerms: at least one And term is sparse; entity-at-a-time within tables.
-	allSparse          bool
-	hasSparseTerms     bool
-	sparseDriver       []sparseEntry // dense-slice snapshot of the smallest sparse-set (allSparse mode)
-	sparseDriverPos    int           // current position in sparseDriver; -1 = before first
-	sparseTableEntities []ID         // entities in current table that pass sparse membership (mixed mode)
-	sparseTablePos      int          // current position in sparseTableEntities; -1 = needs next table
-	sparseEntity        ID           // current entity in sparse/mixed mode; 0 = not positioned
+	allSparse           bool
+	hasSparseTerms      bool
+	sparseDriver        []sparseEntry // dense-slice snapshot of the smallest sparse-set (allSparse mode)
+	sparseDriverPos     int           // current position in sparseDriver; -1 = before first
+	sparseTableEntities []ID          // entities in current table that pass sparse membership (mixed mode)
+	sparseTablePos      int           // current position in sparseTableEntities; -1 = needs next table
+	sparseEntity        ID            // current entity in sparse/mixed mode; 0 = not positioned
 }
 
 // Next advances to the next matching table (or next wildcard expansion row

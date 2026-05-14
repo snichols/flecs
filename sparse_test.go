@@ -863,7 +863,7 @@ func TestSparse_QueryMixed(t *testing.T) {
 func TestSparse_QueryAllArchetypeRegression(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[sparsePos](w) // NOT marked sparse
-	velID := flecs.RegisterComponent[sparseVel](w)  // NOT marked sparse
+	velID := flecs.RegisterComponent[sparseVel](w) // NOT marked sparse
 
 	var e1, e2, e3 flecs.ID
 	w.Write(func(fw *flecs.Writer) {
@@ -1195,7 +1195,7 @@ func TestSparse_QueryEmptySparseset(t *testing.T) {
 func TestSparse_QuerySmallestDriverHeuristic(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[sparsePos](w) // will have 5 entries
-	velID := flecs.RegisterComponent[sparseVel](w)  // will have 5000 entries
+	velID := flecs.RegisterComponent[sparseVel](w) // will have 5000 entries
 	flecs.SetSparse(w, posID)
 	flecs.SetSparse(w, velID)
 
@@ -1419,9 +1419,9 @@ func TestSparse_QueryMixedOptionalTerms(t *testing.T) {
 	posID := flecs.RegisterComponent[sparsePos](w)
 	velID := flecs.RegisterComponent[sparseVel](w)
 	flecs.SetSparse(w, posID)
-	flecs.SetSparse(w, velID) // velID is a sparse Optional
-	archID := flecs.RegisterComponent[sparseArch](w)  // required archetype And
-	tagID := flecs.RegisterComponent[sparseTag](w)    // archetype Optional (not sparse)
+	flecs.SetSparse(w, velID)                        // velID is a sparse Optional
+	archID := flecs.RegisterComponent[sparseArch](w) // required archetype And
+	tagID := flecs.RegisterComponent[sparseTag](w)   // archetype Optional (not sparse)
 
 	var e1, e2 flecs.ID
 	w.Write(func(fw *flecs.Writer) {
