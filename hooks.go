@@ -87,6 +87,63 @@ func OnRemove[T any](w *World, fn func(fw *Writer, e ID, v T)) {
 	}
 }
 
+// OnReplace registers fn as the OnReplace hook for component T in w.
+// fn is called when a Set call overwrites an existing component value;
+// it does NOT fire on the first Set (which calls OnAdd then OnSet).
+// fn receives both the previous and the incoming value, by value, before
+// the slot is overwritten.
+//
+// Mirrors C flecs ti->hooks.on_replace. Dispatch order on overwrite:
+// OnReplace -> column write -> OnSet. OnSet still fires after OnReplace.
+//
+// Calling OnReplace[T] twice replaces the prior hook. Passing fn=nil clears.
+func OnReplace[T any](w *World, fn func(fw *Writer, e ID, old, new T)) {
+	w.checkExclusiveAccessWrite()
+	info := component.Register[T](w.registry)
+	if fn == nil {
+		info.Hooks.OnReplace = nil
+		return
+	}
+	info.Hooks.OnReplace = func(world any, e ID, oldPtr, newPtr unsafe.Pointer) {
+		var oldV, newV T
+		if oldPtr != nil {
+			oldV = *(*T)(oldPtr)
+		}
+		if newPtr != nil {
+			newV = *(*T)(newPtr)
+		}
+		fn(world.(*Writer), e, oldV, newV)
+	}
+}
+
+// OnReplaceID is the untyped variant of OnReplace for dynamic or runtime-registered
+// components. The handler receives raw pointers; both are valid only for the duration
+// of the call. Mirrors the shape of ObserveID's untyped-pointer payload.
+func OnReplaceID(w *World, componentID ID, fn func(fw *Writer, e ID, oldPtr, newPtr unsafe.Pointer)) {
+	w.checkExclusiveAccessWrite()
+	info, ok := w.registry.LookupByID(componentID)
+	if !ok {
+		panic("flecs: OnReplaceID called with unregistered component ID")
+	}
+	if fn == nil {
+		info.Hooks.OnReplace = nil
+		return
+	}
+	info.Hooks.OnReplace = func(world any, e ID, oldPtr, newPtr unsafe.Pointer) {
+		fn(world.(*Writer), e, oldPtr, newPtr)
+	}
+}
+
+// fireOnReplace invokes the OnReplace hook (if set) for id on entity e.
+// oldPtr points to the current slot value; newPtr to the incoming value.
+// Both are valid only for the duration of the call. No observer dispatch:
+// OnReplace has no observer event in upstream C flecs.
+func (w *World) fireOnReplace(info *component.TypeInfo, id ID, e ID, oldPtr, newPtr unsafe.Pointer) {
+	if info != nil && info.Hooks.OnReplace != nil {
+		info.Hooks.OnReplace(&w.writeCapability, e, oldPtr, newPtr)
+	}
+}
+
 // fireOnAdd invokes the OnAdd hook (if set) then dispatches observers for id.
 // Dispatch order: hook first, then observers in registration order.
 // id must be the component/tag/pair entity ID being added; info may be nil

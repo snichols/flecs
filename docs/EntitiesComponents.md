@@ -253,13 +253,14 @@ w.Read(func(r *flecs.Reader) {
 
 Hooks are callbacks invoked at specific points in a component's lifecycle. Unlike observers (which can have many subscribers per component), there is exactly one hook of each kind per component type.
 
-The Go port supports three component hooks:
+The Go port supports four component hooks:
 
 | Hook | When it fires |
 |------|---------------|
 | `OnAdd[T]` | When T is newly added to an entity (not on subsequent Set overwrites). |
 | `OnSet[T]` | Every time T's value is written via `Set[T]` (including the initial write after OnAdd). |
 | `OnRemove[T]` | Before T is removed from an entity, including when the entity is deleted. |
+| `OnReplace[T]` | When `Set[T]` overwrites an **existing** value; receives both `old` and `new`. Does not fire on the first Set. |
 
 Hooks are registered before any component values are written:
 
@@ -292,9 +293,18 @@ w.Write(func(fw *flecs.Writer) {
 })
 ```
 
-Calling `OnAdd[T]`, `OnSet[T]`, or `OnRemove[T]` a second time **replaces** the previous hook. Pass `nil` to clear a hook.
+Calling `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, or `OnReplace[T]` a second time **replaces** the previous hook. Pass `nil` to clear a hook.
 
-> **Not yet ported in Go flecs** — the `on_replace` hook (which receives both the previous and new value when a component is overwritten) is not yet implemented. See the [feature-gap list](README.md).
+`OnReplace[T]` is useful for diff-style logic: delta detection, change-event publishing, and undo stacks. When a `Set` overwrites an existing value, it fires before `OnSet` with the previous and incoming values:
+
+```go
+flecs.OnReplace[Position](w, func(fw *flecs.Writer, e flecs.ID, old, new Position) {
+    // old is the value before the Set; new is the value being written.
+    // OnSet will fire immediately after with new as its value.
+})
+```
+
+See [ObserversManual.md § OnReplace Hook](ObserversManual.md#onreplace-hook) for the full contract.
 
 ### Components are Entities
 

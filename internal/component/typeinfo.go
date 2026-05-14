@@ -15,6 +15,11 @@ import (
 // package type-assert it back to *flecs.World.
 type EntityCallback func(world any, entity ids.ID, ptr unsafe.Pointer)
 
+// ReplaceCallback is invoked when an existing component value is overwritten.
+// oldPtr points to the current slot before the write; newPtr points to the
+// incoming value. Both pointers are valid only for the duration of the call.
+type ReplaceCallback func(world any, entity ids.ID, oldPtr, newPtr unsafe.Pointer)
+
 // Hooks holds optional lifecycle callbacks for a component type.
 // All hooks are optional; nil means use default semantics.
 type Hooks struct {
@@ -35,6 +40,11 @@ type Hooks struct {
 	// OnRemove is called when the component is removed from an entity.
 	// Wired by the World in Phase 5 (observers).
 	OnRemove EntityCallback
+
+	// OnReplace is called when an existing component value is overwritten.
+	// Receives both the prior slot pointer and the incoming value pointer,
+	// before the slot is written. Wired by the World in Phase 16.0.
+	OnReplace ReplaceCallback
 }
 
 // TypeInfo describes a Go type registered as a component.

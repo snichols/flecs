@@ -68,6 +68,63 @@ w.Write(func(fw *flecs.Writer) {
 
 `OnSet` does **not** fire for `fw.AddID` (which carries no value). For zero-size tags, the callback receives the zero value of `T`.
 
+### OnReplace Hook
+
+`OnReplace[T]` fires when `Set[T]` or `SetPair[T]` overwrites a component value that **already exists** on the entity. It does **not** fire on the first `Set` (which triggers `OnAdd` then `OnSet` instead).
+
+The callback receives both the **previous** (`old`) and **incoming** (`new`) values, by value, before the slot is overwritten. This enables diff-style logic — delta detection, change-event publishing, undo stacks — that is awkward to express with `OnSet` alone.
+
+```go
+type Position struct{ X, Y float32 }
+
+w := flecs.New()
+
+flecs.OnReplace[Position](w, func(fw *flecs.Writer, e flecs.ID, old, new Position) {
+    fmt.Printf("Position changed: {%.1f,%.1f} → {%.1f,%.1f}\n", old.X, old.Y, new.X, new.Y)
+})
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    flecs.Set(fw, e, Position{X: 1, Y: 2}) // first Set: OnReplace does NOT fire
+})
+
+w.Write(func(fw *flecs.Writer) {
+    flecs.Set(fw, e, Position{X: 3, Y: 4}) // overwrite: OnReplace fires with old={1,2}, new={3,4}
+})
+```
+
+**Dispatch order on overwrite**: `OnReplace` → column write → `OnSet`. `OnSet` still fires after `OnReplace` on every overwrite.
+
+**First Set is not a replace**: `OnReplace` only fires when the slot already held a user-set value. Removing and re-adding a component resets this: the first `Set` after `Remove` is treated as a first add.
+
+**Pairs**: `OnReplace` fires on `SetPair[T]` overwrites of an existing pair slot, keyed by the pair data type `T`.
+
+**Single hook per type**: calling `OnReplace[T]` twice replaces the prior hook. Pass `nil` to clear.
+
+```go
+// Replace
+flecs.OnReplace[Position](w, newCallback)
+
+// Clear
+flecs.OnReplace[Position](w, nil)
+```
+
+**Untyped variant** (`OnReplaceID`): for runtime-registered components, use the ID-keyed API. The handler receives raw `unsafe.Pointer` values; both pointers are valid only for the duration of the call.
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+flecs.OnReplaceID(w, posID, func(fw *flecs.Writer, e flecs.ID, oldPtr, newPtr unsafe.Pointer) {
+    old := *(*Position)(oldPtr)
+    new := *(*Position)(newPtr)
+    fmt.Printf("changed: %v → %v\n", old, new)
+})
+```
+
+**Divergence from C flecs**: C's `on_replace` hook prevents `get_mut`/`ensure`/`emplace` (mutable-pointer operations) on the same component. Go flecs has never exposed those APIs, so this restriction does not apply.
+
+**No `EventOnReplace` observer event**: `OnReplace` is a per-component hook, not an observer event. There is no `EventOnReplace` constant; use `Observe[T](w, EventOnSet, ...)` if you want observer-style subscription.
+
 ### OnRemove Hook
 
 `OnRemove[T]` fires before `T` is removed from an entity, including when the entity is deleted. The value `v` passed to the callback is the component's value at the time of the call — the data is still valid.
@@ -407,12 +464,6 @@ When two observers subscribe to the same (component, event), they fire in regist
 ## Not Yet Ported in Go flecs
 
 The following features from C flecs are not yet available in the Go port. They are documented here so you know where the boundaries are.
-
-### OnReplace Event
-
-C flecs has an `on_replace` hook that fires when `Set` overwrites an existing component value. It receives both the old and new value. Go flecs has `OnSet` (fires on every set) but no dedicated on-replace with prior-value access.
-
-**Workaround**: Read the current value with `Get[T]` before setting, if you need the old value.
 
 ### OnDelete / OnDeleteTarget Events
 

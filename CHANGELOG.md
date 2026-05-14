@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.55.0 — 2026-05-14 — Phase 16.0: OnReplace hook
+
+First phase beyond the trait-system roadmap; resumes draining the docs/README.md feature-gap list.
+The Phase 14.8 ComponentTraits gap entries are now exhausted — 16.x continues with observer/hook
+and entity gaps.
+
+### Added
+
+- **`OnReplace[T]`** — registers a per-component lifecycle hook that fires when `Set[T]` overwrites
+  an existing component value. Receives both the previous (`old`) and incoming (`new`) value, by
+  value, before the slot is overwritten. Does **not** fire on the first `Set` (which uses `OnAdd` +
+  `OnSet`). Dispatch order on overwrite: `OnReplace` → column write → `OnSet`. `OnSet` still fires
+  after `OnReplace`.
+- **`OnReplaceID`** — untyped (ID-keyed) variant. Handler receives `(fw *Writer, e ID, oldPtr,
+  newPtr unsafe.Pointer)`; both pointers are valid only for the duration of the call.
+- **`fireOnReplace`** — internal dispatcher wired into all fire sites:
+  - `setImmediateByPtr` — archetype, sparse-only, and DontFragment branches.
+  - `setPairImmediate[T]` — pair overwrite path.
+  - `dispatch` `cmdModified` — deferred archetype and sparse legs.
+- **`cmd.firstAdd`** — per-cmd flag (uses existing padding byte) marking the first `cmdModified`
+  write to a just-migrated slot; dispatch skips `OnReplace` for that write to preserve the
+  "first add is not a replace" semantic.
+- **`sortedIDContains` / `sliceIDContains`** — small helpers used by batchForEntity Pass 2 to
+  track which newly-added component IDs have been first-add-marked.
+- **`component.ReplaceCallback`** — new callback type `func(world any, entity ids.ID, oldPtr, newPtr unsafe.Pointer)`.
+- **`Hooks.OnReplace`** — new field on `component.Hooks`.
+
+### Changed (docs)
+
+- `docs/ObserversManual.md`: added **OnReplace Hook** section under `## Hooks`; removed the
+  "Not Yet Ported — OnReplace Event" stub.
+- `docs/EntitiesComponents.md`: updated hooks table to include `OnReplace[T]`; replaced the
+  "not yet ported" note with a callout and link to ObserversManual.
+- `docs/README.md`: flipped Phase 14.1 line 101 and Phase 14.7 line 152 from "not yet ported"
+  to ✅ shipped v0.55.0; fixed Phase 14.8 line 171 (`Relationship`/`Target`/`Trait`) from
+  "not yet ported" to ✅ shipped v0.47.0.
+- `ROADMAP.md`: updated heading to "Shipped (through v0.55.0)"; added v0.55.0 entry; added
+  "Observer-system gaps (Phase 16.x candidates)" future-work section.
+- `README.md`: added `OnReplace[T]` / `OnReplaceID` to Hooks feature row.
+
 ## v0.54.0 — 2026-05-13 — Phase 15.22: Union relationship trait
 
 ### Added

@@ -19,7 +19,8 @@ const (
 // and the stage pointer). Layout mirrors src/commands.h:49–62.
 type cmd struct {
 	kind          cmdKind // 1 byte
-	_             [3]byte // padding so nextForEntity sits at offset 4
+	firstAdd      bool    // 1 byte — set by Pass 2 for the first cmdModified of a component newly added in this batch (skip OnReplace)
+	_             [2]byte // padding so nextForEntity sits at offset 4
 	nextForEntity int32   // intrusive linked list; see cmdQueue.append for encoding
 	id            ID      // component / tag / pair ID
 	entity        ID      // target entity
