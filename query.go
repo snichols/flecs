@@ -103,6 +103,11 @@ type Term struct {
 	Kind     TermKind
 	Trav     ID            // traversal relationship (non-zero for Up/SelfUp/Cascade terms)
 	Traverse TraverseFlags // traversal mode; default TraverseSelf (0) = local-only match
+	// Src is the fixed source entity for this term. When non-zero, the component is
+	// read from Src rather than the iterated entity ($this). The term does NOT
+	// contribute to the archetype-filter set — it is resolved once at iter start.
+	// Construct via WithSourceTerm or (Term).Source(e). Zero means $this (default).
+	Src ID
 	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
 	// component stores its data in a sparse-set (IsSparse or IsDontFragment returned
 	// true). Sparse is a VALUE-FETCH routing hint: Field[T] reads via sparseSetGet
@@ -168,6 +173,42 @@ func (t Term) SelfUp(rel ID) Term { t.Traverse = TraverseSelfUp; t.Trav = rel; r
 // depth order in the rel hierarchy (root-first, then children). Only valid in
 // NewCachedQueryFromTerms; NewQueryFromTerms panics if a Cascade term is present.
 func (t Term) Cascade(rel ID) Term { t.Traverse = TraverseCascade; t.Trav = rel; return t }
+
+// Source binds this term to a specific entity rather than the iterated entity
+// ($this). The component is read once from e at iter start and returned as a
+// 1-element slice by Field[T]; it does NOT contribute to the archetype-filter set.
+//
+// Panics if e is zero. Cannot be combined with .Up(), .SelfUp(), or .Cascade().
+// Use WithSourceTerm as the preferred one-step constructor.
+func (t Term) Source(e ID) Term {
+	if e == 0 {
+		panic("flecs: Term.Source: source entity must not be zero")
+	}
+	if t.Traverse != TraverseSelf && t.Traverse != 0 {
+		panic("flecs: Term.Source: cannot combine a fixed source with traversal (Up/SelfUp/Cascade)")
+	}
+	t.Src = e
+	return t
+}
+
+// WithSourceTerm returns a TermAnd term that reads componentID from sourceEntity
+// rather than the iterated entity. The term does NOT add to the archetype-filter
+// set — it is resolved once at iter start. If sourceEntity does not hold
+// componentID, the entire query yields zero results.
+//
+// Use FieldMaybe (with a Maybe(componentID).Source(sourceEntity) term) for the
+// "optional config" pattern where an absent component is acceptable.
+//
+// Panics if componentID or sourceEntity is zero.
+func WithSourceTerm(componentID, sourceEntity ID) Term {
+	if componentID == 0 {
+		panic("flecs: WithSourceTerm: componentID must not be zero")
+	}
+	if sourceEntity == 0 {
+		panic("flecs: WithSourceTerm: sourceEntity must not be zero")
+	}
+	return Term{ID: componentID, Kind: TermAnd, Src: sourceEntity}
+}
 
 // Query holds a structured list of query terms used to match archetype tables.
 // Terms are stored sorted: TermAnd first (by ID), then TermNot (by ID), then
@@ -336,6 +377,65 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 	})
 }
 
+// resolveFixedSourcePtr looks up the data pointer for term.ID on term.Src.
+// Returns (ptr, true) when the component is present: ptr may be nil for a tag
+// (present but no data). Returns (nil, false) when the component is absent.
+func resolveFixedSourcePtr(w *World, term Term) (unsafe.Pointer, bool) {
+	src := term.Src
+	if term.Union {
+		// term.Union=true implies SetUnion was called; the store always exists.
+		relKey := ID(term.ID.First().Index())
+		store := w.unionStore[relKey]
+		pos, has := store.index[ID(src.Index())]
+		if !has {
+			return nil, false
+		}
+		termTarget := term.ID.Second()
+		if !isWildcardID(w, termTarget) && store.dense[pos].target.Index() != termTarget.Index() {
+			return nil, false
+		}
+		// Union pairs are tag-like; return nil (present=true, no data ptr).
+		return nil, true
+	}
+	if term.DontFragment || term.Sparse {
+		p := sparseSetGet(w, src, term.ID)
+		return p, p != nil
+	}
+	// Archetype term: look up via entity index. Src is validated alive at
+	// construction time so rec is always non-nil; an alive entity always has a table.
+	rec := w.index.Get(src)
+	if !rec.Table.HasComponent(term.ID) {
+		return nil, false
+	}
+	// Get returns nil for tag columns (Size==0); present=true because HasComponent passed.
+	p := rec.Table.Get(int(rec.Row), term.ID)
+	return p, true
+}
+
+// buildFixedSourcePtrs resolves all fixed-source terms in the term list and
+// returns (ptrs, present, dead). dead=true means a required (TermAnd) fixed-source
+// component is absent on its source entity; the caller should return a dead iter.
+func buildFixedSourcePtrs(w *World, terms []Term) (map[ID]unsafe.Pointer, map[ID]bool, bool) {
+	var ptrs map[ID]unsafe.Pointer
+	var present map[ID]bool
+	for _, term := range terms {
+		if term.Src == 0 {
+			continue
+		}
+		ptr, ok := resolveFixedSourcePtr(w, term)
+		if !ok && term.Kind == TermAnd {
+			return nil, nil, true // dead: required component absent
+		}
+		if ptrs == nil {
+			ptrs = make(map[ID]unsafe.Pointer)
+			present = make(map[ID]bool)
+		}
+		ptrs[term.ID] = ptr
+		present[term.ID] = ok
+	}
+	return ptrs, present, false
+}
+
 // Iter starts a fresh iteration over all archetype tables matching the query.
 //
 // Seed strategy (all-archetype mode): pick the TermAnd term whose component-index
@@ -358,11 +458,28 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
 
+	// Resolve fixed-source terms once at iter start.
+	fixedPtrs, fixedPresent, dead := buildFixedSourcePtrs(q.w, q.terms)
+	if dead {
+		// A required fixed-source component is absent on its source entity.
+		// The entire query yields zero results (mirrors upstream eval.c:114-117).
+		return &QueryIter{
+			world:              q.w,
+			terms:              q.terms,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
+			pos:                0, // already past end
+			wildcardTermIdx:    -1,
+			wildcardPairPos:    -1,
+		}
+	}
+
 	// Classify And terms.
 	// dontFragmentAndCount: terms not in archetype (drives iteration MODE).
 	// sparseAndCount: terms with sparse-set data (drives Field routing + mixed mode).
 	// archetypeAndCount: terms with both archetype presence AND no DontFragment.
 	// unionAndCount: union-pair terms (not in archetype; checked per-entity via union store).
+	// Fixed-source TermAnd terms are excluded: they don't drive $this iteration.
 	dontFragmentAndCount := 0
 	sparseAndCount := 0
 	archetypeAndCount := 0
@@ -370,6 +487,9 @@ func (q *Query) Iter() *QueryIter {
 	for _, t := range q.terms {
 		if t.Kind != TermAnd {
 			continue
+		}
+		if t.Src != 0 {
+			continue // fixed-source: does not drive $this iteration mode
 		}
 		if t.Union {
 			unionAndCount++
@@ -420,17 +540,19 @@ func (q *Query) Iter() *QueryIter {
 			driver = nil
 		}
 		return &QueryIter{
-			q:               q,
-			world:           q.w,
-			terms:           q.terms,
-			orGroups:        q.orGroups,
-			allSparse:       true, // kept for Table() panic message compatibility
-			hasSparseTerms:  true,
-			sparseDriver:    driver,
-			sparseDriverPos: -1,
-			pos:             -1,
-			wildcardTermIdx: wildcardIdx,
-			wildcardPairPos: -1,
+			q:                  q,
+			world:              q.w,
+			terms:              q.terms,
+			orGroups:           q.orGroups,
+			allSparse:          true, // kept for Table() panic message compatibility
+			hasSparseTerms:     true,
+			sparseDriver:       driver,
+			sparseDriverPos:    -1,
+			pos:                -1,
+			wildcardTermIdx:    wildcardIdx,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
@@ -461,30 +583,35 @@ func (q *Query) Iter() *QueryIter {
 			driver = nil
 		}
 		return &QueryIter{
-			q:               q,
-			world:           q.w,
-			terms:           q.terms,
-			orGroups:        q.orGroups,
-			allUnion:        true,
-			hasSparseTerms:  true, // per-entity checking
-			unionDriver:     driver,
-			unionDriverPos:  -1,
-			sparseDriverPos: -1,
-			pos:             -1,
-			wildcardTermIdx: wildcardIdx,
-			wildcardPairPos: -1,
+			q:                  q,
+			world:              q.w,
+			terms:              q.terms,
+			orGroups:           q.orGroups,
+			allUnion:           true,
+			hasSparseTerms:     true, // per-entity checking
+			unionDriver:        driver,
+			unionDriverPos:     -1,
+			sparseDriverPos:    -1,
+			pos:                -1,
+			wildcardTermIdx:    wildcardIdx,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
 	// Archetype seed selection — used for both all-archetype and mixed modes.
-	// Skip DontFragment/Union terms (not in archetype tables), transitive/reflexive pairs,
-	// and wildcard terms. Sparse-only terms (Sparse=true, DontFragment=false) ARE
-	// in archetype tables and can seed.
+	// Skip DontFragment/Union terms (not in archetype tables), fixed-source terms
+	// (they don't constrain $this), transitive/reflexive pairs, and wildcard terms.
+	// Sparse-only terms (Sparse=true, DontFragment=false) ARE in archetype tables and can seed.
 	seedIdx := -1
 	minCount := 0
 	for i, term := range q.terms {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
+		}
+		if term.Src != 0 {
+			continue // fixed-source: does not constrain $this archetype set
 		}
 		if term.DontFragment || term.Union {
 			continue // not in archetype tables; can't seed
@@ -515,17 +642,19 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	return &QueryIter{
-		q:               q,
-		world:           q.w,
-		terms:           q.terms,
-		orGroups:        q.orGroups,
-		candidates:      candidates,
-		pos:             -1,
-		hasSparseTerms:  hasSparseTerms,
-		sparseTablePos:  -1,
-		sparseDriverPos: -1,
-		wildcardTermIdx: wildcardIdx,
-		wildcardPairPos: -1,
+		q:                  q,
+		world:              q.w,
+		terms:              q.terms,
+		orGroups:           q.orGroups,
+		candidates:         candidates,
+		pos:                -1,
+		hasSparseTerms:     hasSparseTerms,
+		sparseTablePos:     -1,
+		sparseDriverPos:    -1,
+		wildcardTermIdx:    wildcardIdx,
+		wildcardPairPos:    -1,
+		fixedSourcePtrs:    fixedPtrs,
+		fixedSourcePresent: fixedPresent,
 	}
 }
 
@@ -593,6 +722,12 @@ type QueryIter struct {
 	allUnion       bool         // all And terms are union pairs; iterate union store directly
 	unionDriver    []unionEntry // snapshot of the smallest union store (allUnion mode)
 	unionDriverPos int          // current position in unionDriver; -1 = before first
+	// fixed-source state — set by Iter() for any term with a non-zero Src.
+	// Resolved once at iter construction; Field[T] returns a 1-element slice backed
+	// by the pointer. nil pointer = tag (present, no data). Absent optional terms
+	// have fixedSourcePresent[id]=false.
+	fixedSourcePtrs    map[ID]unsafe.Pointer // component pointer per fixed-source term ID
+	fixedSourcePresent map[ID]bool           // true if the component is present on source (even for tags)
 	// sorted iteration state — set by CachedQuery.Iter() when the query has an
 	// order_by comparator. Entities are pre-sorted; yields one entity per Next().
 	sortedMode     bool             // true = walk sortedEntities in order
@@ -831,6 +966,9 @@ func (it *QueryIter) updateOptionalPresenceSparse(e ID) {
 		if term.Kind != TermOptional && term.Kind != TermOr {
 			continue
 		}
+		if term.Src != 0 {
+			continue // fixed-source optional: presence is in fixedSourcePresent, not per-table
+		}
 		if it.optionalPresent == nil {
 			it.optionalPresent = make(map[ID]bool)
 		}
@@ -850,6 +988,9 @@ func (it *QueryIter) updateOptionalPresenceMixed(t *table.Table, e ID) {
 	for _, term := range it.terms {
 		if term.Kind != TermOptional && term.Kind != TermOr {
 			continue
+		}
+		if term.Src != 0 {
+			continue // fixed-source optional: presence is in fixedSourcePresent, not per-entity
 		}
 		if it.optionalPresent == nil {
 			it.optionalPresent = make(map[ID]bool)
@@ -887,6 +1028,9 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 	for _, term := range it.terms {
 		switch term.Kind {
 		case TermAnd:
+			if term.Src != 0 {
+				break // fixed-source: resolved at iter start, not an archetype constraint
+			}
 			if term.DontFragment || term.Union {
 				break // not in archetype; skip archetype check (checked per-entity)
 			}
@@ -972,13 +1116,15 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 
 // updateOptionalPresence records which TermOptional and TermOr IDs are present
 // in t. Called once per table transition inside Next. Skipped when there are no
-// Optional or Or terms (common case: zero allocs).
+// Optional or Or terms (common case: zero allocs). Fixed-source optional terms
+// are excluded: their presence is stored in fixedSourcePresent and is constant
+// across all tables.
 func (it *QueryIter) updateOptionalPresence(t *table.Table) {
 	for k := range it.optionalPresent {
 		delete(it.optionalPresent, k)
 	}
 	for _, term := range it.terms {
-		if term.Kind == TermOptional || term.Kind == TermOr {
+		if (term.Kind == TermOptional || term.Kind == TermOr) && term.Src == 0 {
 			if it.optionalPresent == nil {
 				it.optionalPresent = make(map[ID]bool)
 			}
@@ -1092,6 +1238,22 @@ func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
 // returned []T header's data pointer is an unsafe.Pointer to T, which the GC
 // traces correctly for pointer-containing element types.
 func Field[T any](it *QueryIter, id ID) []T {
+	// Fixed-source term: return 1-element slice backed by the snapshot pointer.
+	// The pointer is valid for the lifetime of this iter (snapshot-at-iter-start contract).
+	for _, term := range it.terms {
+		if term.ID == id && term.Src != 0 {
+			if !it.fixedSourcePresent[id] {
+				panic(fmt.Sprintf("flecs: Field[%s]: fixed-source component %d is not present on source entity %d; use FieldMaybe for optional fixed-source terms",
+					reflect.TypeFor[T](), id, term.Src))
+			}
+			ptr := it.fixedSourcePtrs[id]
+			if ptr == nil {
+				// Tag component: present on source but no data storage.
+				return make([]T, 1)
+			}
+			return unsafe.Slice((*T)(ptr), 1)
+		}
+	}
 	// Sparse term: read through the sparse-set for the current entity.
 	for _, term := range it.terms {
 		if term.ID == id && term.Sparse {
@@ -1166,6 +1328,17 @@ func FieldMaybe[T any](it *QueryIter, id ID) ([]T, bool) {
 		if term.Kind != TermOptional && term.Kind != TermOr {
 			panic(fmt.Sprintf("flecs: FieldMaybe[%s]: id %d is not a TermOptional or TermOr term; use Field for TermAnd terms",
 				reflect.TypeFor[T](), id))
+		}
+		// Fixed-source optional: presence determined at iter start, not per table.
+		if term.Src != 0 {
+			if !it.fixedSourcePresent[id] {
+				return nil, false
+			}
+			ptr := it.fixedSourcePtrs[id]
+			if ptr == nil {
+				return make([]T, 1), true // tag present on source
+			}
+			return unsafe.Slice((*T)(ptr), 1), true
 		}
 		if term.Sparse {
 			// Sparse optional: read through sparse-set for the current entity.
@@ -1322,6 +1495,25 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional/Or terms would match an unbounded entity set")
 	}
 
+	// Validate fixed-source terms.
+	for i, t := range terms {
+		if t.Src == 0 {
+			continue
+		}
+		if t.Kind == TermNot {
+			panic(fmt.Sprintf("%s: fixed-source term at index %d (id %d) cannot be TermNot (not supported in this phase)", caller, i, t.ID))
+		}
+		if t.Kind == TermOr {
+			panic(fmt.Sprintf("%s: fixed-source term at index %d (id %d) cannot be TermOr (not supported in this phase)", caller, i, t.ID))
+		}
+		if t.Traverse != TraverseSelf && t.Traverse != TraverseExplicitSelf && t.Traverse != 0 {
+			panic(fmt.Sprintf("%s: fixed-source term at index %d (id %d) cannot be combined with traversal flags (Up/SelfUp/Cascade)", caller, i, t.ID))
+		}
+		if !w.index.IsAlive(t.Src) {
+			panic(fmt.Sprintf("%s: fixed-source term at index %d (id %d) has a dead or non-existent source entity %d; queries iterate using the source's table, so the source must be a live entity slot", caller, i, t.ID, t.Src))
+		}
+	}
+
 	// Build OR-groups by scanning for consecutive TermOr sequences.
 	// Simultaneously validate zero IDs on Or terms.
 	var orGroups [][]ID
@@ -1369,18 +1561,26 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 
 	// Build sorted term list: And (by ID), Not (by ID), Or-groups (group order,
 	// within-group by ID), Optional (by ID).
-	var andTerms, notTerms, optTerms []Term
+	// Within the And-block, fixed-source TermAnd terms come first (parallels
+	// upstream's plan-order: setfixed ops precede $this-bound TermAnd ops).
+	var fixedSrcAndTerms, normalAndTerms, notTerms, optTerms []Term
 	for _, t := range terms {
 		switch t.Kind {
 		case TermAnd:
-			andTerms = append(andTerms, t)
+			if t.Src != 0 {
+				fixedSrcAndTerms = append(fixedSrcAndTerms, t)
+			} else {
+				normalAndTerms = append(normalAndTerms, t)
+			}
 		case TermNot:
 			notTerms = append(notTerms, t)
 		case TermOptional:
 			optTerms = append(optTerms, t)
 		}
 	}
-	sort.Slice(andTerms, func(i, j int) bool { return andTerms[i].ID < andTerms[j].ID })
+	sort.Slice(fixedSrcAndTerms, func(i, j int) bool { return fixedSrcAndTerms[i].ID < fixedSrcAndTerms[j].ID })
+	sort.Slice(normalAndTerms, func(i, j int) bool { return normalAndTerms[i].ID < normalAndTerms[j].ID })
+	andTerms := append(fixedSrcAndTerms, normalAndTerms...)
 	sort.Slice(notTerms, func(i, j int) bool { return notTerms[i].ID < notTerms[j].ID })
 	sort.Slice(optTerms, func(i, j int) bool { return optTerms[i].ID < optTerms[j].ID })
 
@@ -1442,13 +1642,14 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
-	// Extract And-term IDs (already sorted). Reflect possible promotion changes.
-	andIDs := make([]ID, len(andTerms))
-	for i, t := range andTerms {
-		andIDs[i] = t.ID
-	}
-	if len(andIDs) == 0 {
-		andIDs = nil
+	// Extract And-term IDs for backward compat (Terms() / andIDs).
+	// Only non-fixed-source TermAnd terms are included (fixed-source terms don't
+	// participate in archetype matching and are not meaningful as plain IDs).
+	var andIDs []ID
+	for _, t := range andTerms {
+		if t.Src == 0 {
+			andIDs = append(andIDs, t.ID)
+		}
 	}
 
 	return cp, andIDs, orGroups

@@ -231,12 +231,16 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 
 	// Determine if all And terms are DontFragment or Union (pure non-archetype cached queries).
 	// Sparse-only terms still live in archetype tables, so they don't qualify.
+	// Fixed-source terms are excluded from this classification: they don't drive $this iteration.
 	dontFragmentAndCount := 0
 	archetypeAndCount := 0
 	unionAndCount := 0
 	for _, t := range terms {
 		if t.Kind != TermAnd {
 			continue
+		}
+		if t.Src != 0 {
+			continue // fixed-source: does not drive $this iteration mode
 		}
 		if t.Union {
 			unionAndCount++
@@ -356,6 +360,22 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		return &QueryIter{pos: -1}
 	}
 
+	// Resolve fixed-source terms fresh on each Iter() call so that mutations to
+	// the source entity between iterations are visible on the next execution.
+	fixedPtrs, fixedPresent, dead := buildFixedSourcePtrs(cq.w, cq.terms)
+	if dead {
+		// A required fixed-source component is absent → zero results.
+		return &QueryIter{
+			world:              cq.w,
+			terms:              cq.terms,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
+			pos:                0, // already past end
+			wildcardTermIdx:    -1,
+			wildcardPairPos:    -1,
+		}
+	}
+
 	// Sorted iteration: lazily rebuild the sorted entity list and return a
 	// sorted iterator. Wildcard expansion is incompatible with sorted mode and
 	// is disabled (wildcardTermIdx = -1).
@@ -379,19 +399,21 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			}
 		}
 		return &QueryIter{
-			world:           cq.w,
-			terms:           cq.terms,
-			orGroups:        cq.orGroups,
-			sortedMode:      true,
-			sortedPos:       -1,
-			sortedEntities:  cq.sortedEntities,
-			sortedRows:      cq.sortedRows,
-			allSparse:       cq.sparseAndOnly,
-			hasSparseTerms:  hasSparseTerms,
-			cached:          true,
-			pos:             -1,
-			wildcardTermIdx: -1,
-			wildcardPairPos: -1,
+			world:              cq.w,
+			terms:              cq.terms,
+			orGroups:           cq.orGroups,
+			sortedMode:         true,
+			sortedPos:          -1,
+			sortedEntities:     cq.sortedEntities,
+			sortedRows:         cq.sortedRows,
+			allSparse:          cq.sparseAndOnly,
+			hasSparseTerms:     hasSparseTerms,
+			cached:             true,
+			pos:                -1,
+			wildcardTermIdx:    -1,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
@@ -428,16 +450,18 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			driver = nil
 		}
 		return &QueryIter{
-			world:           cq.w,
-			terms:           cq.terms,
-			orGroups:        cq.orGroups,
-			allSparse:       true,
-			hasSparseTerms:  true,
-			sparseDriver:    driver,
-			sparseDriverPos: -1,
-			pos:             -1,
-			wildcardTermIdx: wildcardIdx,
-			wildcardPairPos: -1,
+			world:              cq.w,
+			terms:              cq.terms,
+			orGroups:           cq.orGroups,
+			allSparse:          true,
+			hasSparseTerms:     true,
+			sparseDriver:       driver,
+			sparseDriverPos:    -1,
+			pos:                -1,
+			wildcardTermIdx:    wildcardIdx,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
@@ -467,17 +491,19 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			driver = nil
 		}
 		return &QueryIter{
-			world:           cq.w,
-			terms:           cq.terms,
-			orGroups:        cq.orGroups,
-			allUnion:        true,
-			hasSparseTerms:  true,
-			unionDriver:     driver,
-			unionDriverPos:  -1,
-			sparseDriverPos: -1,
-			pos:             -1,
-			wildcardTermIdx: wildcardIdx,
-			wildcardPairPos: -1,
+			world:              cq.w,
+			terms:              cq.terms,
+			orGroups:           cq.orGroups,
+			allUnion:           true,
+			hasSparseTerms:     true,
+			unionDriver:        driver,
+			unionDriverPos:     -1,
+			sparseDriverPos:    -1,
+			pos:                -1,
+			wildcardTermIdx:    wildcardIdx,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
@@ -492,32 +518,36 @@ func (cq *CachedQuery) Iter() *QueryIter {
 	if hasSparseTerms {
 		// Mixed: use cached archetype tables; per-entity sparse/DontFragment filtering in nextMixed.
 		return &QueryIter{
-			world:           cq.w,
-			terms:           cq.terms,
-			orGroups:        cq.orGroups,
-			hasSparseTerms:  true,
-			candidates:      cq.tables,
-			pos:             -1,
-			cached:          true,
-			tableSourcesRef: cq.tableUpSources,
-			sparseTablePos:  -1,
-			sparseDriverPos: -1,
-			wildcardTermIdx: wildcardIdx,
-			wildcardPairPos: -1,
+			world:              cq.w,
+			terms:              cq.terms,
+			orGroups:           cq.orGroups,
+			hasSparseTerms:     true,
+			candidates:         cq.tables,
+			pos:                -1,
+			cached:             true,
+			tableSourcesRef:    cq.tableUpSources,
+			sparseTablePos:     -1,
+			sparseDriverPos:    -1,
+			wildcardTermIdx:    wildcardIdx,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
 	// All-archetype: existing behavior.
 	return &QueryIter{
-		world:           cq.w,
-		terms:           cq.terms,
-		orGroups:        cq.orGroups,
-		candidates:      cq.tables,
-		pos:             -1,
-		cached:          true,
-		tableSourcesRef: cq.tableUpSources,
-		wildcardTermIdx: wildcardIdx,
-		wildcardPairPos: -1,
+		world:              cq.w,
+		terms:              cq.terms,
+		orGroups:           cq.orGroups,
+		candidates:         cq.tables,
+		pos:                -1,
+		cached:             true,
+		tableSourcesRef:    cq.tableUpSources,
+		wildcardTermIdx:    wildcardIdx,
+		wildcardPairPos:    -1,
+		fixedSourcePtrs:    fixedPtrs,
+		fixedSourcePresent: fixedPresent,
 	}
 }
 
@@ -602,11 +632,15 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		return
 	}
 	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).
-	// DontFragment and Union terms are skipped: they do not live in archetype tables.
+	// DontFragment, Union, and fixed-source terms are skipped: they do not live in
+	// archetype tables (or are pre-resolved at iter start for fixed-source).
 	// Sparse-only terms DO live in archetype tables, so they are checked here.
 	for _, term := range cq.terms {
 		switch term.Kind {
 		case TermAnd:
+			if term.Src != 0 {
+				break // fixed-source: not an archetype constraint; skip table matching
+			}
 			if term.DontFragment || term.Union {
 				break // not in archetype; skip archetype check (verified per-entity at iteration time)
 			}

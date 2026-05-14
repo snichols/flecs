@@ -19,6 +19,7 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction. See [EntitiesCo
 - [Inheritable Components](#inheritable-components)
 - [Change Detection](#change-detection)
 - [Performance Notes](#performance-notes)
+- [Fixed per-term source](#fixed-per-term-source)
 - [Not Yet Ported](#not-yet-ported)
 
 ---
@@ -921,6 +922,111 @@ Groups are rebuilt lazily whenever a table's `ChangeCount` changes (any column w
 
 ---
 
+## Fixed per-term source
+
+**Shipped in v0.73.0.**
+
+A query term can read its component from a *specific named entity* instead of the iterated entity (`$this`). The most common use case is the **singleton-on-query** pattern: a global game state struct lives on one fixed entity, and you want every matched entity to see it without passing it in manually.
+
+```go
+// SimTime lives on the global `game` entity.
+// Movement systems read SimTime once per tick alongside per-entity data.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.With(velID),
+    flecs.WithSourceTerm(simTimeID, game), // bound to `game`, not $this
+)
+it := q.Iter()
+for it.Next() {
+    pos := flecs.Field[Position](it, posID)     // per-entity
+    vel := flecs.Field[Velocity](it, velID)     // per-entity
+    st  := flecs.Field[SimTime](it, simTimeID)  // 1-element; same for all rows
+    dt := st[0].DT
+    // ... advance each entity
+}
+```
+
+### Constructing fixed-source terms
+
+Two equivalent forms:
+
+```go
+// Top-level builder (preferred):
+flecs.WithSourceTerm(simTimeID, game)
+
+// Chained builder (useful when the base term kind is already constructed):
+flecs.With(simTimeID).Source(game)
+flecs.Maybe(simTimeID).Source(game) // for TermOptional (see below)
+```
+
+Panics at construction if `componentID` or `sourceEntity` is zero, or if `.Source(e)` is combined with `.Up()` / `.SelfUp()` / `.Cascade()`.
+
+### No archetype-filter contribution
+
+A fixed-source term does **not** add to the `$this` archetype-filter set. The `simTimeID` term in the example above does not constrain which entities are matched — only `posID` and `velID` do. This makes the singleton-on-query pattern essentially free: the extra term costs one pointer lookup at iter start, not per-entity.
+
+This mirrors C upstream's `flecs_query_insert_fixed_src_terms` / `EcsQuerySetFixed` plan-order.
+
+### Snapshot-at-iter-start contract
+
+The fixed-source component pointer is resolved **once at `Iter()` time**, not per `Next()` call. Mutations to the source entity between `Next()` calls within the same iteration are not visible. This matches the C upstream `it->sources[]` behaviour (populated once by `flecs_query_setfixed`).
+
+`Field[T]` returns a **1-element slice** backed by this snapshot pointer. The pointer is valid for the entire iteration (not invalidated by `Next()`).
+
+For `CachedQuery`, the pointer is **re-read at each `Iter()` call**, so updates to the source between separate iterations are visible on the next execution.
+
+### Source-missing → zero results
+
+If the source entity does not hold the fixed-source component (for a `TermAnd` term), the entire query yields **zero results**. This mirrors the C upstream `flecs_query_with → false` propagation at `eval.c:114-117`.
+
+```go
+// game has no SimTime → 0 matches even if many entities have Position.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.WithSourceTerm(simTimeID, game), // game lacks SimTime
+)
+```
+
+### Singleton source pattern
+
+Use `SingletonEntity` to resolve the canonical holder of a singleton component:
+
+```go
+flecs.SetSingleton(w, simTimeID)
+// ... later, when constructing the query:
+holder, ok := flecs.SingletonEntity(scope, simTimeID)
+// then: flecs.WithSourceTerm(simTimeID, holder)
+```
+
+### Optional fixed-source (deliberate divergence from upstream)
+
+Use `Maybe(componentID).Source(e)` when an absent component on the source should be **acceptable** rather than zeroing results:
+
+```go
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.Maybe(simTimeID).Source(game), // absent = ok; use FieldMaybe
+)
+it := q.Iter()
+for it.Next() {
+    if st, ok := flecs.FieldMaybe[SimTime](it, simTimeID); ok {
+        // use st[0].DT
+    }
+    // entities still match even when game lacks SimTime
+}
+```
+
+This is a deliberate divergence from C upstream, which treats optional fixed-source uniformly with `TermAnd`. The Go port uses the `FieldMaybe`-friendly behaviour so callers can express "match these entities, and optionally bind a config from `game`."
+
+### Limitations (this phase)
+
+- `TermNot` with a fixed source is not supported (panics at construction).
+- `TermOr` with a fixed source is not supported (panics at construction).
+- A fixed-source term cannot be combined with `.Up()` / `.SelfUp()` / `.Cascade()`.
+- The source entity must be alive at query-construction time (panics if dead).
+
+---
+
 ## Not Yet Ported
 
 The following features from the upstream C flecs `Queries.md` are not yet available in the Go port. See `docs/README.md` for the full feature-gap list.
@@ -971,7 +1077,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Wildcard and Any in CachedQuery**: both work in `NewCachedQueryFromTerms`. The cache updates automatically when new tables with matching concrete pairs are created.
 
-**Fixed per-term source** — In C flecs a term can match a component on a *specific* named entity rather than the iterated entity (e.g., match `SimTime` on a global `Game` entity). Go flecs only supports the default `$this` source. Not yet ported in Go flecs.
+**Fixed per-term source** — ✅ **shipped in v0.73.0.** See [§ Fixed per-term source](#fixed-per-term-source) below.
 
 **Query variables** — `$Var` named variables in the Flecs Query Language constrain results across related entities (e.g., "spaceships docked to a planet"). Not yet ported in Go flecs.
 
