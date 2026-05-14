@@ -658,3 +658,296 @@ func TestUnion_OwnsID(t *testing.T) {
 		}
 	})
 }
+
+// --- Test 23: Standalone HasID and OwnsID cover the union branch in scope.go ---
+
+func TestUnion_StandaloneHasID_OwnsID(t *testing.T) {
+	w, R, T1, T2 := newUnionWorld(t)
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		fw.AddID(e1, flecs.MakePair(R, T1))
+		// e2 has no union target
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		// Standalone HasID — different code path from r.HasID
+		if !flecs.HasID(r, e1, flecs.MakePair(R, T1)) {
+			t.Error("standalone HasID: expected true for e1 with (R,T1)")
+		}
+		if flecs.HasID(r, e1, flecs.MakePair(R, T2)) {
+			t.Error("standalone HasID: expected false for e1 with (R,T2)")
+		}
+		if !flecs.HasID(r, e1, flecs.MakePair(R, w.Wildcard())) {
+			t.Error("standalone HasID: expected true for e1 with (R,Wildcard)")
+		}
+		if flecs.HasID(r, e2, flecs.MakePair(R, T1)) {
+			t.Error("standalone HasID: expected false for e2 (no target) with (R,T1)")
+		}
+		if flecs.HasID(r, e2, flecs.MakePair(R, w.Wildcard())) {
+			t.Error("standalone HasID: expected false for e2 (no target) with wildcard")
+		}
+
+		// Standalone OwnsID — same coverage target
+		if !flecs.OwnsID(r, e1, flecs.MakePair(R, T1)) {
+			t.Error("standalone OwnsID: expected true for e1 with (R,T1)")
+		}
+		if flecs.OwnsID(r, e1, flecs.MakePair(R, T2)) {
+			t.Error("standalone OwnsID: expected false for e1 with (R,T2)")
+		}
+		if !flecs.OwnsID(r, e1, flecs.MakePair(R, w.Wildcard())) {
+			t.Error("standalone OwnsID: expected true for e1 with (R,Wildcard)")
+		}
+		if flecs.OwnsID(r, e2, flecs.MakePair(R, T1)) {
+			t.Error("standalone OwnsID: expected false for e2 (no target) with (R,T1)")
+		}
+	})
+}
+
+// --- Test 24: Adding the same union target twice is idempotent ---
+
+func TestUnion_AddSameTarget_Idempotent(t *testing.T) {
+	w, R, T1, _ := newUnionWorld(t)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		fw.AddID(e, flecs.MakePair(R, T1))
+	})
+
+	addCount := 0
+	flecs.ObserveID(w, flecs.MakePair(R, T1), flecs.EventOnAdd,
+		func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) { addCount++ })
+
+	// Add the same target a second time — must be a no-op in the union store.
+	w.Write(func(fw *flecs.Writer) {
+		fw.AddID(e, flecs.MakePair(R, T1))
+	})
+
+	if addCount != 0 {
+		t.Errorf("idempotent add: expected no extra OnAdd, got %d", addCount)
+	}
+	w.Read(func(r *flecs.Reader) {
+		if !r.HasID(e, flecs.MakePair(R, T1)) {
+			t.Error("expected e to still have (R,T1) after idempotent add")
+		}
+	})
+}
+
+// --- Test 25: Deferred RemoveID on entity with no union target returns false ---
+
+func TestUnion_RemoveNoTarget_Deferred(t *testing.T) {
+	w, R, T1, _ := newUnionWorld(t)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		// e has no union target
+	})
+
+	var removed bool
+	w.Write(func(fw *flecs.Writer) {
+		removed = flecs.RemoveID(fw, e, flecs.MakePair(R, T1))
+	})
+	if removed {
+		t.Error("deferred RemoveID on entity with no union target: expected false")
+	}
+}
+
+// --- Test 26: Removing from a non-first slot triggers swap-and-truncate ---
+
+func TestUnion_RemoveSwapAndTruncate(t *testing.T) {
+	w, R, T1, T2 := newUnionWorld(t)
+	var T3 flecs.ID
+	w.Write(func(fw *flecs.Writer) { T3 = fw.NewEntity() })
+
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		e3 = fw.NewEntity()
+		// Insertion order: e1→slot0, e2→slot1, e3→slot2.
+		fw.AddID(e1, flecs.MakePair(R, T1))
+		fw.AddID(e2, flecs.MakePair(R, T2))
+		fw.AddID(e3, flecs.MakePair(R, T3))
+	})
+
+	// Removing e1 (slot 0, not last) triggers swap-and-truncate.
+	w.Write(func(fw *flecs.Writer) {
+		fw.RemoveID(e1, flecs.MakePair(R, T1))
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		if r.HasID(e1, flecs.MakePair(R, w.Wildcard())) {
+			t.Error("e1 should have no union target after remove")
+		}
+		if !r.HasID(e2, flecs.MakePair(R, T2)) {
+			t.Error("e2 should still have T2")
+		}
+		if !r.HasID(e3, flecs.MakePair(R, T3)) {
+			t.Error("e3 should still have T3")
+		}
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		flecs.EachUnion(r, R, func(_ flecs.ID, _ flecs.ID) { count++ })
+	})
+	if count != 2 {
+		t.Errorf("expected 2 entries after swap-and-truncate remove, got %d", count)
+	}
+}
+
+// --- Test 27: EachUnion on a non-union relationship returns immediately ---
+
+func TestUnion_EachUnion_NonUnionRel(t *testing.T) {
+	w := flecs.New()
+	var R flecs.ID
+	w.Write(func(fw *flecs.Writer) { R = fw.NewEntity() })
+	// R is NOT marked as union — store doesn't exist.
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		flecs.EachUnion(r, R, func(_ flecs.ID, _ flecs.ID) { count++ })
+	})
+	if count != 0 {
+		t.Errorf("EachUnion on non-union rel: expected 0 calls, got %d", count)
+	}
+}
+
+// --- Test 28: Deleting entity not in all union stores hits the !has continue ---
+
+func TestUnion_EntityDeleteMultipleStores(t *testing.T) {
+	w := flecs.New()
+	var R1, R2, T1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R1 = fw.NewEntity()
+		R2 = fw.NewEntity()
+		T1 = fw.NewEntity()
+	})
+	flecs.SetUnion(w, R1)
+	flecs.SetUnion(w, R2)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		fw.AddID(e1, flecs.MakePair(R1, T1))
+		fw.AddID(e1, flecs.MakePair(R2, T1))
+		fw.AddID(e2, flecs.MakePair(R1, T1)) // e2 only in R1's store, NOT R2's store
+	})
+
+	// Deleting e2 causes unionStoreRemoveEntity to iterate both stores.
+	// For R2's store, e2 is not present → !has → continue (union.go ~line 190).
+	w.Write(func(fw *flecs.Writer) {
+		fw.Delete(e2)
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		if !r.HasID(e1, flecs.MakePair(R1, T1)) {
+			t.Error("e1 should still have (R1,T1)")
+		}
+		if !r.HasID(e1, flecs.MakePair(R2, T1)) {
+			t.Error("e1 should still have (R2,T1)")
+		}
+	})
+}
+
+// --- Test 29: Without(union pair) combined with With(union pair) covers TermNot union branch ---
+// TermNot union is only reached when hasSparseTerms=true (requires a TermAnd union term).
+
+func TestUnion_Query_NotTerm(t *testing.T) {
+	w := flecs.New()
+	var R1, R2, T1, T2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R1 = fw.NewEntity()
+		R2 = fw.NewEntity()
+		T1 = fw.NewEntity()
+		T2 = fw.NewEntity()
+	})
+	flecs.SetUnion(w, R1)
+	flecs.SetUnion(w, R2)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		// e1 is in both R1's and R2's stores
+		fw.AddID(e1, flecs.MakePair(R1, T1))
+		fw.AddID(e1, flecs.MakePair(R2, T2))
+		// e2 is only in R1's store
+		fw.AddID(e2, flecs.MakePair(R1, T1))
+	})
+
+	// With(R1,*): TermAnd union — sets hasSparseTerms=true, drives iteration via R1's store.
+	// Without(R2,T2): TermNot union — checked by matchesSparseTerms for each entity.
+	// e1 is in R2's store → TermNot fails → excluded.
+	// e2 is not in R2's store → TermNot passes → included.
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(flecs.MakePair(R1, w.Wildcard())),
+		flecs.Without(flecs.MakePair(R2, T2)),
+	)
+	var matched []flecs.ID
+	it := q.Iter()
+	for it.Next() {
+		matched = append(matched, it.Entities()...)
+	}
+
+	if len(matched) != 1 || matched[0].Index() != e2.Index() {
+		t.Errorf("union TermNot query: expected [e2=%v], got %v (e1=%v)", e2, matched, e1)
+	}
+}
+
+// --- Test 30: Union query after relationship delete — driver is nil ---
+
+func TestUnion_Query_EmptyDriver(t *testing.T) {
+	w, R, T1, _ := newUnionWorld(t)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		fw.AddID(e, flecs.MakePair(R, T1))
+	})
+	_ = e
+
+	// Build the query before deleting R.
+	q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(R, w.Wildcard())))
+
+	// Delete R — drops the union store.
+	w.Write(func(fw *flecs.Writer) { fw.Delete(R) })
+
+	// Iter() now: store is gone → driver = nil → nextUnionOnly returns false immediately.
+	count := 0
+	it := q.Iter()
+	for it.Next() {
+		count += it.Count()
+	}
+	if count != 0 {
+		t.Errorf("union query after rel delete: expected 0 entities, got %d", count)
+	}
+}
+
+// --- Test 31: CachedQuery iteration after union relationship is deleted ---
+
+func TestUnion_CachedQuery_AfterRelationshipDelete(t *testing.T) {
+	w, R, T1, _ := newUnionWorld(t)
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		fw.AddID(e, flecs.MakePair(R, T1))
+	})
+	_ = e
+
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(flecs.MakePair(R, w.Wildcard())))
+	defer cq.Close()
+
+	// Delete R — drops the union store.
+	w.Write(func(fw *flecs.Writer) { fw.Delete(R) })
+
+	// CachedQuery.Iter() after store deleted → zeroDriver = true → driver = nil.
+	count := 0
+	cq.Each(func(it *flecs.QueryIter) {
+		count += it.Count()
+	})
+	if count != 0 {
+		t.Errorf("cached union query after rel delete: expected 0 entities, got %d", count)
+	}
+}
