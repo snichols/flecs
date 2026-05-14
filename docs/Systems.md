@@ -169,7 +169,93 @@ fmt.Println(sys.IsClosed()) // true
 
 **Deferred-removal semantics:** `Progress` snapshots the active system set at the start of each phase's deferred scope. A system closed by an earlier phase's callback is excluded from later phases in the same frame. A system closed mid-phase may still complete the current frame (it is already in the snapshot) but will be skipped every frame thereafter.
 
-> **Not yet ported in Go flecs:** System disabling via `ecs_enable` / `EcsDisabled` tag — a lighter-weight way to pause a system without removing and recreating it. Go flecs has no equivalent; call `sys.Close()` to remove and call `NewSystem` again to re-add.
+---
+
+## Disabling a System
+
+`SetEnabled(false)` pauses a system without removing it. The system remains registered and visible to introspection; `Progress` simply skips it during dispatch. `SetEnabled(true)` re-enables it.
+
+```go
+sys := flecs.NewSystem(w, moveQ, func(dt float32, it *flecs.QueryIter) { /* ... */ })
+
+sys.SetEnabled(false)    // pause — Progress will skip this system
+fmt.Println(sys.IsEnabled()) // false
+
+w.Progress(dt)           // sys does not run
+
+sys.SetEnabled(true)     // resume
+w.Progress(dt)           // sys runs again
+```
+
+Unlike `Close`, `SetEnabled(false)` is **reversible**. Use it to implement pause/resume semantics without recreating the system.
+
+**Deferred-disable semantics:** `Progress` snapshots the active set at the start of each phase. Disabling a system from within another system's callback in the same phase has no effect on the current frame (the active set was already captured). The change takes effect from the next `Progress` call.
+
+**`RunSystem` ignores the flag.** Explicit out-of-pipeline invocation always runs the system regardless of its `enabled` state — matching `ecs_run` semantics in upstream C flecs.
+
+---
+
+## Single-system Run (out-of-pipeline)
+
+`RunSystem(s, dt)` invokes one system synchronously, outside the normal pipeline. Phase ordering, parallel batching, multi-threaded splitting, and the `enabled` flag are all bypassed.
+
+```go
+// Invoke the system once with a fixed dt, regardless of phase or enabled state.
+flecs.RunSystem(sys, 1.0/60.0)
+```
+
+Mutations performed inside the callback are deferred and flushed before `RunSystem` returns — the same `deferScope` wrap as `ecs_run` in upstream C flecs. This means structural changes (component sets, entity deletes) are visible immediately after `RunSystem` completes.
+
+`RunSystem` panics if `s` is `nil` or if the system has been closed (`IsClosed()` is true).
+
+---
+
+## Pipeline Introspection
+
+`Reader` exposes three methods for inspecting the registered system list at runtime without mutating world state.
+
+### `Phases() []ID`
+
+Returns the four built-in phase IDs in execution order:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for _, phase := range r.Phases() {
+        fmt.Println(phase)
+    }
+    // prints: PreUpdate, OnFixedUpdate, OnUpdate, PostUpdate IDs
+})
+```
+
+### `SystemsInPhase(phase ID) []*System`
+
+Returns a snapshot of all registered (including disabled) non-closed systems in the given phase, in registration order:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    systems := r.SystemsInPhase(w.OnUpdate())
+    for _, s := range systems {
+        fmt.Println("enabled:", s.IsEnabled())
+    }
+})
+```
+
+Returns an empty (non-nil) slice when no systems are registered for the phase. Panics if `phase` is not one of the four built-in phases.
+
+### `EachSystem(phase ID, fn func(*System) bool)`
+
+Zero-alloc callback variant — no slice is allocated. `fn` returning `false` halts iteration early:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    r.EachSystem(w.OnUpdate(), func(s *flecs.System) bool {
+        fmt.Println("system enabled:", s.IsEnabled())
+        return true // continue
+    })
+})
+```
+
+Both `SystemsInPhase` and `EachSystem` include disabled systems. The pipeline executor applies the `enabled` filter at dispatch time; introspection sees the complete registered set.
 
 ---
 

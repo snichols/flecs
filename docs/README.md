@@ -140,11 +140,11 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 - **Custom pipeline phases** — In C flecs any entity tagged with `EcsPhase` can be a pipeline phase; phases are ordered via `DependsOn` pairs. Go flecs has exactly four hard-coded built-in phases (`PreUpdate`, `OnFixedUpdate`, `OnUpdate`, `PostUpdate`). not yet ported in Go flecs.
 - **DependsOn ordering between systems** — C lets applications add `(DependsOn, OtherSystem)` to order two systems within a phase independently of registration order. Go flecs orders within a phase strictly by registration order. not yet ported in Go flecs.
-- **System disabling** (`ecs_enable` / `EcsDisabled`) — pause a system without removing it; re-enable later. Go flecs requires `Close()` + `NewSystem` to approximate this. not yet ported in Go flecs.
+- **System disabling** (`ecs_enable` / `EcsDisabled`) — ✅ **shipped in v0.58.0** via `(*System).SetEnabled(bool)` / `(*System).IsEnabled() bool`. `Progress` skips disabled systems; `RunSystem` ignores the flag. See [Systems.md § Disabling a System](Systems.md#disabling-a-system).
 - **Rate filters** (`SetInterval` / `SetRate`) — run a system every N frames or at a fixed wall-clock interval per system without restructuring the pipeline. not yet ported in Go flecs.
-- **Single-system `Run` out-of-pipeline** — `ecs_run` invokes one system synchronously outside the normal pipeline. not yet ported in Go flecs.
+- **Single-system `Run` out-of-pipeline** — ✅ **shipped in v0.58.0** via `RunSystem(s *System, dt float32)`. Bypasses pipeline phase ordering; mutations deferred and flushed before return. See [Systems.md § Single-system Run](Systems.md#single-system-run-out-of-pipeline).
 - **`RunWorker` / explicit thread dispatch** — `ecs_run_worker` for manual entity-range partitioning outside the pipeline. not yet ported in Go flecs.
-- **Pipeline introspection** — iterate the ordered system list in a pipeline to inspect execution order at runtime. not yet ported in Go flecs.
+- **Pipeline introspection** — ✅ **shipped in v0.58.0** via `(*Reader).Phases() []ID`, `(*Reader).SystemsInPhase(phase ID) []*System`, and `(*Reader).EachSystem(phase ID, fn func(*System) bool)`. See [Systems.md § Pipeline Introspection](Systems.md#pipeline-introspection).
 
 ### Additional gaps discovered in Phase 14.7 (ObserversManual port)
 

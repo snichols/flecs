@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.58.0 — 2026-05-14 — Phase 16.3: System lifecycle bundle (disabling, single-Run, pipeline introspection)
+
+Ships three independent system-side features as a bundle, closing three entries
+from the docs/README.md feature-gap list (Phase 14.6 Systems section, lines 143, 145, 147).
+Implemented via **Option A** (bool field on `*System`) rather than Option B (entity-per-system):
+Option A is minimal, self-contained, and avoids an entity-allocation cost per system. The
+pipeline executor checks `s.enabled` at O(1) per system per phase — the same cost as the
+per-table `Disabled` exclusion shipped in v0.57.0. The two mechanisms are intentionally
+independent: `SetEnabled` does not reuse `DisableEntity`/`IsDisabled`.
+
+### Added
+
+- **`(*System).SetEnabled(v bool)`** — pauses (`false`) or resumes (`true`) a system for
+  pipeline dispatch. Default is `true` at construction. Idempotent. Unlike `Close`, reversible.
+- **`(*System).IsEnabled() bool`** — queries the current enabled state.
+- **`RunSystem(s *System, dt float32)`** — synchronously invokes one system once, outside the
+  normal pipeline. Bypasses phase ordering, parallel batching, multi-threaded splitting, and the
+  `enabled` flag (explicit invocation always runs). Opens its own implicit `deferScope`; deferred
+  mutations are flushed before `RunSystem` returns, matching `ecs_run`'s `flecs_defer_begin` /
+  `flecs_defer_end` wrap. Panics if `s` is `nil` or `s.IsClosed()`.
+- **`(*Reader).Phases() []ID`** — returns `[PreUpdate, OnFixedUpdate, OnUpdate, PostUpdate]` in
+  execution order.
+- **`(*Reader).SystemsInPhase(phase ID) []*System`** — snapshot of all non-closed (including
+  disabled) systems in the given phase, in registration order. Returns empty non-nil slice for
+  phases with no systems. Panics on non-built-in phase ID, matching `SystemCountInPhase`.
+- **`(*Reader).EachSystem(phase ID, fn func(*System) bool)`** — zero-alloc callback variant;
+  `fn` returning `false` halts iteration. Same panic contract as `SystemsInPhase`.
+
+### Changed
+
+- **`runPhase`** (pipeline executor in `system.go`) — active-set filter extended from
+  `!s.removed && s.phase == p` to `!s.removed && s.enabled && s.phase == p`.
+- **`countPhase`** (internal per-phase count used for frame timing) — same filter extension.
+  `SystemCount` and `SystemCountInPhase` intentionally unchanged: they count all non-closed
+  systems regardless of enabled state.
+
+### Design decisions recorded
+
+1. **`RunSystem` on a disabled system runs anyway.** Matches C `ecs_run`; explicit invocation
+   overrides the pipeline-disabled state.
+2. **`RunSystem` scope.** Opens its own implicit `deferScope`, matching C's
+   `flecs_defer_begin` / `flecs_defer_end` wrap. Callable from outside any other scope.
+3. **Introspection signature.** Ships both `SystemsInPhase` (returns `[]*System`, copy-safe)
+   and `EachSystem` (callback, zero-alloc). Common case gets the slice; hot path gets the callback.
+4. **Snapshot semantics.** `SystemsInPhase` / `EachSystem` return a snapshot at call time.
+   Systems added during iteration are not reflected.
+5. **Naming.** `SetEnabled` / `IsEnabled` on `*System`, not `Enable` / `Disable` — avoids
+   collision with the CanToggle generic `Enable[T]` / `Disable[T]` shipped in v0.35.0.
+
+### Changed (docs)
+
+- `docs/Systems.md` — "System Lifecycle" stub `> Not yet ported` removed; three new sections
+  added after it: **Disabling a System**, **Single-system Run (out-of-pipeline)**, **Pipeline
+  Introspection**. Each with a compilable code example verified in `docs/systems_examples_test.go`.
+- `docs/README.md` — lines 143, 145, 147 flipped to ✅ shipped (v0.58.0) with anchor links.
+- `README.md` — three new feature-list rows for system disabling, `RunSystem`, and pipeline
+  introspection.
+- `ROADMAP.md` — Phase 16.3 shipped entry added; OnTableEmpty/OnTableFill and downstream
+  candidates renumbered (16.3→16.4, 16.4→16.5, ..., 16.9→16.10).
+
 ## v0.57.0 — 2026-05-14 — Phase 16.2: Disabled and Prefab built-in tags
 
 Ships the `Disabled` and `Prefab` built-in tags as a bundle, closing two entries
