@@ -1,4 +1,0 @@
-## iterate iteration 1 (2026-05-14)
-
-Implemented Phase 16.7 OnTableCreate observer event (v0.62.0). Added EventOnTableCreate (kind 4), OnTableCreate(w, fn) and OnTableCreateWithOptions(w, WithYieldExisting(), fn) in observer_table.go. Extended notifyTableCreated in world.go to dispatch EventOnTableCreate for non-empty tables via sentinel ID 0. Empty root table excluded (mirrors upstream is_root suppression). 11 tests in observer_table_test.go covering basic create, deduplication, distinct archetypes, migration, empty-table suppression, disabled observer, yield_existing, re-entry safety, multiple observers, unsubscribe, and yield+future fires. go vet, golangci-lint, go test -race -count=3 all pass; main package coverage 95.0%. Docs updated: CHANGELOG v0.62.0, ROADMAP heading bumped, README feature table, docs/ObserversManual.md new OnTableCreate section, docs/README.md gap entry split.
-
