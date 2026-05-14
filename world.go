@@ -553,6 +553,11 @@ func New() *World {
 	// ecs_add_pair(world, EcsPrefab, EcsOnInstantiate, EcsDontInherit) at
 	// bootstrap.c:1308.
 	applyInstantiatePolicy(w, w.prefabID, w.dontInheritID)
+	// Bootstrap DontInherit on the Disabled tag so that prefabs with disabled
+	// sub-entities do not force instances to also be disabled. Mirrors C
+	// ecs_add_pair(world, EcsDisabled, EcsOnInstantiate, EcsDontInherit) at
+	// bootstrap.c (same pattern as Prefab).
+	applyInstantiatePolicy(w, w.disabledID, w.dontInheritID)
 	// Create the built-in pipeline phases and establish the default ordering chain:
 	// PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate.
 	// Built-in phases are not entity-backed in v1; they are pure Go structs.

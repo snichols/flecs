@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.77.0 — 2026-05-14 — Phase 16.22: AndFrom / OrFrom / NotFrom query operators
+
+Ports the three type-list expansion operators from upstream C flecs (`include/flecs.h:723-725`, `src/query/compiler/compiler_term.c:1225-1251`, `src/query/engine/eval.c:427-616`) as new query term kinds. Closes `docs/README.md` gap entry for `AndFrom / OrFrom / NotFrom`.
+
+### Added
+
+- **`AndFrom(source ID) Term`** — `TermAndFrom TermKind = 8`. Expands `source`'s component list into N `TermAnd` requirements at construction (snapshot). Entities must have **all** of source's inheritable components. Empty source type → vacuous truth, no requirements added.
+- **`OrFrom(source ID) Term`** — `TermOrFrom TermKind = 9`. Expands `source`'s component list into one OR-group at construction. Entities must have **at least one** of source's inheritable components. Empty source type → zero results (empty disjunction = false).
+- **`NotFrom(source ID) Term`** — `TermNotFrom TermKind = 10`. Expands `source`'s component list into N `TermNot` requirements at construction. Entities must have **none** of source's inheritable components. Empty source type → vacuous truth, no exclusions added.
+- **`alwaysFalse` query flag** — `OrFrom` with an empty source sets this flag; `Iter()` returns an exhausted iterator immediately without scanning any tables.
+- **DontInherit bootstrap for `Disabled`** — `world.go` now bootstraps `DontInherit` on the `Disabled` tag (mirrors upstream C `bootstrap.c`), so `Disabled` is excluded from *From expansion just as `Prefab` is.
+
+### Behaviour
+
+- **Snapshot at construction, not live.** The source's component list is read once via `Reader.EntityComponents` in `validateAndSortTerms` and cached as expanded inner terms. Subsequent mutations to the source entity do not affect the query — reconstruct to pick up changes. This deliberately diverges from upstream C, which re-reads `r->table->type` on every iteration (`eval.c:462`).
+- **DontInherit filter.** Components with `DontInherit` policy (e.g. `Prefab`, `Disabled`) are excluded from expansion, matching upstream `EcsIdOnInstantiateDontInherit` filtering (`eval.c:435`, `compiler_term.c:1241`).
+- **Pair IDs are included.** Pair components (e.g. `(ChildOf, parent)`) in the source's type are expanded verbatim into pair terms.
+- **Single-component `OrFrom` degenerates to `TermAnd`** to avoid a one-element OR-group.
+- **Pure-*From queries bypass the hasAnd check.** A query whose entire term list came from *From terms (e.g. standalone `NotFrom(template)` or `OrFrom(template)`) is valid even without a `TermAnd` seed — iteration falls back to all tables, and `matchesTable` applies the Not/Or filters.
+- **Source must be alive at construction.** Panics with `"<caller>: AndFrom/OrFrom/NotFrom source entity <e> is dead or non-existent"`.
+- **Empty source type diverges from upstream C.** Upstream `compiler_term.c:1231` skips (`ctx->skipped++`) empty-type operators; Go flecs follows set-theoretic semantics: `OrFrom(empty)` = empty disjunction = false.
+
+### Upstream C references
+
+- `include/flecs.h:723-725` — `EcsAndFrom`, `EcsOrFrom`, `EcsNotFrom` in `ecs_oper_kind_t`.
+- `src/query/compiler/compiler_term.c:1225-1251` — compile-time type lookup and `EcsIdOnInstantiateDontInherit` filtering.
+- `src/query/compiler/compiler_term.c:1090-1096` — lowering to `EcsQueryAndFrom` / `EcsQueryOrFrom` / `EcsQueryNotFrom` ops.
+- `src/query/engine/eval.c:427-440` — `flecs_query_next_inheritable_id`: per-ID DontInherit skip.
+- `src/query/engine/eval.c:443-616` — `flecs_query_x_from` shared engine and dispatchers.
+- `test/query/src/Operators.c:9670-9801` — upstream behavioural tests confirming prefab-source exclusion.
+
+### Deliberate non-goals
+
+- **Live expansion** — upstream C re-reads `source.type` at every iteration; Go flecs snapshots at construction. Callers requiring live behaviour must re-construct the query.
+- **`AndFromQuery` / `OrFromQuery`** — expand from another query's matched components; too meta, out of scope.
+- **`$Var` query variables** — separate future phase.
+- **Empty-OrFrom as a noop** — upstream treats empty-type *From as a noop; Go flecs follows set-theoretic semantics where empty `OrFrom` = false.
+
+---
+
 ## v0.76.0 — 2026-05-14 — Phase 16.21: Query equality operators
 
 Ports the upstream C flecs equality predicates (`include/flecs.h:1979-1986`, `src/query/engine/eval_pred.c:8-303`, `src/query/compiler/compiler_term.c:640-685`) as three new per-entity filter terms. These compose orthogonally with all existing term kinds.

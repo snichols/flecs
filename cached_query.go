@@ -127,6 +127,10 @@ type CachedQuery struct {
 	// so they never appear in cq.tables. This is cheaper than per-iter filtering.
 	skipDisabled bool
 	skipPrefab   bool
+	// alwaysFalse is set when an OrFrom term was expanded at construction and the
+	// source entity had no inheritable components. Iter returns a zero-result iterator
+	// immediately without consulting the table cache.
+	alwaysFalse bool
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID
 	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
@@ -213,7 +217,11 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
-	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
+	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
+	if alwaysFalse {
+		// OrFrom with empty source: zero results guaranteed; skip table-cache setup.
+		return &CachedQuery{w: w, alwaysFalse: true}
+	}
 	return newCachedQueryInternal(w, cp, andIDs, orGroups)
 }
 
@@ -372,6 +380,15 @@ func (cq *CachedQuery) TermsFull() []Term {
 func (cq *CachedQuery) Iter() *QueryIter {
 	if cq.removed {
 		return &QueryIter{pos: -1}
+	}
+	if cq.alwaysFalse {
+		return &QueryIter{
+			world:           cq.w,
+			terms:           cq.terms,
+			pos:             0, // already past end
+			wildcardTermIdx: -1,
+			wildcardPairPos: -1,
+		}
 	}
 
 	// Resolve fixed-source terms fresh on each Iter() call so that mutations to

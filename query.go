@@ -95,6 +95,22 @@ const (
 	// matches every named entity. Mirrors upstream EcsPredMatch / EcsQueryPredEqMatch.
 	// Construct via [NameMatches]. Cannot be combined with traversal flags or a fixed source.
 	TermNameMatch TermKind = 7
+	// TermAndFrom expands the Src entity's component list into N TermAnd requirements
+	// at query construction (snapshot). Entities must have ALL of Src's inheritable
+	// components. Components with DontInherit policy (e.g. Prefab) are excluded.
+	// Empty source type → vacuous truth, no requirements added. Source must be alive
+	// at construction. Construct via [AndFrom].
+	TermAndFrom TermKind = 8
+	// TermOrFrom expands the Src entity's component list into one OR-group at query
+	// construction (snapshot). Entities must have AT LEAST ONE of Src's inheritable
+	// components. Empty source type → the query yields zero results (empty disjunction
+	// = false). Source must be alive at construction. Construct via [OrFrom].
+	TermOrFrom TermKind = 9
+	// TermNotFrom expands the Src entity's component list into N TermNot requirements
+	// at query construction (snapshot). Entities must have NONE of Src's inheritable
+	// components. Empty source type → vacuous truth, no exclusions added. Source must
+	// be alive at construction. Construct via [NotFrom].
+	TermNotFrom TermKind = 10
 )
 
 // String returns a human-readable name for the TermKind.
@@ -116,6 +132,12 @@ func (k TermKind) String() string {
 		return "NotEq"
 	case TermNameMatch:
 		return "NameMatch"
+	case TermAndFrom:
+		return "AndFrom"
+	case TermOrFrom:
+		return "OrFrom"
+	case TermNotFrom:
+		return "NotFrom"
 	default:
 		return fmt.Sprintf("TermKind(%d)", int(k))
 	}
@@ -206,6 +228,55 @@ func NotEntity(e ID) Term {
 // Empty pattern matches every named entity. Unnamed entities never match.
 // Mirrors upstream flecs_query_match_substr_i (eval_pred.c:8-41).
 func NameMatches(pattern string) Term { return Term{Kind: TermNameMatch, Pattern: pattern} }
+
+// AndFrom returns a TermAndFrom term: at query construction the source entity's
+// component list is read once (snapshot) and expanded into N TermAnd requirements.
+// Entities must have ALL of source's inheritable components.
+//
+// Components with DontInherit policy (e.g. the Prefab tag) are excluded from
+// expansion, mirroring upstream EcsIdOnInstantiateDontInherit filtering.
+// Empty source type → vacuous truth: no requirements added.
+//
+// The source must be alive at construction. Changes to source's component list
+// after construction are NOT reflected — reconstruct the query to pick them up.
+// This deliberately diverges from upstream C which re-reads the type at every
+// iteration (eval.c:462); see CHANGELOG v0.77.0.
+// Panics if source is zero.
+func AndFrom(source ID) Term {
+	if source == 0 {
+		panic("flecs: AndFrom: source entity must not be zero")
+	}
+	return Term{Kind: TermAndFrom, Src: source}
+}
+
+// OrFrom returns a TermOrFrom term: at query construction the source entity's
+// component list is read once (snapshot) and expanded into an OR-group.
+// Entities must have AT LEAST ONE of source's inheritable components.
+//
+// Empty source type → the entire query yields zero results (empty disjunction
+// = false; this diverges from upstream C which skips the operator — see CHANGELOG v0.77.0).
+// Source must be alive at construction; changes after construction are ignored.
+// Panics if source is zero.
+func OrFrom(source ID) Term {
+	if source == 0 {
+		panic("flecs: OrFrom: source entity must not be zero")
+	}
+	return Term{Kind: TermOrFrom, Src: source}
+}
+
+// NotFrom returns a TermNotFrom term: at query construction the source entity's
+// component list is read once (snapshot) and expanded into N TermNot requirements.
+// Entities must have NONE of source's inheritable components.
+//
+// Empty source type → vacuous truth: no exclusions added.
+// Source must be alive at construction; changes after construction are ignored.
+// Panics if source is zero.
+func NotFrom(source ID) Term {
+	if source == 0 {
+		panic("flecs: NotFrom: source entity must not be zero")
+	}
+	return Term{Kind: TermNotFrom, Src: source}
+}
 
 // ScopeBuilder accumulates the inner term list for a [WithoutScope] expression.
 // Obtain a *ScopeBuilder via the buildFn argument of [WithoutScope]; do not
@@ -406,6 +477,10 @@ type Query struct {
 	// unmodified for Terms()/TermsFull() introspection.
 	skipDisabled bool
 	skipPrefab   bool
+	// alwaysFalse is set when an OrFrom term was expanded at construction and the
+	// source entity had no inheritable components. An empty disjunction is false
+	// by set-theoretic semantics; Iter returns a zero-result iterator immediately.
+	alwaysFalse bool
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -512,9 +587,9 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 			panic("flecs: NewQueryFromTerms: cascade requires a cached query; use NewCachedQueryFromTerms")
 		}
 	}
-	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
+	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab}
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -630,6 +705,18 @@ func buildFixedSourcePtrs(w *World, terms []Term) (map[ID]unsafe.Pointer, map[ID
 // so that Up/SelfUp traversal can find non-locally-owned components.
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
+
+	// OrFrom with an empty source type sets alwaysFalse at construction.
+	// No archetype scan needed — return an already-exhausted iterator.
+	if q.alwaysFalse {
+		return &QueryIter{
+			world:           q.w,
+			terms:           q.terms,
+			pos:             0, // already past end
+			wildcardTermIdx: -1,
+			wildcardPairPos: -1,
+		}
+	}
 
 	// Resolve fixed-source terms once at iter start.
 	fixedPtrs, fixedPresent, dead := buildFixedSourcePtrs(q.w, q.terms)
@@ -1870,12 +1957,76 @@ func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
 // builds OR-groups by scanning consecutive TermOr entries, copies and sorts terms
 // (And first by ID, Not second by ID, Or-groups third preserving adjacency, Optional
 // last by ID), applies inheritable auto-promotion (see applyInheritablePromotion),
-// and returns the sorted terms, pre-extracted And-term IDs, and OR-groups.
+// and returns the sorted terms, pre-extracted And-term IDs, OR-groups, and an
+// alwaysFalse flag (set when an OrFrom source had no inheritable components).
 // Panics with messages prefixed by caller on invalid input.
-func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, [][]ID) {
+func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, [][]ID, bool) {
 	if len(terms) == 0 {
 		panic(caller + ": at least one term is required")
 	}
+
+	// Expand *From terms (TermAndFrom, TermOrFrom, TermNotFrom) into their inner terms
+	// using a snapshot of the source entity's component list at construction time.
+	// This runs BEFORE all other validation so expanded terms participate in normal
+	// validation and sorting. Mirrors upstream compiler_term.c:1225-1251.
+	alwaysFalse := false
+	allFromInput := true // true iff every original term was a *From term
+	{
+		r := Reader{world: w}
+		expanded := make([]Term, 0, len(terms))
+		for _, t := range terms {
+			switch t.Kind {
+			case TermAndFrom, TermOrFrom, TermNotFrom:
+				if !w.index.IsAlive(t.Src) {
+					panic(fmt.Sprintf("%s: %s source entity %d is dead or non-existent", caller, t.Kind, t.Src))
+				}
+				comps := r.EntityComponents(t.Src)
+				// Filter: exclude IDs with DontInherit policy (mirrors upstream
+				// flecs_query_next_inheritable_id / EcsIdOnInstantiateDontInherit).
+				filtered := comps[:0:0]
+				for _, cid := range comps {
+					if w.instantiatePolicies[cid]&policyOnInstantiateDontInherit == 0 {
+						filtered = append(filtered, cid)
+					}
+				}
+				switch t.Kind {
+				case TermAndFrom:
+					for _, cid := range filtered {
+						expanded = append(expanded, Term{ID: cid, Kind: TermAnd})
+					}
+				case TermNotFrom:
+					for _, cid := range filtered {
+						expanded = append(expanded, Term{ID: cid, Kind: TermNot})
+					}
+				case TermOrFrom:
+					switch len(filtered) {
+					case 0:
+						// Empty disjunction = false; entire query produces zero results.
+						alwaysFalse = true
+					case 1:
+						// Single-element OR degenerates to And (avoids a degenerate
+						// one-element OR-group and keeps the hasAnd check satisfied).
+						expanded = append(expanded, Term{ID: filtered[0], Kind: TermAnd})
+					default:
+						for _, cid := range filtered {
+							expanded = append(expanded, Term{ID: cid, Kind: TermOr})
+						}
+					}
+				}
+			default:
+				allFromInput = false
+				expanded = append(expanded, t)
+			}
+		}
+		terms = expanded
+	}
+	if alwaysFalse {
+		return nil, nil, nil, true
+	}
+
+	// hasAnd check: require at least one TermAnd unless the query was built entirely
+	// from *From terms (in which case expansion may have produced only Not/Or terms
+	// or no terms at all — all are valid "pure-From" semantics).
 	hasAnd := false
 	for _, t := range terms {
 		if t.Kind == TermAnd {
@@ -1883,7 +2034,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 			break
 		}
 	}
-	if !hasAnd {
+	if !hasAnd && !allFromInput {
 		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional/Or terms would match an unbounded entity set")
 	}
 
@@ -2102,5 +2253,5 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
-	return cp, andIDs, orGroups
+	return cp, andIDs, orGroups, false
 }

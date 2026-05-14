@@ -79,7 +79,10 @@ func NewCachedQueryFromTermsWithOptions(w *World, opts CachedQueryOptions, terms
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTermsWithOptions: world must not be nil")
 	}
-	cp, andIDs, orGroups := validateAndSortTerms(w, "flecs: NewCachedQueryFromTermsWithOptions", terms)
+	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTermsWithOptions", terms)
+	if alwaysFalse {
+		return &CachedQuery{w: w, alwaysFalse: true}
+	}
 
 	if opts.orderByCmp != nil {
 		cid := opts.orderByComponent
