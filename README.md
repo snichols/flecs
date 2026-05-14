@@ -266,6 +266,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 | Stats addon _(v0.84.0)_ | `w.StatsSnapshot()` — goroutine-safe `PipelineStats` snapshot: `WorldStats` (entity/table/frame counts, dt), `[]SystemStats` (per-system invocations, last-tick/avg/cumulative duration, gated-skip count), `[]PhaseStats` (per-phase last-tick + cumulative duration, invocation count); `(*System).SetName` for display names. See [docs/Stats.md](docs/Stats.md). |
+| Units addon _(v0.85.0)_ | `RegisterUnit(fw, name, symbol, base, factor)` — register typed unit entities; `(*Writer).SetUnit(compID, unitID)` — tag a component; `(*World).UnitFor(compID)` — retrieve the unit; `Convert(w, value, from, to)` — walk the Base chain to convert compatible units (multi-hop; ok=false for incompatible). 15 built-in units: Meter/KiloMeter/MilliMeter, Second/MilliSecond/Minute/Hour, Gram/KiloGram/MegaGram, Newton, Joule, Hertz, Radian/Degree. User units and component→unit mappings survive JSON round-trip. See [docs/Units.md](docs/Units.md). |
 | REST API | `NewRESTHandler(w)` — read-only HTTP inspection + snapshot save/load (`GET /stats`, `/components`, `/entities`, `/snapshot`; `PUT /snapshot`) |
 | Structured logging | `w.SetLogger(*slog.Logger)` — lifecycle events at DEBUG level; nil-logger fast path (single pointer compare) |
 

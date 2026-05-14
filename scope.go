@@ -231,6 +231,12 @@ func (r *Reader) Components() []ID {
 	return r.world.registry.IDs()
 }
 
+// Unit returns the Unit descriptor for unitID, if it is a registered unit entity.
+func (r *Reader) Unit(unitID ID) (Unit, bool) {
+	u, ok := r.world.unitDefs[unitID]
+	return u, ok
+}
+
 // ComponentInfo returns metadata for the component identified by id.
 func (r *Reader) ComponentInfo(id ID) (ComponentInfo, bool) {
 	info, ok := r.world.registry.LookupByID(id)

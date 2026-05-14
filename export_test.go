@@ -122,3 +122,17 @@ func SnapshotWorldID(s *Snapshot) uint64 { return s.worldID }
 func NewSnapshotRaw(worldID uint64, blob []byte) *Snapshot {
 	return &Snapshot{blob: blob, worldID: worldID}
 }
+
+// InjectUnitCycle injects a cycle into the world's unit registry for testing
+// the cycle-detection path in rootFactor. For units tests only.
+// After calling this, Convert between the two unit IDs will return ok=false.
+func InjectUnitCycle(w *World, a, b ID) {
+	uA := w.unitDefs[a]
+	uB := w.unitDefs[b]
+	uA.Base = b
+	uB.Base = a
+	uA.Factor = 1
+	uB.Factor = 1
+	w.unitDefs[a] = uA
+	w.unitDefs[b] = uB
+}

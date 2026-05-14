@@ -94,57 +94,76 @@ type World struct {
 	eventTagID           ID                              // built-in Event tag entity (index 44)
 	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45)
 	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46)
-	slotOfID             ID                              // built-in SlotOf relationship entity (index 47); user entities start at index 48
-	monitors             []*monitorObserver              // all registered monitor observers
-	preUpdate            *Phase                          // built-in PreUpdate pipeline phase
-	onUpdate             *Phase                          // built-in OnUpdate pipeline phase (NewSystem default)
-	postUpdate           *Phase                          // built-in PostUpdate pipeline phase
-	onFixedUpdate        *Phase                          // built-in OnFixedUpdate pipeline phase (accumulator loop)
-	phases               []*Phase                        // all phases: built-in then custom, in registration order
-	phaseOrder           []*Phase                        // cached topological order; rebuilt when pipelineDirty
-	pipelineDirty        bool                            // true when phaseOrder/orderedSystems must be rebuilt
-	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
-	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
-	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
-	exclusivePolicies    map[ID]bool                     // relationship entity → exclusive flag
-	canTogglePolicies    map[ID]bool                     // component entity index → CanToggle flag
-	symmetricPolicies    map[ID]bool                     // relationship entity index → symmetric flag
-	transitivePolicies   map[ID]bool                     // relationship entity index → transitive flag
-	reflexivePolicies    map[ID]bool                     // relationship entity index → reflexive flag
-	acyclicPolicies      map[ID]bool                     // relationship entity index → acyclic flag
-	finalPolicies        map[ID]bool                     // entity index → final flag
-	oneOfPolicies        map[ID]ID                       // relationship entity index → required ChildOf parent (raw index)
-	singletonPolicies    map[ID]bool                     // component entity index → singleton flag
-	singletonInstances   map[ID]ID                       // component entity index → entity currently holding it
-	writeOncePolicies    map[ID]bool                     // component entity index → writeOnce flag
-	writeOnceHasBeenSet  map[writeOnceKey]bool           // per-(entity-index, component-ID) first-write tracking
-	traversablePolicies  map[ID]bool                     // relationship entity index → traversable flag
-	relationshipPolicies map[ID]bool                     // entity index → Relationship usage-constraint flag
-	targetPolicies       map[ID]bool                     // entity index → Target usage-constraint flag
-	traitPolicies        map[ID]bool                     // entity index → Trait usage-constraint flag
-	pairIsTagPolicies    map[ID]bool                     // relationship entity index → PairIsTag flag
-	orderedChildren      map[ID]*orderedChildList        // keyed by parent entity index; non-nil entry means ordered
-	sparseID             ID                              // built-in Sparse trait entity (index 34)
-	sparsePolicies       map[ID]bool                     // component entity index → sparse flag
-	sparseStorage        map[ID]*sparseSet               // per-component sparse-set; backs both Sparse and DontFragment components
-	sparseHeld           map[uint32][]ID                 // entity raw-index → sparse/DontFragment component IDs held (for O(k) delete cleanup)
-	dontFragmentPolicies map[ID]bool                     // component entity index → dontFragment flag
-	unionPolicies        map[ID]bool                     // relationship entity index → union flag
-	unionStore           map[ID]*unionRelStore           // relationship index → per-relationship union store
-	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
-	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
-	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
-	workerStageWriters   []Writer                        // cached per-worker Writers; index i binds to stages[i+1]
-	workerCount          int                             // number of persistent goroutines in the worker pool; 0 = serial
-	workerCh             chan func()                     // job channel; nil when workerCount == 0
-	inProgress           bool                            // true while Progress is executing
-	time                 float32                         // total accumulated simulation time
-	frameCount           uint64                          // number of Progress calls
-	fixedTimestep        float32                         // fixed step size; 0 means disabled
-	fixedAccumulator     float32                         // internal accumulator for fixed-step dispatch
-	lastFramePhases      []PhaseStats                    // per-phase timing from the most recent Progress call; one entry per phase in topo order
-	logger               *slog.Logger                    // optional structured logger; nil means no logging
-	dynamicMarshalers    map[ID]dynamicMarshalHooks      // optional custom JSON hooks for dynamic components
+	slotOfID             ID                              // built-in SlotOf relationship entity (index 47)
+	// Built-in unit entities (indices 48–62); user entities start at index 63.
+	meterID       ID // built-in Meter length unit entity (index 48)
+	kiloMeterID   ID // built-in KiloMeter length unit entity (index 49)
+	milliMeterID  ID // built-in MilliMeter length unit entity (index 50)
+	secondID      ID // built-in Second duration unit entity (index 51)
+	milliSecondID ID // built-in MilliSecond duration unit entity (index 52)
+	minuteID      ID // built-in Minute duration unit entity (index 53)
+	hourID        ID // built-in Hour duration unit entity (index 54)
+	gramID        ID // built-in Gram mass unit entity (index 55)
+	kiloGramID    ID // built-in KiloGram mass unit entity (index 56)
+	megaGramID    ID // built-in MegaGram mass unit entity (index 57)
+	newtonID      ID // built-in Newton force unit entity (index 58)
+	jouleID       ID // built-in Joule energy unit entity (index 59)
+	hertzID       ID // built-in Hertz frequency unit entity (index 60)
+	radianID      ID // built-in Radian angle unit entity (index 61)
+	degreeID      ID // built-in Degree angle unit entity (index 62)
+	// Units addon state
+	unitDefs             map[ID]Unit                   // unit entity ID → Unit descriptor (built-in + user)
+	componentUnits       map[ID]ID                     // component entity ID → unit entity ID
+	monitors             []*monitorObserver            // all registered monitor observers
+	preUpdate            *Phase                        // built-in PreUpdate pipeline phase
+	onUpdate             *Phase                        // built-in OnUpdate pipeline phase (NewSystem default)
+	postUpdate           *Phase                        // built-in PostUpdate pipeline phase
+	onFixedUpdate        *Phase                        // built-in OnFixedUpdate pipeline phase (accumulator loop)
+	phases               []*Phase                      // all phases: built-in then custom, in registration order
+	phaseOrder           []*Phase                      // cached topological order; rebuilt when pipelineDirty
+	pipelineDirty        bool                          // true when phaseOrder/orderedSystems must be rebuilt
+	withExpandStack      []ID                          // call-stack tracking for With co-add cycle detection
+	cleanupPolicies      map[ID]cleanupPolicyFlags     // relationship entity → cleanup policy bits
+	instantiatePolicies  map[ID]instantiatePolicyFlags // component entity → OnInstantiate policy bits
+	exclusivePolicies    map[ID]bool                   // relationship entity → exclusive flag
+	canTogglePolicies    map[ID]bool                   // component entity index → CanToggle flag
+	symmetricPolicies    map[ID]bool                   // relationship entity index → symmetric flag
+	transitivePolicies   map[ID]bool                   // relationship entity index → transitive flag
+	reflexivePolicies    map[ID]bool                   // relationship entity index → reflexive flag
+	acyclicPolicies      map[ID]bool                   // relationship entity index → acyclic flag
+	finalPolicies        map[ID]bool                   // entity index → final flag
+	oneOfPolicies        map[ID]ID                     // relationship entity index → required ChildOf parent (raw index)
+	singletonPolicies    map[ID]bool                   // component entity index → singleton flag
+	singletonInstances   map[ID]ID                     // component entity index → entity currently holding it
+	writeOncePolicies    map[ID]bool                   // component entity index → writeOnce flag
+	writeOnceHasBeenSet  map[writeOnceKey]bool         // per-(entity-index, component-ID) first-write tracking
+	traversablePolicies  map[ID]bool                   // relationship entity index → traversable flag
+	relationshipPolicies map[ID]bool                   // entity index → Relationship usage-constraint flag
+	targetPolicies       map[ID]bool                   // entity index → Target usage-constraint flag
+	traitPolicies        map[ID]bool                   // entity index → Trait usage-constraint flag
+	pairIsTagPolicies    map[ID]bool                   // relationship entity index → PairIsTag flag
+	orderedChildren      map[ID]*orderedChildList      // keyed by parent entity index; non-nil entry means ordered
+	sparseID             ID                            // built-in Sparse trait entity (index 34)
+	sparsePolicies       map[ID]bool                   // component entity index → sparse flag
+	sparseStorage        map[ID]*sparseSet             // per-component sparse-set; backs both Sparse and DontFragment components
+	sparseHeld           map[uint32][]ID               // entity raw-index → sparse/DontFragment component IDs held (for O(k) delete cleanup)
+	dontFragmentPolicies map[ID]bool                   // component entity index → dontFragment flag
+	unionPolicies        map[ID]bool                   // relationship entity index → union flag
+	unionStore           map[ID]*unionRelStore         // relationship index → per-relationship union store
+	exclusiveAccess      atomic.Uint64                 //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
+	exclusiveThread      string                        //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
+	stages               []*stage                      // stages[0] = main stage; stages[1..N] = worker stages
+	workerStageWriters   []Writer                      // cached per-worker Writers; index i binds to stages[i+1]
+	workerCount          int                           // number of persistent goroutines in the worker pool; 0 = serial
+	workerCh             chan func()                   // job channel; nil when workerCount == 0
+	inProgress           bool                          // true while Progress is executing
+	time                 float32                       // total accumulated simulation time
+	frameCount           uint64                        // number of Progress calls
+	fixedTimestep        float32                       // fixed step size; 0 means disabled
+	fixedAccumulator     float32                       // internal accumulator for fixed-step dispatch
+	lastFramePhases      []PhaseStats                  // per-phase timing from the most recent Progress call; one entry per phase in topo order
+	logger               *slog.Logger                  // optional structured logger; nil means no logging
+	dynamicMarshalers    map[ID]dynamicMarshalHooks    // optional custom JSON hooks for dynamic components
 	// inheritorCache caches BFS-ordered inheritor slices keyed by prefab entity.
 	// Evicted in full whenever any (IsA, *) pair is added or removed — correct for
 	// transitive chains (e.g. C IsA B IsA P: adding C invalidates P's entry too).
@@ -216,7 +235,22 @@ type World struct {
 //   - Index 45: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
 //   - Index 46: EventMonitor built-in event entity
 //   - Index 47: SlotOf built-in relationship entity (bootstrapped with Exclusive + PairIsTag + Relationship)
-//   - Index 48+: user entities (NewEntity)
+//   - Index 48: Meter built-in length unit entity
+//   - Index 49: KiloMeter built-in length unit entity (Factor=1000, Base=Meter)
+//   - Index 50: MilliMeter built-in length unit entity (Factor=0.001, Base=Meter)
+//   - Index 51: Second built-in duration unit entity
+//   - Index 52: MilliSecond built-in duration unit entity (Factor=0.001, Base=Second)
+//   - Index 53: Minute built-in duration unit entity (Factor=60, Base=Second)
+//   - Index 54: Hour built-in duration unit entity (Factor=3600, Base=Second)
+//   - Index 55: Gram built-in mass unit entity
+//   - Index 56: KiloGram built-in mass unit entity (Factor=1000, Base=Gram)
+//   - Index 57: MegaGram built-in mass unit entity (Factor=1_000_000, Base=Gram)
+//   - Index 58: Newton built-in force unit entity (opaque root in v1)
+//   - Index 59: Joule built-in energy unit entity (opaque root in v1)
+//   - Index 60: Hertz built-in frequency unit entity (opaque root in v1)
+//   - Index 61: Radian built-in angle unit entity
+//   - Index 62: Degree built-in angle unit entity (Factor=math.Pi/180, Base=Radian)
+//   - Index 63+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -505,13 +539,90 @@ func New() *World {
 	rec.Row = uint32(w.empty.Append(eventMonitor))
 	w.eventMonitorID = eventMonitor
 	// Allocate the built-in SlotOf relationship entity (gets index 47).
-	// User entity allocation starts at index 48 after this point.
-	// Mirrors C src/world.c:37 (FLECS_HI_COMPONENT_ID + 12) and bootstrap.c:973.
 	slotOf := w.index.Alloc()
 	rec = w.index.Get(slotOf)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(slotOf))
 	w.slotOfID = slotOf
+	// Allocate the built-in Units addon entities (indices 48–62).
+	// User entity allocation starts at index 63 after this point.
+	meter := w.index.Alloc()
+	rec = w.index.Get(meter)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(meter))
+	w.meterID = meter
+	kiloMeter := w.index.Alloc()
+	rec = w.index.Get(kiloMeter)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(kiloMeter))
+	w.kiloMeterID = kiloMeter
+	milliMeter := w.index.Alloc()
+	rec = w.index.Get(milliMeter)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(milliMeter))
+	w.milliMeterID = milliMeter
+	second := w.index.Alloc()
+	rec = w.index.Get(second)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(second))
+	w.secondID = second
+	milliSecond := w.index.Alloc()
+	rec = w.index.Get(milliSecond)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(milliSecond))
+	w.milliSecondID = milliSecond
+	minute := w.index.Alloc()
+	rec = w.index.Get(minute)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(minute))
+	w.minuteID = minute
+	hour := w.index.Alloc()
+	rec = w.index.Get(hour)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(hour))
+	w.hourID = hour
+	gram := w.index.Alloc()
+	rec = w.index.Get(gram)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(gram))
+	w.gramID = gram
+	kiloGram := w.index.Alloc()
+	rec = w.index.Get(kiloGram)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(kiloGram))
+	w.kiloGramID = kiloGram
+	megaGram := w.index.Alloc()
+	rec = w.index.Get(megaGram)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(megaGram))
+	w.megaGramID = megaGram
+	newton := w.index.Alloc()
+	rec = w.index.Get(newton)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(newton))
+	w.newtonID = newton
+	joule := w.index.Alloc()
+	rec = w.index.Get(joule)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(joule))
+	w.jouleID = joule
+	hertz := w.index.Alloc()
+	rec = w.index.Get(hertz)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(hertz))
+	w.hertzID = hertz
+	radian := w.index.Alloc()
+	rec = w.index.Get(radian)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(radian))
+	w.radianID = radian
+	degree := w.index.Alloc()
+	rec = w.index.Get(degree)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(degree))
+	w.degreeID = degree
+	// Bootstrap unit addon: populate unitDefs for the 15 built-in unit entities.
+	bootstrapBuiltinUnits(w)
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets

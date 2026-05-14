@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.84.0)
+## Shipped (through v0.85.0)
 
 The following features are available in the current release:
 
@@ -85,6 +85,7 @@ The following features are available in the current release:
 - **Multi-variable query support** _(v0.81.0, Phase 16.26)_ — extends Phase 16.25 to N named variables per query. Variables form a dependency graph (variable B depends on A when a term has `srcVar=A, tgtVar=B`); a topo-sort determines the nested join order; cycles panic at construction with the cycle path. Variable cap bumped from 8 to 16 (upstream `EcsQueryMaxVarCount = 64` allows further increases). Fixed-source terms may carry `TgtVar` to constrain a variable's domain from a specific entity's pairs. Closes the multi-variable carve-out in `docs/README.md`. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables).
 - **`RunSystemWorker` — explicit thread dispatch** _(v0.82.0, Phase 16.27)_ — `RunSystemWorker(w, sys, workerIndex, workerCount, dt)` for manual entity-range partitioning outside the pipeline. Fresh per-call command queue; flush before return; partition via `clippedCopy`; disabled flag bypassed. Closes `docs/README.md` gap line 146. See [docs/Systems.md § RunSystemWorker](docs/Systems.md#runsystemworker).
 - **Alerts addon** _(v0.83.0, Phase 16.28)_ — `RegisterAlert` / `Alerts` / `AlertsBySeverity` / `AlertsForEntity`; query-driven raise/clear lifecycle via monitor observer; `AlertInfo`/`AlertWarning`/`AlertError`/`AlertCritical` severity constants; `%d` entity-ID message interpolation; definitions survive JSON round-trip. Closes `docs/README.md` gap line 76. See [docs/Alerts.md](docs/Alerts.md).
+- **Units addon** _(v0.85.0, Phase 16.30)_ — `RegisterUnit` / `(*World).UnitFor` / `(*Writer).SetUnit` / `Convert`; 15 built-in units (Meter, KiloMeter, MilliMeter, Second, MilliSecond, Minute, Hour, Gram, KiloGram, MegaGram, Newton, Joule, Hertz, Radian, Degree) at fixed entity indices 48–62; user-defined units with arbitrary base chains; multi-hop `Convert` walks the chain; definitions survive JSON round-trip. Compound units (`m/s`, `kg·m²/s²`) deferred to Phase 16.30.1. Closes `docs/README.md` gap line 78. See [docs/Units.md](docs/Units.md).
 
 ## Documentation
 

@@ -18,8 +18,10 @@ import (
 // With(32), OrderedChildren(33), Sparse(34), DontFragment(35), Disabled(36),
 // Prefab(37), Wildcard(38), Any(39), EventOnAdd(40), EventOnSet(41),
 // EventOnRemove(42), EventOnTableCreate(43), Event(44), DependsOn(45),
-// EventMonitor(46), SlotOf(47).
-const builtinEntityCount = 47
+// EventMonitor(46), SlotOf(47), Meter(48), KiloMeter(49), MilliMeter(50),
+// Second(51), MilliSecond(52), Minute(53), Hour(54), Gram(55), KiloGram(56),
+// MegaGram(57), Newton(58), Joule(59), Hertz(60), Radian(61), Degree(62).
+const builtinEntityCount = 62
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

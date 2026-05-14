@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 48 built-in entities (including SlotOf at index 47) plus all
+// the 62 built-in entities (including Degree at index 62) plus all
 // registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
@@ -55,6 +55,12 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.Wildcard(): {}, w.Any(): {},
 		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.Event(): {},
 		w.DependsOn(): {}, w.EventMonitor(): {}, w.SlotOf(): {},
+		// Built-in unit entities (indices 48–62).
+		w.Meter(): {}, w.KiloMeter(): {}, w.MilliMeter(): {},
+		w.Second(): {}, w.MilliSecond(): {}, w.Minute(): {}, w.Hour(): {},
+		w.Gram(): {}, w.KiloGram(): {}, w.MegaGram(): {},
+		w.Newton(): {}, w.Joule(): {}, w.Hertz(): {},
+		w.Radian(): {}, w.Degree(): {},
 	}
 	// Phase entities (indices 4-7) are no longer in the public API; use the
 	// test helper to access their IDs so they can be excluded from user counts.
