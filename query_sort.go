@@ -31,11 +31,13 @@ func OrderBy[T any](cmp func(eA ID, vA *T, eB ID, vB *T) int) OrderByFunc {
 }
 
 // CachedQueryOptions carries optional configuration for
-// [NewCachedQueryFromTermsWithOptions]. Construct via [WithOrderBy] or use the
-// zero value for no options.
+// [NewCachedQueryFromTermsWithOptions]. Construct via [WithOrderBy],
+// [WithGroupBy], or combine both; use the zero value for no options.
 type CachedQueryOptions struct {
 	orderByComponent ID
 	orderByCmp       OrderByFunc
+	groupByComponent ID
+	groupByFn        GroupByFunc
 }
 
 // WithOrderBy returns options that sort iteration results by componentID using
@@ -96,7 +98,29 @@ func NewCachedQueryFromTermsWithOptions(w *World, opts CachedQueryOptions, terms
 		}
 	}
 
+	if opts.groupByFn != nil && opts.groupByComponent != 0 {
+		cid := opts.groupByComponent
+		if cid.IsPair() {
+			panic("flecs: NewCachedQueryFromTermsWithOptions: WithGroupBy: pair-form group-by components are not supported")
+		}
+		found := false
+		for _, t := range cp {
+			if t.ID == cid && (t.Kind == TermAnd || t.Kind == TermOptional) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			panic("flecs: NewCachedQueryFromTermsWithOptions: WithGroupBy: group-by component must appear as TermAnd or TermOptional in the query term set")
+		}
+	}
+
 	cq := newCachedQueryInternal(w, cp, andIDs, orGroups)
+	if opts.groupByFn != nil {
+		cq.groupByComponent = opts.groupByComponent
+		cq.groupByFn = opts.groupByFn
+		cq.rebuildGroups()
+	}
 	if opts.orderByCmp != nil {
 		cq.orderBy = opts.orderByComponent
 		cq.orderByCmp = opts.orderByCmp
@@ -205,6 +229,39 @@ func (cq *CachedQuery) rebuildSorted() {
 				entries = append(entries, sortEntry{e, nil, 0, getValPtr(e, nil, 0)})
 			}
 		}
+		// Sparse-only + group-by: not supported in v0.66.0; sort flat.
+		sort.SliceStable(entries, func(i, j int) bool {
+			return cq.orderByCmp(entries[i].entity, entries[i].valPtr,
+				entries[j].entity, entries[j].valPtr) < 0
+		})
+	} else if cq.groupByFn != nil {
+		// Group+sort: collect entities per group, sort within each group, then
+		// concatenate in group-ID order. groupsByID and groupTableStart/End must
+		// already be populated by a preceding rebuildGroups call.
+		cq.groupSortedStart = make(map[uint64]int, len(cq.groupIDs))
+		cq.groupSortedEnd = make(map[uint64]int, len(cq.groupIDs))
+		for _, gid := range cq.groupIDs {
+			groupStart := len(entries)
+			start := cq.groupTableStart[gid]
+			end := cq.groupTableEnd[gid]
+			for _, t := range cq.tables[start:end] {
+				ents := t.Entities()
+				for row, e := range ents {
+					if hasDontFragOrUnion && !sortMatchesSparseFilter(cq.w, cq.terms, e) {
+						continue
+					}
+					entries = append(entries, sortEntry{e, t, row, getValPtr(e, t, row)})
+				}
+			}
+			// Sort this group's slice in place.
+			groupSlice := entries[groupStart:]
+			sort.SliceStable(groupSlice, func(i, j int) bool {
+				return cq.orderByCmp(groupSlice[i].entity, groupSlice[i].valPtr,
+					groupSlice[j].entity, groupSlice[j].valPtr) < 0
+			})
+			cq.groupSortedStart[gid] = groupStart
+			cq.groupSortedEnd[gid] = len(entries)
+		}
 	} else {
 		// Archetype or mixed: walk all cached tables.
 		for _, t := range cq.tables {
@@ -216,12 +273,11 @@ func (cq *CachedQuery) rebuildSorted() {
 				entries = append(entries, sortEntry{e, t, row, getValPtr(e, t, row)})
 			}
 		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			return cq.orderByCmp(entries[i].entity, entries[i].valPtr,
+				entries[j].entity, entries[j].valPtr) < 0
+		})
 	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		return cq.orderByCmp(entries[i].entity, entries[i].valPtr,
-			entries[j].entity, entries[j].valPtr) < 0
-	})
 
 	// Rebuild parallel slices, reusing existing capacity when possible.
 	n := len(entries)
