@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.79.0)
+## Shipped (through v0.80.0)
 
 The following features are available in the current release:
 
@@ -81,6 +81,7 @@ The following features are available in the current release:
 - **AndFrom / OrFrom / NotFrom operators** _(v0.77.0, Phase 16.22)_ — `AndFrom(source ID) Term` / `OrFrom(source ID) Term` / `NotFrom(source ID) Term`. Type-list expansion operators: at construction the source entity's component list is snapshotted and expanded into N TermAnd / one OR-group / N TermNot requirements respectively. DontInherit components (`Prefab`, `Disabled`) are filtered from expansion. Snapshot-at-construction deliberately diverges from upstream C's live re-read. Closes `docs/README.md` AndFrom/OrFrom/NotFrom gap entry.
 - **World-level pre/post merge hooks** _(v0.78.0, Phase 16.23)_ — `OnPreMerge(w, fn) int` / `OnPostMerge(w, fn) int` / `RemovePreMergeHook(w, id)` / `RemovePostMergeHook(w, id)`. Persistent callbacks at every deferred-command merge boundary. Pre-hook mutations batch with the current merge; post-hook mutations queue for next. Hooks fire once per merge boundary (not once per worker stage for multi-threaded systems). `ErrMergeReentry` guard prevents re-entrant `w.Write` from inside hooks. Deliberate divergence from upstream C which has no persistent merge-hook API. Closes `docs/README.md` world-level merge hooks gap entry.
 - **Binary world snapshots** _(v0.79.0, Phase 16.24)_ — `TakeSnapshot(w) *Snapshot` / `RestoreSnapshot(w, s)` / `Bytes(s) ([]byte, error)` / `LoadSnapshot(data []byte) (*Snapshot, error)`. Fast in-memory point-in-time world snapshot with binary serialisation. Captures entity index, archetype component columns, disabled-component bitsets, sparse/DontFragment side-maps, union relationship maps, entity ID range, cleanup/instantiate/OneOf policies, ordered-children lists. Observers and systems are not captured (code, not data). Same-world restriction enforced via worldID token. Closes `docs/README.md` world snapshots gap entry. See [docs/Snapshots.md](docs/Snapshots.md).
+- **Query variables ($Var, single-variable v1)** _(v0.80.0, Phase 16.25)_ — `WithVar(componentID, varName)` / `WithPairTgtVar(rel, varName)` / `(Term).SrcVar(name)` / `(Term).TgtVar(name)` / `(*QueryIter).Var(name) ID`. Named query variables enable relational joins: a variable name acts as a runtime entity slot constrained by one or more terms. Single-variable v1: one user variable plus the implicit `$this`; first-defined variable is the driver; domain enumerated at `Iter()` time; results pre-materialised per-row; 8-variable cap. `CachedQuery` with variables re-executes bindings per `Iter()`. Multi-variable join optimization deferred to Phase 16.25.x. Closes `docs/README.md` query variables gap entry. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables-single-variable-v1).
 
 ## Documentation
 
@@ -125,7 +126,8 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **Observer-driven OnDelete / OnDeleteTarget events** — fire observer callbacks when cleanup policies trigger, matching C's `flecs_invoke_hook` path.
 
 ### Query extensions
-(all originally-planned query extensions shipped)
+
+- **Multi-variable join optimization** _(Phase 16.25.x)_ — extend the v1 single-variable engine to support multiple named variables in one query (e.g., `$planet` and `$star` simultaneously). Add a join-order optimizer that picks the driver variable based on domain size, mirroring the upstream `compiler.c:1002-1021` reorder loop. Also deferred: variable in relationship-name position (`$Rel($this, target)`), negative-variable constraints (`!Foo($this, $planet)`), and table-kind variables (`EcsVarTable`).
 
 ### Addons
 - (all originally-planned addons shipped)

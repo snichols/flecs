@@ -158,6 +158,18 @@ type Term struct {
 	// contribute to the archetype-filter set — it is resolved once at iter start.
 	// Construct via WithSourceTerm or (Term).Source(e). Zero means $this (default).
 	Src ID
+	// srcVar names the variable whose current binding supplies the source entity for
+	// this term. Non-empty → component ID is checked on the variable-bound entity, not
+	// on $this. Mutually exclusive with a non-zero Src and with traversal flags.
+	// Set via WithVar(componentID, varName) or (Term).SrcVar(name). Mirrors EcsIsVariable
+	// on src ref (upstream include/flecs.h:772, ecs_term_ref_t at include/flecs.h:799-811).
+	srcVar string
+	// tgtVar names the variable whose current binding supplies the pair target for
+	// this term. Non-empty → term.ID is the relationship; the concrete pair is
+	// (term.ID, binding). Mutually exclusive with a real pair target in ID.
+	// Set via WithPairTgtVar(rel, varName) or (Term).TgtVar(name). Mirrors EcsIsVariable
+	// on second ref.
+	tgtVar string
 	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
 	// component stores its data in a sparse-set (IsSparse or IsDontFragment returned
 	// true). Sparse is a VALUE-FETCH routing hint: Field[T] reads via sparseSetGet
@@ -435,6 +447,45 @@ func (t Term) Source(e ID) Term {
 	return t
 }
 
+// SrcVar binds this term's source to the named query variable. The component is
+// checked on whatever entity the variable is currently bound to, not on $this.
+// Use as a chained setter: flecs.With(compID).SrcVar("myVar").
+//
+// Panics if name is empty or if this term already has a fixed Src set.
+// Cannot be combined with traversal flags (Up/SelfUp/Cascade).
+// Prefer WithVar as the one-step constructor.
+func (t Term) SrcVar(name string) Term {
+	if name == "" {
+		panic("flecs: Term.SrcVar: variable name must not be empty")
+	}
+	if t.Src != 0 {
+		panic("flecs: Term.SrcVar: cannot combine a variable source with a fixed Src entity")
+	}
+	if t.Traverse != TraverseSelf && t.Traverse != 0 {
+		panic("flecs: Term.SrcVar: cannot combine a variable source with traversal (Up/SelfUp/Cascade)")
+	}
+	t.srcVar = name
+	return t
+}
+
+// TgtVar binds this term's pair target to the named query variable. The term's ID
+// is the relationship; the concrete pair target is resolved from the variable binding
+// at iteration time. Use as a chained setter: flecs.With(relID).TgtVar("myVar").
+//
+// Panics if name is empty or if the term's ID is already a pair (TgtVar and a
+// pair-form ID are mutually exclusive — TgtVar supplies the target at runtime).
+// Prefer WithPairTgtVar as the one-step constructor.
+func (t Term) TgtVar(name string) Term {
+	if name == "" {
+		panic("flecs: Term.TgtVar: variable name must not be empty")
+	}
+	if t.ID.IsPair() {
+		panic("flecs: Term.TgtVar: cannot combine TgtVar with a pair-form ID (TgtVar sets the pair target at runtime)")
+	}
+	t.tgtVar = name
+	return t
+}
+
 // WithSourceTerm returns a TermAnd term that reads componentID from sourceEntity
 // rather than the iterated entity. The term does NOT add to the archetype-filter
 // set — it is resolved once at iter start. If sourceEntity does not hold
@@ -452,6 +503,44 @@ func WithSourceTerm(componentID, sourceEntity ID) Term {
 		panic("flecs: WithSourceTerm: sourceEntity must not be zero")
 	}
 	return Term{ID: componentID, Kind: TermAnd, Src: sourceEntity}
+}
+
+// WithVar returns a TermAnd term that checks componentID on the entity bound to
+// varName rather than the iterated $this entity. Use it to constrain the domain of
+// a named query variable — the variable is bound to every entity that owns the
+// component. Equivalent to Component($varName) in the Flecs Query Language.
+//
+// Panics if componentID or varName is zero/empty.
+//
+// v1 limitation: only the first-defined variable is the driver; multi-variable
+// join optimization is deferred to Phase 16.25.x.
+// Mirrors EcsIsVariable on ecs_term_ref_t.src (upstream include/flecs.h:772).
+func WithVar(componentID ID, varName string) Term {
+	if componentID == 0 {
+		panic("flecs: WithVar: componentID must not be zero")
+	}
+	if varName == "" {
+		panic("flecs: WithVar: varName must not be empty")
+	}
+	return Term{ID: componentID, Kind: TermAnd, srcVar: varName}
+}
+
+// WithPairTgtVar returns a TermAnd term that matches the pair (rel, $varName) on
+// the iterated $this entity. The concrete pair target is resolved from the named
+// variable's current binding on each iteration step, producing one result row per
+// matching (thisEntity, variableBinding) pair. Equivalent to (rel, $varName) in FQL.
+//
+// Panics if rel or varName is zero/empty.
+//
+// Mirrors EcsIsVariable on ecs_term_ref_t.second (upstream include/flecs.h:772).
+func WithPairTgtVar(rel ID, varName string) Term {
+	if rel == 0 {
+		panic("flecs: WithPairTgtVar: rel must not be zero")
+	}
+	if varName == "" {
+		panic("flecs: WithPairTgtVar: varName must not be empty")
+	}
+	return Term{ID: rel, Kind: TermAnd, tgtVar: varName}
 }
 
 // Query holds a structured list of query terms used to match archetype tables.
@@ -481,6 +570,15 @@ type Query struct {
 	// source entity had no inheritable components. An empty disjunction is false
 	// by set-theoretic semantics; Iter returns a zero-result iterator immediately.
 	alwaysFalse bool
+	// varSlots maps each distinct variable name to a slot index (0-based).
+	// Slots are assigned in term-list order of first appearance. Nil = no variables.
+	// Mirrors upstream query->vars[] ownership (src/query/types.h:439-444).
+	varSlots map[string]int
+	// driverVar is the name of the first-defined variable (driver for the join loop).
+	// The driver's domain is enumerated at Iter(); all other terms are evaluated per
+	// binding. No auto-optimization for v1; first-defined is always the driver.
+	// See upstream compiler.c:1002-1021 (optimizer — explicitly out of scope for v1).
+	driverVar string
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -587,9 +685,10 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 			panic("flecs: NewQueryFromTerms: cascade requires a cached query; use NewCachedQueryFromTerms")
 		}
 	}
+	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewQueryFromTerms", terms)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse}
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -684,6 +783,224 @@ func buildFixedSourcePtrs(w *World, terms []Term) (map[ID]unsafe.Pointer, map[ID
 	return ptrs, present, false
 }
 
+// varRow holds one pre-computed result row for a variable query. thisEntity is
+// the $this entity; thisTable is its archetype table; bindings is a slot-indexed
+// slice of variable values for this row (len = number of query variables).
+type varRow struct {
+	thisEntity ID
+	thisTable  *table.Table
+	bindings   []ID
+}
+
+// collectVarDomain enumerates the set of entities that can serve as the driver
+// variable binding.
+//
+// When SrcVar driver-constraining terms exist (WithVar(comp, driverVar)), the
+// domain is the intersection of entities that own those components — built by
+// walking TablesFor(comp) for each constraining term (upstream compiler.c:128+).
+//
+// When only TgtVar terms reference the driver (WithPairTgtVar), the domain is
+// all entities that appear as a pair target for those relationships — found by
+// scanning all tables for matching pair components.
+func (q *Query) collectVarDomain() []ID {
+	// Collect SrcVar domain (intersection across all SrcVar constraints on the driver).
+	var srcSet map[ID]struct{}
+	for _, t := range q.terms {
+		if t.srcVar != q.driverVar {
+			continue
+		}
+		tables := q.w.TablesFor(t.ID)
+		if srcSet == nil {
+			srcSet = make(map[ID]struct{})
+			for _, tbl := range tables {
+				for _, e := range tbl.Entities() {
+					srcSet[e] = struct{}{}
+				}
+			}
+		} else {
+			next := make(map[ID]struct{}, len(srcSet))
+			for _, tbl := range tables {
+				for _, e := range tbl.Entities() {
+					if _, ok := srcSet[e]; ok {
+						next[e] = struct{}{}
+					}
+				}
+			}
+			srcSet = next
+		}
+	}
+	if srcSet != nil {
+		domain := make([]ID, 0, len(srcSet))
+		for e := range srcSet {
+			domain = append(domain, e)
+		}
+		return domain
+	}
+
+	// No SrcVar constraints: collect all pair targets for TgtVar relationships.
+	seen := make(map[ID]struct{})
+	var domain []ID
+	for _, t := range q.terms {
+		if t.tgtVar != q.driverVar {
+			continue
+		}
+		for _, tbl := range q.w.tables {
+			for _, cid := range tbl.Type() {
+				if !cid.IsPair() {
+					continue
+				}
+				if ID(cid.First()) == t.ID {
+					target := cid.Second()
+					if _, ok := seen[target]; !ok {
+						seen[target] = struct{}{}
+						domain = append(domain, target)
+					}
+				}
+			}
+		}
+	}
+	return domain
+}
+
+// varCheckTable returns true if table t satisfies all non-variable archetype
+// constraints (And/Not/OR-group terms) and all variable-resolved TgtVar pair
+// constraints for the given bindings.
+func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
+	if q.skipDisabled && t.HasComponent(q.w.disabledID) {
+		return false
+	}
+	if q.skipPrefab && t.HasComponent(q.w.prefabID) {
+		return false
+	}
+	for _, term := range q.terms {
+		switch term.Kind {
+		case TermAnd:
+			switch {
+			case term.tgtVar != "":
+				// Variable-target pair: resolve binding and check concrete pair.
+				slot := q.varSlots[term.tgtVar]
+				binding := bindings[slot]
+				if binding == 0 || !t.HasComponent(MakePair(term.ID, binding)) {
+					return false
+				}
+			case term.srcVar == "" && term.Src == 0 && !term.DontFragment && !term.Union:
+				// Regular $this archetype And term.
+				if (term.Traverse == TraverseSelf || term.Traverse == 0) && !t.HasComponent(term.ID) {
+					return false
+				}
+			}
+		case TermNot:
+			if term.srcVar == "" && term.tgtVar == "" && !term.DontFragment && !term.Union {
+				if t.HasComponent(term.ID) {
+					return false
+				}
+			}
+		}
+	}
+	for _, group := range q.orGroups {
+		matched := false
+		for _, id := range group {
+			if t.HasComponent(id) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// buildVarRows enumerates all (thisEntity, driverBinding) pairs that satisfy the
+// variable query and returns them as pre-computed rows. Called once per Iter().
+//
+// Driver domain enumeration mirrors upstream flecs_query_var_set_entity / range
+// (src/query/engine/eval_utils.c:58-235). Join order: driver outer, $this inner.
+// No auto-optimization (upstream compiler.c:1002-1021 is out of scope for v1).
+func (q *Query) buildVarRows() []varRow {
+	driverDomain := q.collectVarDomain()
+	if len(driverDomain) == 0 {
+		return nil
+	}
+	driverSlot := q.varSlots[q.driverVar]
+	nSlots := len(q.varSlots)
+
+	// hasThisConstraint: true when any TermAnd term constrains $this — either a regular
+	// And term (SrcVar="") or a TgtVar pair term. Pure SrcVar terms (SrcVar!="") only
+	// constrain the driver entity and do not drive $this iteration.
+	// When false, the driver entity itself acts as $this (single-loop mode).
+	hasThisConstraint := false
+	for _, t := range q.terms {
+		if t.Kind == TermAnd && t.srcVar == "" && t.Src == 0 {
+			hasThisConstraint = true
+			break
+		}
+	}
+
+	// Pre-compute $this candidate tables from the smallest non-variable regular And term.
+	// TgtVar pair terms are excluded from seeding (they need per-binding resolution);
+	// all world tables are used as the base when no regular seed term exists.
+	var baseTables []*table.Table
+	if hasThisConstraint {
+		seedIdx := -1
+		minCount := 0
+		for i, t := range q.terms {
+			if t.Kind != TermAnd || t.srcVar != "" || t.tgtVar != "" || t.Src != 0 ||
+				t.DontFragment || t.Union || t.Traverse != TraverseSelf {
+				continue // TgtVar, SrcVar, fixed-source, sparse: not archetype seeds
+			}
+			c := q.w.compIndex.Count(t.ID)
+			if seedIdx == -1 || c < minCount {
+				minCount = c
+				seedIdx = i
+			}
+		}
+		if seedIdx >= 0 {
+			baseTables = q.w.TablesFor(q.terms[seedIdx].ID)
+		} else {
+			baseTables = make([]*table.Table, 0, len(q.w.tables))
+			for _, t := range q.w.tables {
+				baseTables = append(baseTables, t)
+			}
+		}
+	}
+
+	bindings := make([]ID, nSlots)
+	var rows []varRow
+	for _, driverEnt := range driverDomain {
+		bindings[driverSlot] = driverEnt
+
+		if !hasThisConstraint {
+			// Single-loop: driver entity is $this. Apply all table-level checks on its table.
+			// Used for queries like: WithVar(Planet, "planet"), Without(Star).
+			rec := q.w.index.Get(driverEnt)
+			if rec == nil || rec.Table == nil {
+				continue
+			}
+			if !q.varCheckTable(rec.Table, bindings) {
+				continue
+			}
+			b := make([]ID, nSlots)
+			copy(b, bindings)
+			rows = append(rows, varRow{thisEntity: driverEnt, thisTable: rec.Table, bindings: b})
+		} else {
+			// Nested-loop: find $this entities from baseTables, filtered by variable constraints.
+			for _, t := range baseTables {
+				if !q.varCheckTable(t, bindings) {
+					continue
+				}
+				for _, e := range t.Entities() {
+					b := make([]ID, nSlots)
+					copy(b, bindings)
+					rows = append(rows, varRow{thisEntity: e, thisTable: t, bindings: b})
+				}
+			}
+		}
+	}
+	return rows
+}
+
 // Iter starts a fresh iteration over all archetype tables matching the query.
 //
 // Seed strategy (all-archetype mode): pick the TermAnd term whose component-index
@@ -731,6 +1048,26 @@ func (q *Query) Iter() *QueryIter {
 			pos:                0, // already past end
 			wildcardTermIdx:    -1,
 			wildcardPairPos:    -1,
+		}
+	}
+
+	// Variable query: pre-compute all (thisEntity, binding) result rows and return a
+	// var-mode iterator. The existing archetype/sparse fast paths are bypassed.
+	// Backward-compat: zero variables → varSlots is nil → no overhead.
+	if q.varSlots != nil {
+		rows := q.buildVarRows()
+		return &QueryIter{
+			q:                  q,
+			world:              q.w,
+			terms:              q.terms,
+			varSlots:           q.varSlots,
+			varBindings:        make([]ID, len(q.varSlots)),
+			varRows:            rows,
+			varRowPos:          -1,
+			wildcardTermIdx:    -1,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
@@ -1007,6 +1344,14 @@ type QueryIter struct {
 	sortedPos      int              // current position; -1 = before first
 	sortedEntities []ID             // sorted entity list (reference into CachedQuery)
 	sortedRows     []sortedFieldRow // parallel (table, row) for each sorted entity
+	// variable-query state — non-nil when the query has named variables ($Var).
+	// Results are pre-computed by buildVarRows at Iter() time; nextVar() walks them.
+	// Backward-compat: nil varSlots → no variable overhead (existing fast paths apply).
+	// Mirrors upstream query->vars[] + ctx->vars lifetime model (src/query/types.h:439-444).
+	varSlots    map[string]int // variable name → slot index; nil = no variables
+	varBindings []ID           // current binding per slot (updated by nextVar)
+	varRows     []varRow       // pre-computed result rows; nil = zero results
+	varRowPos   int            // current position in varRows; -1 = before first
 }
 
 // Next advances to the next matching table (or next wildcard expansion row
@@ -1025,6 +1370,9 @@ type QueryIter struct {
 // entity at a time (not one table at a time). Count() returns 1 and Entities()
 // returns a single-element slice for each step.
 func (it *QueryIter) Next() bool {
+	if it.varSlots != nil {
+		return it.nextVar()
+	}
 	if it.sortedMode {
 		return it.nextSorted()
 	}
@@ -1176,6 +1524,44 @@ func (it *QueryIter) nextMixed() bool {
 		}
 		it.sparseTablePos = -1 // incremented to 0 at top of next iteration
 	}
+}
+
+// nextVar advances to the next pre-computed variable result row. It is called by
+// Next() when varSlots != nil. Each call sets current, sparseEntity, and varBindings
+// from the next varRow. Returns false when all rows are exhausted.
+func (it *QueryIter) nextVar() bool {
+	it.varRowPos++
+	if it.varRowPos >= len(it.varRows) {
+		it.current = nil
+		it.sparseEntity = 0
+		return false
+	}
+	row := &it.varRows[it.varRowPos]
+	it.current = row.thisTable
+	it.sparseEntity = row.thisEntity
+	copy(it.varBindings, row.bindings)
+	return true
+}
+
+// Var returns the current binding of the named variable for the current iteration
+// row. Panics if name is not defined in this query's variable set, or if the
+// iterator is not positioned on a valid row (Next has not been called or returned
+// false). Only valid for iterators produced by variable queries (WithVar /
+// WithPairTgtVar terms).
+//
+// Mirrors upstream flecs_query_var_get_entity (src/query/engine/eval_utils.c:58+).
+func (it *QueryIter) Var(name string) ID {
+	if it.varSlots == nil {
+		panic(fmt.Sprintf("flecs: QueryIter.Var: query has no variables; %q is undefined", name))
+	}
+	slot, ok := it.varSlots[name]
+	if !ok {
+		panic(fmt.Sprintf("flecs: QueryIter.Var: variable %q is not defined in this query", name))
+	}
+	if it.varRowPos < 0 {
+		panic("flecs: QueryIter.Var: not positioned on a valid row (call Next first)")
+	}
+	return it.varBindings[slot]
 }
 
 // matchesSparseTerms returns true if entity e satisfies all DontFragment, Union,
@@ -1489,6 +1875,9 @@ func (it *QueryIter) Table() *table.Table {
 // the full table). For sparse or mixed-sparse iterators, Count() is always 1
 // (entity-at-a-time mode). Panics if not positioned.
 func (it *QueryIter) Count() int {
+	if it.varSlots != nil {
+		return 1 // variable queries emit one entity per step
+	}
 	if it.allSparse || it.hasSparseTerms {
 		return 1
 	}
@@ -1503,6 +1892,12 @@ func (it *QueryIter) Count() int {
 // sparse or mixed-sparse iterators this is a single-element slice containing the
 // current entity. The slice is invalidated by the next Next call.
 func (it *QueryIter) Entities() []ID {
+	if it.varSlots != nil {
+		if it.sparseEntity == 0 {
+			return nil
+		}
+		return []ID{it.sparseEntity}
+	}
 	if it.allSparse || it.hasSparseTerms {
 		if it.sparseEntity == 0 {
 			return nil
@@ -1576,6 +1971,25 @@ func (it *QueryIter) clippedCopy(workerIdx, workerTotal int) *QueryIter {
 // returned []T header's data pointer is an unsafe.Pointer to T, which the GC
 // traces correctly for pointer-containing element types.
 func Field[T any](it *QueryIter, id ID) []T {
+	// Variable-source term: resolve the current binding and read component from that entity.
+	// Mirrors fixed-source semantics: returns a 1-element slice.
+	if it.varSlots != nil {
+		for _, term := range it.terms {
+			if term.ID == id && term.srcVar != "" {
+				slot := it.varSlots[term.srcVar]
+				srcEnt := it.varBindings[slot]
+				rec := it.world.index.Get(srcEnt)
+				if rec == nil || !rec.Table.HasComponent(id) {
+					panic(fmt.Sprintf("flecs: Field[%s]: variable-source component %d is not present on bound entity", reflect.TypeFor[T](), id))
+				}
+				p := rec.Table.Get(int(rec.Row), id)
+				if p == nil {
+					return make([]T, 1)
+				}
+				return unsafe.Slice((*T)(p), 1)
+			}
+		}
+	}
 	// Fixed-source term: return 1-element slice backed by the snapshot pointer.
 	// The pointer is valid for the lifetime of this iter (snapshot-at-iter-start contract).
 	for _, term := range it.terms {
@@ -1953,6 +2367,36 @@ func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
 	return true
 }
 
+// buildVarSlotsFromTerms scans terms for srcVar/tgtVar fields, assigns slot indices
+// in first-appearance order, and returns the slot map and the driver variable name.
+// The driver is the first variable encountered across all terms (term-list order,
+// srcVar before tgtVar within a single term). Panics if more than 8 distinct names
+// are found (v1 cap; upstream EcsQueryMaxVarCount = 64).
+func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string) {
+	var slots map[string]int
+	var driver string
+	for _, t := range terms {
+		for _, name := range [2]string{t.srcVar, t.tgtVar} {
+			if name == "" {
+				continue
+			}
+			if slots == nil {
+				slots = make(map[string]int)
+			}
+			if _, ok := slots[name]; !ok {
+				if len(slots) >= 8 {
+					panic(caller + ": query variable count exceeds the v1 cap of 8 (upstream EcsQueryMaxVarCount = 64; multi-variable support is Phase 16.25.x)")
+				}
+				slots[name] = len(slots)
+				if driver == "" {
+					driver = name
+				}
+			}
+		}
+	}
+	return slots, driver
+}
+
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
 // builds OR-groups by scanning consecutive TermOr entries, copies and sorts terms
 // (And first by ID, Not second by ID, Or-groups third preserving adjacency, Optional
@@ -2052,6 +2496,24 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
+	// Validate variable terms: mutual exclusivity and traversal restrictions.
+	// SrcVar mirrors upstream EcsIsVariable on src ref (include/flecs.h:772).
+	for i, t := range terms {
+		if t.srcVar != "" {
+			if t.Src != 0 {
+				panic(fmt.Sprintf("%s: term at index %d has both SrcVar %q and a fixed Src entity; they are mutually exclusive", caller, i, t.srcVar))
+			}
+			if t.Traverse != TraverseSelf && t.Traverse != TraverseExplicitSelf && t.Traverse != 0 {
+				panic(fmt.Sprintf("%s: term at index %d (SrcVar=%q) cannot be combined with traversal flags (Up/SelfUp/Cascade)", caller, i, t.srcVar))
+			}
+		}
+		if t.tgtVar != "" {
+			if t.ID.IsPair() {
+				panic(fmt.Sprintf("%s: term at index %d has both TgtVar %q and a pair ID; they are mutually exclusive (TgtVar sets the pair target at runtime)", caller, i, t.tgtVar))
+			}
+		}
+	}
+
 	// Validate fixed-source terms (top-level and inside scope Sub).
 	for i, t := range terms {
 		if t.Kind == TermScope {
@@ -2122,10 +2584,15 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	// TermScope has ID=0 and sub-terms live in a separate namespace; equality terms
 	// (TermEq, TermNotEq, TermNameMatch) reference entity IDs / patterns, not
 	// component IDs subject to the uniqueness constraint.
+	// Variable terms (SrcVar/TgtVar set) are also excluded: their ID semantics differ
+	// (SrcVar: component on variable entity; TgtVar: relationship, not a component ID).
 	seen := make(map[ID]struct{}, len(terms))
 	for _, t := range terms {
 		if t.Kind == TermScope || t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
 			continue
+		}
+		if t.srcVar != "" || t.tgtVar != "" {
+			continue // variable terms have distinct semantics; exclude from dup check
 		}
 		if _, dup := seen[t.ID]; dup {
 			panic(fmt.Sprintf("%s: duplicate term ID %d; each ID may appear at most once across all term kinds", caller, t.ID))
@@ -2140,12 +2607,14 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	// upstream's plan-order: setfixed ops precede $this-bound TermAnd ops).
 	// Scope and equality terms are appended after Or-groups in original order so that
 	// per-entity evaluation is independent of archetype sorting.
-	var fixedSrcAndTerms, normalAndTerms, notTerms, eqTerms, optTerms, scopeTerms []Term
+	var fixedSrcAndTerms, normalAndTerms, varAndTerms, notTerms, eqTerms, optTerms, scopeTerms []Term
 	for _, t := range terms {
 		switch t.Kind {
 		case TermAnd:
 			if t.Src != 0 {
 				fixedSrcAndTerms = append(fixedSrcAndTerms, t)
+			} else if t.srcVar != "" || t.tgtVar != "" {
+				varAndTerms = append(varAndTerms, t) // variable terms sorted separately
 			} else {
 				normalAndTerms = append(normalAndTerms, t)
 			}
@@ -2162,6 +2631,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	sort.Slice(fixedSrcAndTerms, func(i, j int) bool { return fixedSrcAndTerms[i].ID < fixedSrcAndTerms[j].ID })
 	sort.Slice(normalAndTerms, func(i, j int) bool { return normalAndTerms[i].ID < normalAndTerms[j].ID })
 	andTerms := append(fixedSrcAndTerms, normalAndTerms...)
+	andTerms = append(andTerms, varAndTerms...)
 	sort.Slice(notTerms, func(i, j int) bool { return notTerms[i].ID < notTerms[j].ID })
 	sort.Slice(optTerms, func(i, j int) bool { return optTerms[i].ID < optTerms[j].ID })
 
@@ -2244,11 +2714,11 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	}
 
 	// Extract And-term IDs for backward compat (Terms() / andIDs).
-	// Only non-fixed-source TermAnd terms are included (fixed-source terms don't
-	// participate in archetype matching and are not meaningful as plain IDs).
+	// Only non-fixed-source, non-variable TermAnd terms are included: variable terms
+	// don't constrain $this archetype membership and are not meaningful as plain IDs.
 	var andIDs []ID
 	for _, t := range andTerms {
-		if t.Src == 0 {
+		if t.Src == 0 && t.srcVar == "" && t.tgtVar == "" {
 			andIDs = append(andIDs, t.ID)
 		}
 	}

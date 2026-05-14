@@ -260,6 +260,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Disabled + Prefab built-in tags _(v0.57.0)_ | `DisableEntity(fw, e)` / `EnableEntity(fw, e)` / `IsDisabled(scope, e)` — adds/removes the `Disabled` tag; excluded from ordinary queries (O(1) per-table skip). `MarkPrefab(fw, e)` / `IsPrefab(scope, e)` / `w.Prefab()` — marks an entity as a build template; excluded from ordinary queries; `Prefab` tag is `DontInherit` so IsA instances are not tagged. Both: opt in by mentioning the tag in any query term kind. |
 | JSON serialization | `w.MarshalJSON()`, `w.UnmarshalJSON()` (entities + components + names + pairs: ChildOf/IsA hierarchies + custom tag/data pairs) |
 | Binary snapshots _(v0.79.0)_ | `TakeSnapshot(w)` / `RestoreSnapshot(w, s)` — in-memory point-in-time world snapshot; `Bytes(s)` / `LoadSnapshot(data)` for disk/network. Captures entities, components, sparse/union state, policies, ordered children, recycle queue. Observers and systems are not captured. Same-world restriction. See [docs/Snapshots.md](docs/Snapshots.md). |
+| Query variables ($Var, single-variable v1) _(v0.80.0)_ | `WithVar(componentID, varName)` / `WithPairTgtVar(rel, varName)` / `(*QueryIter).Var(name) ID` — named runtime entity slots that constrain results across related entities (relational join). Example: `With(shipID), WithPairTgtVar(dockedToID, "planet"), WithVar(planetID, "planet")` yields one row per (ship, planet) docking pair. First-defined variable is the driver; 8-variable cap. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables-single-variable-v1). |
 | Change detection | `q.Changed()` — opt-in per-table dirty tracking on `CachedQuery` |
 | Stats / observability | `w.Stats()` — entity/table/query/system counts, per-phase frame timing, per-component table counts |
 | REST API | `NewRESTHandler(w)` — read-only HTTP inspection + snapshot save/load (`GET /stats`, `/components`, `/entities`, `/snapshot`; `PUT /snapshot`) |
@@ -287,6 +288,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
 | Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates scale linearly; deferred mutations serialize on shared queue until Phase 11.0) | ✅ |
 | REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
+| Query variables ($Var) | ✅ single-variable v1 (`WithVar`, `WithPairTgtVar`, `Var`; multi-variable join deferred) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |
 
 See [ROADMAP.md](ROADMAP.md) for the full list of deferred work.

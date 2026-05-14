@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.80.0 — 2026-05-14 — Phase 16.25: Query variables ($Var, single-variable v1)
+
+Adds named query variables (`$Var`) so terms can express relational joins across related entities. Single-variable v1: one named variable plus the implicit `$this`. Multi-variable join optimization is deferred to Phase 16.25.x. Closes the `docs/README.md` gap entry for query variables.
+
+### Added
+
+- **`flecs.WithVar(componentID ID, varName string) Term`** — creates a term that checks `componentID` on the entity bound to `$varName` (SrcVar term). The first variable in the term list becomes the *driver*: its domain is enumerated at `Iter()` time as the intersection of all `WithVar` constraints for that name.
+- **`flecs.WithPairTgtVar(rel ID, varName string) Term`** — creates a pair term `(rel, $varName)` on `$this` (TgtVar term). At iteration, the pair target is resolved to the driver's current binding.
+- **`(Term).SrcVar(name string) Term`** / **`(Term).TgtVar(name string) Term`** — chained setters for symmetry with `(Term).Source(e)` from Phase 16.18.
+- **`(*QueryIter).Var(name string) ID`** — returns the current binding for the named variable. Panics on undefined name or if `Next()` has not been called.
+- **Variable query path in `NewQueryFromTerms` / `NewCachedQueryFromTerms`** — at construction, variable names are collected into a `map[string]int` slot table; the first-defined name is the driver. Cap: 8 named variables (panics on excess).
+- **`CachedQuery` support** — a cached query with variables re-executes `buildVarRows()` on each `Iter()` call (bindings re-computed; driver-term archetype membership is cached).
+- **Documented in `docs/Queries.md`** — new § Query variables (single-variable v1) with the spaceships-and-planets worked example, join-semantics explanation, and v1 limitations callout.
+
+### Compose rules
+
+- **With `WithSourceTerm`** — fixed-source terms resolve once at iter start; independent of variable bindings.
+- **With `Without`** — applied as archetype filter on `$this` candidate tables.
+- **With `Or` groups** — evaluated per candidate table.
+- **`Disabled` / `Prefab` tables** — excluded from `$this` candidate tables (same O(1) per-table check as the non-variable path).
+
+### v1 limitations (explicitly deferred)
+
+- **Single variable only** — one named variable plus `$this`. Multi-variable join (`$planet`, `$star`, …) deferred to Phase 16.25.x.
+- **No join-order optimization** — first-defined variable is always the driver. Auto-reorder (upstream `compiler.c:1002-1021`) is Phase 16.25.x.
+- **No FQL string parsing** — programmatic API only; `$Var` string syntax is not parsed.
+- **Entity-kind variables only** — no table-kind variables (`EcsVarTable`).
+- **Positive constraints only** — negative-variable constraints (`!Foo($this, $planet)`) are not supported.
+- **`src` and `second` positions only** — variable in relationship-name position is not supported.
+
+### Upstream C references
+
+- `EcsIsVariable` (`include/flecs.h:772`), `ecs_term_ref_t` (`include/flecs.h:799-811`), variable kinds (`src/query/types.h:20-37`), variable discovery (`src/query/compiler/compiler.c:128`), iterator binding (`src/query/engine/eval_utils.c:58-235`). Join optimizer (`compiler.c:1002-1021`) — explicitly out of scope for v1.
+
+---
+
 ## v0.79.0 — 2026-05-14 — Phase 16.24: Binary world snapshots
 
 Adds a fast, binary in-memory snapshot facility. Closes the `docs/README.md` gap entry for world snapshots.
