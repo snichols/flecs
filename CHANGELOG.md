@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.54.0 — 2026-05-13 — Phase 15.22: Union relationship trait
+
+### Added
+
+- **`Union` relationship trait** — `SetUnion(w *World, relID ID)`, `IsUnion(s scope, relID ID) bool`,
+  `EachUnion(s scope, relID ID, fn func(e ID, target ID))`.
+  Marks a relationship as union: at most one target per entity, stored in a per-relationship side
+  map (`unionStore`) rather than the archetype table. Unlike `Exclusive`, union pairs never trigger
+  an archetype transition — the entity's archetype is unchanged when the target is added, replaced,
+  or removed. Union implies Exclusive (both traits are active; the exclusive path is also enforced).
+- **`unionStore` / `unionRelStore`** — per-relationship dense slice + index map for O(1) lookup and
+  stable iteration order. Keyed by relationship index (not full entity ID) for generation safety.
+- **`unionStoreSet` / `unionStoreRemove` / `unionStoreRemoveEntity`** — internal helpers wiring the
+  union store into `addIDImmediate` / `removeIDImmediate` / `deleteOne`.
+- **`isUnionTermID(w, id) bool`** — returns true when a query term refers to a union pair. Drives
+  `Term.Union` routing hint.
+- **`Term.Union bool`** — new field on `Term`, stamped by `NewQuery` / `NewCachedQuery`. Signals
+  the iteration engine to consult the union store rather than archetype columns.
+- **Pure-union query iteration** — when all `TermAnd` terms are union pairs, `QueryIter` iterates
+  the smallest matching union store directly (`nextUnionOnly`), without visiting any archetype table.
+- **`CachedQuery.unionAndOnly bool`** — pure-union cached queries skip `tryMatchTable` (union pairs
+  have no archetype columns to track); `Iter()` drives from the union store directly.
+- **`Reader.HasID` / `Reader.OwnsID` union branch** — pair IDs for union relationships are now
+  resolved through the union store before the archetype table lookup.
+- **`batchForEntity` union bypass** — deferred `cmdAddID` / `cmdRemoveID` commands for union pairs
+  skip `scratch1` modification and `cmdSkip` rewriting, so `dispatch` routes them to
+  `addIDImmediate` / `removeIDImmediate` which write to the union store.
+- **Marshal round-trip** — `MarshalJSON` emits `union_relationship_serials` (which entity serials
+  are union relationships) and `union_relationships` (active targets per entity). `UnmarshalJSON`
+  restores policies in Phase 1b (after entity allocation, before body replay) and targets in Phase 3b.
+- **Conflict detection** — `SetUnion` panics if the relationship already has `SetExclusive`;
+  `SetExclusive` panics if the relationship already has Union. Data-bearing `SetPair[T]` /
+  `SetPairByID` on a union relationship panics with a clear message.
+- **Hook integration** — `OnRemove` fires with the old target; `OnAdd` fires with the new target
+  on replace. `OnRemove` fires for every active union pair when an entity or the relationship
+  entity is deleted.
+- **22 tests in `union_test.go`** — no-archetype-transition, replace target, HasID wildcard and
+  specific, RemoveID specific/wildcard, SetPair panic, query wildcard/specific/scale/mixed,
+  conflict detection, marshal round-trip, entity delete, relationship delete, IsUnion, idempotent
+  SetUnion, EachUnion insertion order, hooks on replace, CachedQuery, OwnsID.
+
+### Changed
+
+- **`matchesSparseTerms`** — extended to handle `Term.Union` (TermAnd + TermNot) in addition to
+  existing DontFragment terms.
+- **`matchesTable`** — union terms are skipped in archetype-column verification (like DontFragment):
+  `if term.DontFragment || term.Union { continue }`.
+
 ## v0.53.0 — 2026-05-13 — Phase 15.21: Sparse/DontFragment split (BREAKING)
 
 ### Breaking changes

@@ -115,6 +115,11 @@ type Term struct {
 	// A Sparse-only term (Sparse=true, DontFragment=false) IS in the archetype and
 	// can seed iteration; its value is still fetched from sparse-set via Field[T].
 	DontFragment bool
+	// Union is set to true when the term's ID is a pair whose relationship has the
+	// Union trait. Union pairs never appear in the archetype type; the active target
+	// is stored in the per-relationship union store. Union terms cannot seed archetype
+	// iteration and are checked per-entity via the union store in matchesSparseTerms.
+	Union bool
 }
 
 // With returns a TermAnd term: matched tables must contain id.
@@ -238,6 +243,7 @@ func NewQuery(w *World, ids ...ID) *Query {
 		terms[i] = Term{ID: id, Kind: TermAnd,
 			Sparse:       isSparseTermID(w, id),
 			DontFragment: isDontFragmentTermID(w, id),
+			Union:        isUnionTermID(w, id),
 		}
 		applyInheritablePromotion(w, &terms[i])
 	}
@@ -345,14 +351,18 @@ func (q *Query) Iter() *QueryIter {
 	// dontFragmentAndCount: terms not in archetype (drives iteration MODE).
 	// sparseAndCount: terms with sparse-set data (drives Field routing + mixed mode).
 	// archetypeAndCount: terms with both archetype presence AND no DontFragment.
+	// unionAndCount: union-pair terms (not in archetype; checked per-entity via union store).
 	dontFragmentAndCount := 0
 	sparseAndCount := 0
 	archetypeAndCount := 0
+	unionAndCount := 0
 	for _, t := range q.terms {
 		if t.Kind != TermAnd {
 			continue
 		}
-		if t.DontFragment {
+		if t.Union {
+			unionAndCount++
+		} else if t.DontFragment {
 			dontFragmentAndCount++
 			sparseAndCount++ // DontFragment data is also in sparse-set
 		} else if t.Sparse {
@@ -363,9 +373,11 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	// allDontFragment: all And terms are DontFragment → pure sparse-set iteration.
-	allDontFragment := archetypeAndCount == 0 && dontFragmentAndCount > 0
-	// hasSparseTerms: at least one And term has sparse-set data → mixed entity-at-a-time.
-	hasSparseTerms := sparseAndCount > 0
+	allDontFragment := archetypeAndCount == 0 && dontFragmentAndCount > 0 && unionAndCount == 0
+	// allUnion: all And terms are union pairs → pure union-store iteration.
+	allUnion := archetypeAndCount == 0 && dontFragmentAndCount == 0 && unionAndCount > 0
+	// hasSparseTerms: at least one And term has sparse-set or union data → mixed entity-at-a-time.
+	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion)
 	_ = dontFragmentAndCount // used indirectly via allDontFragment
 
 	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
@@ -411,8 +423,50 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 
+	if allUnion {
+		// Pure-Union mode: find the smallest union store as driver.
+		// All And terms are union pairs (not in any archetype table).
+		var driver []unionEntry
+		zeroDriver := false
+		minLen := -1
+		for _, term := range q.terms {
+			if term.Kind != TermAnd || !term.Union {
+				continue
+			}
+			relKey := ID(term.ID.First().Index())
+			store, ok := q.w.unionStore[relKey]
+			if !ok || store == nil {
+				zeroDriver = true
+				break
+			}
+			if minLen < 0 || len(store.dense) < minLen {
+				minLen = len(store.dense)
+				snap := make([]unionEntry, len(store.dense))
+				copy(snap, store.dense)
+				driver = snap
+			}
+		}
+		if zeroDriver {
+			driver = nil
+		}
+		return &QueryIter{
+			q:               q,
+			world:           q.w,
+			terms:           q.terms,
+			orGroups:        q.orGroups,
+			allUnion:        true,
+			hasSparseTerms:  true, // per-entity checking
+			unionDriver:     driver,
+			unionDriverPos:  -1,
+			sparseDriverPos: -1,
+			pos:             -1,
+			wildcardTermIdx: wildcardIdx,
+			wildcardPairPos: -1,
+		}
+	}
+
 	// Archetype seed selection — used for both all-archetype and mixed modes.
-	// Skip DontFragment terms (not in archetype tables), transitive/reflexive pairs,
+	// Skip DontFragment/Union terms (not in archetype tables), transitive/reflexive pairs,
 	// and wildcard terms. Sparse-only terms (Sparse=true, DontFragment=false) ARE
 	// in archetype tables and can seed.
 	seedIdx := -1
@@ -421,8 +475,8 @@ func (q *Query) Iter() *QueryIter {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
 		}
-		if term.DontFragment {
-			continue // DontFragment terms don't live in archetype tables
+		if term.DontFragment || term.Union {
+			continue // not in archetype tables; can't seed
 		}
 		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
 			continue
@@ -524,6 +578,10 @@ type QueryIter struct {
 	sparseTableEntities []ID          // entities in current table that pass sparse membership (mixed mode)
 	sparseTablePos      int           // current position in sparseTableEntities; -1 = needs next table
 	sparseEntity        ID            // current entity in sparse/mixed mode; 0 = not positioned
+	// union iteration state — set by Iter() when all And terms are union pairs.
+	allUnion       bool         // all And terms are union pairs; iterate union store directly
+	unionDriver    []unionEntry // snapshot of the smallest union store (allUnion mode)
+	unionDriverPos int          // current position in unionDriver; -1 = before first
 }
 
 // Next advances to the next matching table (or next wildcard expansion row
@@ -544,6 +602,9 @@ type QueryIter struct {
 func (it *QueryIter) Next() bool {
 	if it.allSparse {
 		return it.nextSparseOnly()
+	}
+	if it.allUnion {
+		return it.nextUnionOnly()
 	}
 	if it.hasSparseTerms {
 		return it.nextMixed()
@@ -622,6 +683,29 @@ func (it *QueryIter) nextSparseOnly() bool {
 	}
 }
 
+// nextUnionOnly advances a pure-union iterator (all And terms are union pairs).
+// Iterates the driver dense-slice; for each entity checks all other union terms.
+func (it *QueryIter) nextUnionOnly() bool {
+	driver := it.unionDriver
+	if driver == nil {
+		it.sparseEntity = 0
+		return false
+	}
+	for {
+		it.unionDriverPos++
+		if it.unionDriverPos >= len(driver) {
+			it.sparseEntity = 0
+			return false
+		}
+		e := driver[it.unionDriverPos].entity
+		if it.matchesSparseTerms(e) {
+			it.sparseEntity = e
+			it.updateOptionalPresenceSparse(e)
+			return true
+		}
+	}
+}
+
 // nextMixed advances a mixed iterator (some And terms archetype, some sparse).
 // Candidate archetype tables are iterated as in the all-archetype path; within
 // each matched table entities are additionally filtered by sparse membership.
@@ -666,25 +750,51 @@ func (it *QueryIter) nextMixed() bool {
 	}
 }
 
-// matchesSparseTerms returns true if entity e satisfies all DontFragment terms
-// in the query. TermAnd requires presence in the sparse-set; TermNot requires
-// absence. Sparse-only terms (DontFragment=false) are handled by the archetype
+// matchesSparseTerms returns true if entity e satisfies all DontFragment and
+// Union terms in the query. TermAnd requires presence; TermNot requires absence.
+// Sparse-only terms (DontFragment=false, Union=false) are handled by the archetype
 // check in matchesTable and are skipped here. TermOptional and TermOr do not
 // affect matching (they are checked separately for Field access).
 func (it *QueryIter) matchesSparseTerms(e ID) bool {
 	for _, term := range it.terms {
-		if !term.DontFragment {
-			continue
-		}
-		ptr := sparseSetGet(it.world, e, term.ID)
-		switch term.Kind {
-		case TermAnd:
-			if ptr == nil {
-				return false
+		if term.DontFragment {
+			ptr := sparseSetGet(it.world, e, term.ID)
+			switch term.Kind {
+			case TermAnd:
+				if ptr == nil {
+					return false
+				}
+			case TermNot:
+				if ptr != nil {
+					return false
+				}
 			}
-		case TermNot:
-			if ptr != nil {
-				return false
+		} else if term.Union {
+			relKey := ID(term.ID.First().Index())
+			store, ok := it.world.unionStore[relKey]
+			switch term.Kind {
+			case TermAnd:
+				if !ok || store == nil {
+					return false
+				}
+				pos, has := store.index[ID(e.Index())]
+				if !has {
+					return false
+				}
+				termTarget := term.ID.Second()
+				if !isWildcardID(it.world, termTarget) {
+					if store.dense[pos].target.Index() != termTarget.Index() {
+						return false
+					}
+				}
+			case TermNot:
+				if !ok || store == nil {
+					continue // entity definitely not in this union store
+				}
+				_, has := store.index[ID(e.Index())]
+				if has {
+					return false
+				}
 			}
 		}
 	}
@@ -749,8 +859,8 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 	for _, term := range it.terms {
 		switch term.Kind {
 		case TermAnd:
-			if term.DontFragment {
-				break // DontFragment terms not in archetype; skip archetype check
+			if term.DontFragment || term.Union {
+				break // not in archetype; skip archetype check (checked per-entity)
 			}
 			switch term.Traverse {
 			case TraverseSelf, TraverseExplicitSelf:
@@ -809,8 +919,8 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 				}
 			}
 		case TermNot:
-			if term.DontFragment {
-				break // DontFragment not in archetype; skip archetype check
+			if term.DontFragment || term.Union {
+				break // not in archetype; skip archetype check (checked per-entity)
 			}
 			if t.HasComponent(term.ID) {
 				return false
@@ -854,8 +964,8 @@ func (it *QueryIter) updateOptionalPresence(t *table.Table) {
 // has no archetype table; use Entities() to get the current entity instead).
 func (it *QueryIter) Table() *table.Table {
 	if it.current == nil {
-		if it.allSparse {
-			panic("flecs: QueryIter.Table: not valid for pure-sparse queries (no archetype table); use Entities() to get the current entity")
+		if it.allSparse || it.allUnion {
+			panic("flecs: QueryIter.Table: not valid for pure-sparse/union queries (no archetype table); use Entities() to get the current entity")
 		}
 		panic("flecs: QueryIter.Table: not positioned on a valid table (call Next first)")
 	}
@@ -1246,10 +1356,11 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		applyInheritablePromotion(w, &cp[i])
 	}
 
-	// Mark sparse/DontFragment terms. Must happen after sorting so that cp is final.
+	// Mark sparse/DontFragment/Union terms. Must happen after sorting so that cp is final.
 	for i := range cp {
 		cp[i].Sparse = isSparseTermID(w, cp[i].ID)
 		cp[i].DontFragment = isDontFragmentTermID(w, cp[i].ID)
+		cp[i].Union = isUnionTermID(w, cp[i].ID)
 	}
 
 	// Traversable enforcement: any term whose Trav is non-zero requires the

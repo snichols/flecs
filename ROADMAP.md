@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.53.0)
+## Shipped (through v0.54.0)
 
 The following features are available in the current release:
 
@@ -55,6 +55,7 @@ The following features are available in the current release:
 - **OrderedChildren trait** _(v0.50.0, Phase 15.18)_ — `SetOrderedChildren(w, parentID)` / `IsOrderedChildren(scope, parentID)` / `w.OrderedChildren()` (index 33). Opt-in per parent; `EachChild` and `Reader.EachChild` iterate in insertion order once set. Ordered list maintained on child add, remove, re-parent, and entity delete. Iteration snapshot at start of each call makes in-callback mutations safe. `applyOrderedChildrenPolicy` snapshots existing children from the component index if children precede the trait application. JSON round-trip via `ordered_children` field in `jsonEntity` (marshal/unmarshal). Built-in entity count: 35; user entities now start at index 36.
 - **Sparse component storage** _(v0.51.0–v0.52.0, Phases 15.19–15.20)_ — `SetSparse(w, compID)` / `IsSparse(scope, compID)` / `w.Sparse()` (index 34) / `EachSparse[T](scope, fn)`. Data stored in per-component sparse-set. Entity DOES transition archetype tables on add/remove (v0.53.0 behavior; use `SetDontFragment` to suppress transition). Pointer-stable boxed allocations (`reflect.New`). `HasID`/`OwnsID`/`GetRef`/`Get[T]` consult sparse-set. Entity-delete O(k) cleanup via `sparseHeld`. **Query integration (v0.52.0):** `NewQuery`/`NewCachedQuery` compile sparse terms; mixed iterator (archetype-seeded, entity-at-a-time). `Field[T]`/`FieldMaybe[T]` sparse branches; `Not`/`Optional` on sparse terms; `CachedQuery.Changed()` via version counter.
 - **DontFragment trait** _(v0.53.0, Phase 15.21)_ — `SetDontFragment(w, compID)` / `IsDontFragment(scope, compID)` / `w.DontFragment()` (index 35). Suppresses archetype transitions: entity does NOT transition tables when a DontFragment component is added/removed. Data stored in sparse-set (same backing as Sparse). Canonical pattern: `SetSparse + SetDontFragment` together matches v0.51.0–v0.52.0 `Sparse` behavior. `isDontFragmentTermID` drives pure-sparse query iteration mode. BREAKING: splits upstream `EcsSparse + EcsIdDontFragment`; `SetSparse` alone no longer suppresses archetype transitions. See `MIGRATING.md`. Built-in entity count: 37; user entities now start at index 38.
+- **Union relationship trait** _(v0.54.0, Phase 15.22)_ — `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`. At-most-one-target per relationship per entity, stored in a per-relationship side map (`unionStore` — dense slice + index map). Union pairs never trigger archetype transitions. Implies Exclusive. Tag-only: data-bearing `SetPair[T]` panics. `OnAdd`/`OnRemove` fire on target set, replace, and entity delete. Pure-union query iteration via `nextUnionOnly`. `CachedQuery.unionAndOnly` skips archetype tracking for all-union queries. Marshal round-trip via `union_relationship_serials` + `union_relationships` fields. Built-in entity count: 37 (unchanged); no new built-in entity; `SetUnion` registers policies at runtime.
 
 ## Documentation
 

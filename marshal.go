@@ -24,6 +24,14 @@ type jsonWorld struct {
 	// In v0.53.0+, contains data for DontFragment components only (data not in entity body).
 	// Restored AFTER entities so that entity IDs exist when the sparse-set is populated.
 	SparseData map[string]map[int]json.RawMessage `json:"sparse_data,omitempty"`
+	// UnionRelationshipSerials is the list of entity serials that have the Union policy.
+	// Restored in Phase 1b (after entity allocation, before body replay) so that the
+	// union routing is live when union pairs are applied in Phase 3b.
+	UnionRelationshipSerials []int `json:"union_relationship_serials,omitempty"`
+	// UnionRelationships holds the active union-pair assignments.
+	// Format: relSerial → {entitySerial → targetSerial}.
+	// Restored AFTER entities so that all entity IDs exist before union pairs are applied.
+	UnionRelationships map[int]map[int]int `json:"union_relationships,omitempty"`
 }
 
 // jsonEntity is the JSON representation of a single entity.
@@ -346,12 +354,54 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			}
 		}
 
+		// Serialize which entity serials have the Union policy (so UnmarshalJSON can
+		// restore the policy before replaying union pairs in Phase 3b).
+		var unionRelSerials []int
+		if w.unionPolicies != nil {
+			for relKey := range w.unionPolicies {
+				if relSerial, ok := m.indexToSerial[uint32(relKey)]; ok {
+					unionRelSerials = append(unionRelSerials, relSerial)
+				}
+			}
+		}
+
+		// Serialize union relationship policies and their active targets.
+		// relSerial → {entitySerial → targetSerial}.
+		var unionRelationships map[int]map[int]int
+		if w.unionStore != nil {
+			for relKey, store := range w.unionStore {
+				if len(store.dense) == 0 {
+					continue
+				}
+				relSerial, ok := m.indexToSerial[uint32(relKey)]
+				if !ok {
+					continue
+				}
+				for _, entry := range store.dense {
+					entitySerial, eOK := m.idToSerial[entry.entity]
+					targetSerial, tOK := m.indexToSerial[entry.target.Index()]
+					if !eOK || !tOK {
+						continue
+					}
+					if unionRelationships == nil {
+						unionRelationships = make(map[int]map[int]int)
+					}
+					if unionRelationships[relSerial] == nil {
+						unionRelationships[relSerial] = make(map[int]int)
+					}
+					unionRelationships[relSerial][entitySerial] = targetSerial
+				}
+			}
+		}
+
 		jw := jsonWorld{
-			Version:                1,
-			Entities:               entities,
-			SparseComponents:       sparseComponents,
-			DontFragmentComponents: dontFragmentComponents,
-			SparseData:             sparseData,
+			Version:                  1,
+			Entities:                 entities,
+			SparseComponents:         sparseComponents,
+			DontFragmentComponents:   dontFragmentComponents,
+			SparseData:               sparseData,
+			UnionRelationshipSerials: unionRelSerials,
+			UnionRelationships:       unionRelationships,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -444,6 +494,18 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			serialToID[je.Serial] = fw.NewEntity()
 		}
 
+		// Phase 1b: restore Union policies now that entity IDs are known.
+		// Must happen before Phase 3b (union pair replay) so that addIDImmediate
+		// routes union pairs to the union store rather than the archetype table.
+		for _, relSerial := range jw.UnionRelationshipSerials {
+			relID, ok := serialToID[relSerial]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: union_relationship_serials: serial %d not found", relSerial)
+				return
+			}
+			applyUnionPolicy(w, relID)
+		}
+
 		// Phase 2: name → ChildOf → IsA prefabs → components (JSON is in topo order).
 		for _, je := range jw.Entities {
 			e := serialToID[je.Serial]
@@ -524,6 +586,36 @@ func (w *World) UnmarshalJSON(data []byte) error {
 		// Phase 3: restore sparse data AFTER entities are created so that entity
 		// IDs exist when the sparse-set is populated. Ordering: policies first
 		// (phase 0), entities second (phases 1-2), sparse values here (phase 3).
+
+		// Phase 3b: restore union relationships. Each entry is relSerial →
+		// {entitySerial → targetSerial}. The relationship must already have the
+		// Union trait (set during entity replay when the relationship entity's
+		// metadata pairs were restored).
+		for relSerial, byEntity := range jw.UnionRelationships {
+			relID, ok := serialToID[relSerial]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: union_relationships: rel serial %d not found", relSerial)
+				return
+			}
+			if !w.unionPolicies[ID(relID.Index())] {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: union_relationships: rel serial %d is not a Union relationship in the restored world", relSerial)
+				return
+			}
+			for entitySerial, targetSerial := range byEntity {
+				e, ok := serialToID[entitySerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: union_relationships: entity serial %d not found", entitySerial)
+					return
+				}
+				tgt, ok := serialToID[targetSerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: union_relationships: target serial %d not found", targetSerial)
+					return
+				}
+				addIDImmediate(w, e, MakePair(relID, tgt))
+			}
+		}
+
 		for compName, bySerial := range jw.SparseData {
 			info, ok := compByName[compName]
 			if !ok {

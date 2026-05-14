@@ -1101,3 +1101,624 @@ func TestCovMarshal_SparseDataJsonError(t *testing.T) {
 		t.Error("UnmarshalJSON: expected error for invalid JSON in SparseData value")
 	}
 }
+
+// ── scope.go / reader paths ───────────────────────────────────────────────────
+
+// TestCovScope_Reader_HasID_DeadEntity covers r.HasID rec==nil early-return.
+// Called with a non-union component on a deleted entity.
+func TestCovScope_Reader_HasID_DeadEntity(t *testing.T) {
+	w := flecs.New()
+	type deadTag struct{}
+	tagID := flecs.RegisterComponent[deadTag](w)
+
+	var deadEnt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		deadEnt = fw.NewEntity()
+		flecs.AddID(fw, deadEnt, tagID)
+	})
+	w.Write(func(fw *flecs.Writer) { fw.Delete(deadEnt) })
+
+	w.Read(func(r *flecs.Reader) {
+		if r.HasID(deadEnt, tagID) {
+			t.Error("HasID on dead entity: expected false")
+		}
+	})
+}
+
+// TestCovScope_Reader_OwnsID_NoTarget covers r.OwnsID union branch !has path.
+// Entity exists but has no union target for R.
+func TestCovScope_Reader_OwnsID_NoTarget(t *testing.T) {
+	w := flecs.New()
+	var R, T1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R = fw.NewEntity()
+		T1 = fw.NewEntity()
+	})
+	flecs.SetUnion(w, R)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() }) // no union target
+
+	w.Read(func(r *flecs.Reader) {
+		if r.OwnsID(e, flecs.MakePair(R, T1)) {
+			t.Error("OwnsID on entity with no union target: expected false")
+		}
+	})
+}
+
+// TestCovScope_EachChild_OrderedFnFalse covers the early-return path in
+// EachChild when the parent has OrderedChildren and fn returns false.
+func TestCovScope_EachChild_OrderedFnFalse(t *testing.T) {
+	w := flecs.New()
+	var parent, child1, child2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		flecs.SetOrderedChildren(w, parent)
+		child1 = fw.NewEntity()
+		child2 = fw.NewEntity()
+		flecs.AddID(fw, child1, flecs.MakePair(w.ChildOf(), parent))
+		flecs.AddID(fw, child2, flecs.MakePair(w.ChildOf(), parent))
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		r.EachChild(parent, func(_ flecs.ID) bool {
+			count++
+			return false // stop after first child
+		})
+	})
+	if count != 1 {
+		t.Errorf("EachChild ordered early stop: expected 1 visit, got %d (child1=%v child2=%v)", count, child1, child2)
+	}
+}
+
+// TestCovScope_EachPrefab_NoTable covers r.EachPrefab when entity has no table.
+func TestCovScope_EachPrefab_NoTable(t *testing.T) {
+	w := flecs.New()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity() // no components → rec.Table == nil
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		r.EachPrefab(e, func(_ flecs.ID) bool {
+			count++
+			return true
+		})
+	})
+	if count != 0 {
+		t.Errorf("EachPrefab on entity with no table: expected 0 calls, got %d", count)
+	}
+}
+
+// TestCovScope_EntityComponents_NoTable covers r.EntityComponents when entity has no table.
+func TestCovScope_EntityComponents_NoTable(t *testing.T) {
+	w := flecs.New()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity() // no components → rec.Table == nil
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		comps := r.EntityComponents(e)
+		if comps != nil {
+			t.Errorf("EntityComponents on entity with no table: expected nil, got %v", comps)
+		}
+	})
+}
+
+// ── world.go ─────────────────────────────────────────────────────────────────
+
+// TestCovWorld_SetInheritable_Method covers the w.SetInheritable(cid) method success path.
+func TestCovWorld_SetInheritable_Method(t *testing.T) {
+	w := flecs.New()
+	type methodInheritable struct{ V int }
+	cid := flecs.RegisterComponent[methodInheritable](w)
+	w.SetInheritable(cid) // covers world.go SetInheritable method body
+}
+
+// ── scope.go / Each2-4 inherited component slow paths ─────────────────────────
+
+// TestCovScope_Each2_InheritedComponent covers the Each2 slow path where one
+// component is resolved via an ancestor (upSources != 0) and the other is local.
+func TestCovScope_Each2_InheritedComponent(t *testing.T) {
+	w := flecs.New()
+	type compAE2 struct{ V int }
+	type compBE2 struct{ W int }
+	flecs.RegisterComponent[compAE2](w)
+	flecs.RegisterComponent[compBE2](w)
+	flecs.SetInheritable[compBE2](w) // B resolves via IsA → upSources[B] != 0
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, compBE2{W: 10})
+
+		inst = fw.NewEntity()
+		flecs.Set(fw, inst, compAE2{V: 1})
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	var visited []flecs.ID
+	w.Read(func(r *flecs.Reader) {
+		flecs.Each2[compAE2, compBE2](r, func(e flecs.ID, a *compAE2, b *compBE2) {
+			visited = append(visited, e)
+			if a.V != 1 {
+				t.Errorf("Each2 inherited: a.V want 1, got %d", a.V)
+			}
+			if b.W != 10 {
+				t.Errorf("Each2 inherited: b.W want 10, got %d", b.W)
+			}
+		})
+	})
+
+	if len(visited) != 1 || visited[0].Index() != inst.Index() {
+		t.Errorf("Each2 inherited: expected [inst=%v], got %v", inst, visited)
+	}
+}
+
+// TestCovScope_Each3_InheritedComponent covers the Each3 slow path.
+func TestCovScope_Each3_InheritedComponent(t *testing.T) {
+	w := flecs.New()
+	type compAE3 struct{ V int }
+	type compBE3 struct{ W int }
+	type compCE3 struct{ X int }
+	flecs.RegisterComponent[compAE3](w)
+	flecs.RegisterComponent[compBE3](w)
+	flecs.RegisterComponent[compCE3](w)
+	flecs.SetInheritable[compBE3](w) // only B inherited via IsA
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, compBE3{W: 20})
+
+		inst = fw.NewEntity()
+		flecs.Set(fw, inst, compAE3{V: 1})
+		flecs.Set(fw, inst, compCE3{X: 3})
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	var visited []flecs.ID
+	w.Read(func(r *flecs.Reader) {
+		flecs.Each3[compAE3, compBE3, compCE3](r, func(e flecs.ID, a *compAE3, b *compBE3, c *compCE3) {
+			visited = append(visited, e)
+			if b.W != 20 {
+				t.Errorf("Each3 inherited: b.W want 20, got %d", b.W)
+			}
+		})
+	})
+
+	if len(visited) != 1 || visited[0].Index() != inst.Index() {
+		t.Errorf("Each3 inherited: expected [inst=%v], got %v", inst, visited)
+	}
+}
+
+// TestCovScope_Each4_InheritedComponent covers the Each4 slow path.
+func TestCovScope_Each4_InheritedComponent(t *testing.T) {
+	w := flecs.New()
+	type compAE4 struct{ V int }
+	type compBE4 struct{ W int }
+	type compCE4 struct{ X int }
+	type compDE4 struct{ Y int }
+	flecs.RegisterComponent[compAE4](w)
+	flecs.RegisterComponent[compBE4](w)
+	flecs.RegisterComponent[compCE4](w)
+	flecs.RegisterComponent[compDE4](w)
+	flecs.SetInheritable[compDE4](w) // only D inherited via IsA
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, compDE4{Y: 40})
+
+		inst = fw.NewEntity()
+		flecs.Set(fw, inst, compAE4{V: 1})
+		flecs.Set(fw, inst, compBE4{W: 2})
+		flecs.Set(fw, inst, compCE4{X: 3})
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	var visited []flecs.ID
+	w.Read(func(r *flecs.Reader) {
+		flecs.Each4[compAE4, compBE4, compCE4, compDE4](r, func(e flecs.ID, a *compAE4, b *compBE4, c *compCE4, d *compDE4) {
+			visited = append(visited, e)
+			if d.Y != 40 {
+				t.Errorf("Each4 inherited: d.Y want 40, got %d", d.Y)
+			}
+		})
+	})
+
+	if len(visited) != 1 || visited[0].Index() != inst.Index() {
+		t.Errorf("Each4 inherited: expected [inst=%v], got %v", inst, visited)
+	}
+}
+
+// ── scope.go / deferred RemoveID sparse present path ─────────────────────────
+
+// TestCovScope_RemoveID_Sparse_Present_Deferred covers deferred RemoveID when
+// entity has the sparse component (scope.go lines 653-654: queue + return true).
+func TestCovScope_RemoveID_Sparse_Present_Deferred(t *testing.T) {
+	w := flecs.New()
+	type sparsePresent struct{ V int }
+	cid := flecs.RegisterComponent[sparsePresent](w)
+	flecs.SetSparse(w, cid)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, sparsePresent{V: 7})
+	})
+
+	var removed bool
+	w.Write(func(fw *flecs.Writer) {
+		// deferDepth > 0; entity has the sparse component → enqueue + return true
+		removed = flecs.RemoveID(fw, e, cid)
+	})
+	if !removed {
+		t.Error("deferred RemoveID sparse present: expected true")
+	}
+	w.Read(func(r *flecs.Reader) {
+		if flecs.Has[sparsePresent](r, e) {
+			t.Error("sparse component should be removed after deferred RemoveID")
+		}
+	})
+}
+
+// ── system.go ─────────────────────────────────────────────────────────────────
+
+// TestCovSystem_NewSystemInPhase_Panics covers all panic guards in NewSystemInPhase.
+func TestCovSystem_NewSystemInPhase_Panics(t *testing.T) {
+	w := flecs.New()
+	type sysQueryComp struct{ V int }
+	cid := flecs.RegisterComponent[sysQueryComp](w)
+	cq := flecs.NewCachedQuery(w, cid)
+	fn := func(_ float32, _ *flecs.QueryIter) {}
+
+	mustPanic := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("NewSystemInPhase %s: expected panic, got none", name)
+			}
+		}()
+		f()
+	}
+
+	mustPanic("nil world", func() {
+		flecs.NewSystemInPhase(nil, w.OnUpdate(), cq, fn)
+	})
+	mustPanic("bad phase", func() {
+		flecs.NewSystemInPhase(w, flecs.ID(99999), cq, fn)
+	})
+	mustPanic("nil query", func() {
+		flecs.NewSystemInPhase(w, w.OnUpdate(), nil, fn)
+	})
+	mustPanic("nil fn", func() {
+		flecs.NewSystemInPhase(w, w.OnUpdate(), cq, nil)
+	})
+
+	cq2 := flecs.NewCachedQuery(w, cid)
+	cq2.Close()
+	mustPanic("closed query", func() {
+		flecs.NewSystemInPhase(w, w.OnUpdate(), cq2, fn)
+	})
+
+	w2 := flecs.New()
+	cid2 := flecs.RegisterComponent[sysQueryComp](w2)
+	cq3 := flecs.NewCachedQuery(w2, cid2)
+	mustPanic("wrong world", func() {
+		flecs.NewSystemInPhase(w, w.OnUpdate(), cq3, fn)
+	})
+}
+
+// ── value_ops.go ──────────────────────────────────────────────────────────────
+
+// TestCovValueOps_GetByID_SparseNotFound covers w.GetByID when the entity does
+// not have the sparse component (value_ops.go ptr==nil → return nil, false).
+func TestCovValueOps_GetByID_SparseNotFound(t *testing.T) {
+	w := flecs.New()
+	type sparseNotFound struct{ V int }
+	cid := flecs.RegisterComponent[sparseNotFound](w)
+	flecs.SetSparse(w, cid)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity() // no sparse component
+	})
+
+	val, ok := w.GetByID(e, cid)
+	if ok {
+		t.Errorf("GetByID sparse not found: expected false, got val=%v", val)
+	}
+}
+
+// TestCovValueOps_GetRef_NilPaths covers getRefOnWorld ptr==nil paths.
+func TestCovValueOps_GetRef_NilPaths(t *testing.T) {
+	w := flecs.New()
+	type dfGetRef struct{ V int }
+	type archGetRef struct{ W int }
+	type archGetRef2 struct{ X int }
+	dfID := flecs.RegisterComponent[dfGetRef](w)
+	flecs.SetDontFragment(w, dfID)
+	flecs.RegisterComponent[archGetRef](w)
+	flecs.RegisterComponent[archGetRef2](w)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set(fw, e, archGetRef{W: 5}) // e has archGetRef but NOT dfGetRef, NOT archGetRef2
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		// DontFragment path: entity does not have dfGetRef → sparseSetGet returns nil.
+		ptr := flecs.GetRef[dfGetRef](r, e)
+		if ptr != nil {
+			t.Errorf("GetRef[DF] not found: expected nil, got %v", ptr)
+		}
+		// Archetype path: entity has a table (archGetRef) but not archGetRef2 → HasComponent false → return nil.
+		ptr2 := flecs.GetRef[archGetRef2](r, e)
+		if ptr2 != nil {
+			t.Errorf("GetRef[arch missing] not found: expected nil, got %v", ptr2)
+		}
+	})
+	_ = dfID
+}
+
+// TestCovQuery_DontFragment_NilDriver covers nextSparseOnly when sparseDriver==nil:
+// a DontFragment component with no entities having it → sparseStorage[key]==nil →
+// zeroDriver=true → driver=nil → nextSparseOnly returns false immediately.
+func TestCovQuery_DontFragment_NilDriver(t *testing.T) {
+	w := flecs.New()
+	type dfNilDriver struct{ V int }
+	cid := flecs.RegisterComponent[dfNilDriver](w)
+	flecs.SetDontFragment(w, cid)
+	// No entity has dfNilDriver → sparseStorage[key] == nil → zeroDriver = true → driver = nil.
+
+	q := flecs.NewQueryFromTerms(w, flecs.With(cid))
+	count := 0
+	it := q.Iter()
+	for it.Next() {
+		count += it.Count()
+	}
+	if count != 0 {
+		t.Errorf("DF nil driver: expected 0 entities, got %d", count)
+	}
+}
+
+// TestUnion_Query_MultipleUnionAnd_MissingSecond covers matchesSparseTerms TermAnd union
+// where entity is in the driver store but NOT in the second union store → !has → return false.
+func TestUnion_Query_MultipleUnionAnd_MissingSecond(t *testing.T) {
+	w := flecs.New()
+	var R1, R2, T1, T2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R1 = fw.NewEntity()
+		R2 = fw.NewEntity()
+		T1 = fw.NewEntity()
+		T2 = fw.NewEntity()
+	})
+	flecs.SetUnion(w, R1)
+	flecs.SetUnion(w, R2)
+
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		// e1 has only R1 (not R2)
+		fw.AddID(e1, flecs.MakePair(R1, T1))
+		// e2 has only R2 (not R1)
+		fw.AddID(e2, flecs.MakePair(R2, T2))
+	})
+
+	// With(R1,*) AND With(R2,*): neither entity has both → no matches.
+	// Driver = R1's store (first term, both stores have 1 entry).
+	// For e1 (in R1's driver): check R2 → e1 NOT in R2's store → !has → return false (COVERED).
+	q := flecs.NewQueryFromTerms(w,
+		flecs.With(flecs.MakePair(R1, w.Wildcard())),
+		flecs.With(flecs.MakePair(R2, w.Wildcard())),
+	)
+	var matched []flecs.ID
+	it := q.Iter()
+	for it.Next() {
+		matched = append(matched, it.Entities()...)
+	}
+	if len(matched) != 0 {
+		t.Errorf("multi-union AND missing second: expected no matches, got %v (e1=%v e2=%v)", matched, e1, e2)
+	}
+}
+
+// TestCovFieldShared_Paths covers uncovered paths in FieldShared:
+// - term.ID != id → continue (iterator has multiple terms; look for second term's ID)
+// - src == 0 → return (zero, false) (self-matched component; use Field[T] instead)
+func TestCovFieldShared_Paths(t *testing.T) {
+	w := flecs.New()
+	type compA struct{ X int }
+	type compB struct{ Y int }
+	flecs.RegisterComponent[compA](w)
+	flecs.RegisterComponent[compB](w)
+	flecs.SetInheritable[compB](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, compB{Y: 99})
+
+		inst = fw.NewEntity()
+		flecs.Set(fw, inst, compA{X: 1})
+		flecs.Set(fw, inst, compB{Y: 7}) // inst directly owns B (not inherited)
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	aID := flecs.RegisterComponent[compA](w)
+	bID := flecs.RegisterComponent[compB](w)
+	q := flecs.NewQueryFromTerms(w, flecs.With(aID), flecs.With(bID))
+	it := q.Iter()
+	for it.Next() {
+		// Call FieldShared[compB](it, bID):
+		// - First term is A → term.ID(=aID) != bID → continue (PATH 1 COVERED)
+		// - Second term is B (matched via self since inst directly owns B) → src==0 → return (zero, false) (PATH 2 COVERED)
+		_, ok := flecs.FieldShared[compB](it, bID)
+		if ok {
+			t.Error("FieldShared on self-matched component: expected false")
+		}
+	}
+	_ = inst
+	_ = prefab
+}
+
+// ── cleanup.go ────────────────────────────────────────────────────────────────
+
+// TestCovCleanup_BadOnDeleteAction covers the panic for an invalid OnDelete action
+// (cleanup.go:90-91 — the inner switch default for OnDelete).
+func TestCovCleanup_BadOnDeleteAction(t *testing.T) {
+	w := flecs.New()
+	var R, badAction flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R = fw.NewEntity()
+		badAction = fw.NewEntity() // not Delete, Panic, or Remove
+	})
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("SetCleanupPolicy bad OnDelete action: expected panic, got none")
+		}
+	}()
+	flecs.SetCleanupPolicy(w, R, w.OnDelete(), badAction)
+}
+
+// TestCovCleanup_BadOnDeleteTargetAction covers the panic for an invalid OnDeleteTarget
+// action (cleanup.go:102-103 — the inner switch default for OnDeleteTarget).
+func TestCovCleanup_BadOnDeleteTargetAction(t *testing.T) {
+	w := flecs.New()
+	var R, badAction flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R = fw.NewEntity()
+		badAction = fw.NewEntity()
+	})
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("SetCleanupPolicy bad OnDeleteTarget action: expected panic, got none")
+		}
+	}()
+	flecs.SetCleanupPolicy(w, R, w.OnDeleteTarget(), badAction)
+}
+
+// ── exclusive_access.go ───────────────────────────────────────────────────────
+
+// TestCovExclusiveAccess_LockedWorld covers the panic path when the world is
+// locked for writes (exclusive_access.go:29-30 — owner == ^uint64(0)).
+func TestCovExclusiveAccess_LockedWorld(t *testing.T) {
+	w := flecs.New()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
+	w.ExclusiveAccessEnd(true) // sets exclusiveAccess = ^uint64(0)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Delete on locked world: expected panic, got none")
+		}
+	}()
+	w.Delete(e) // checkExclusiveAccessWrite → owner==^uint64(0) → panic
+}
+
+// ── oneof.go ──────────────────────────────────────────────────────────────────
+
+// TestCovOneOf_WildcardTarget covers the wildcard/any target exemption in
+// checkOneOf (oneof.go:59-61) — wildcard targets bypass the OneOf constraint.
+func TestCovOneOf_WildcardTarget(t *testing.T) {
+	w := flecs.New()
+	var R, parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		R = fw.NewEntity()
+		parent = fw.NewEntity()
+		flecs.SetOneOf(w, R, parent) // R targets must be children of parent
+	})
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		// Wildcard target is exempt from the OneOf constraint check → no panic
+		fw.AddID(e, flecs.MakePair(R, w.Wildcard()))
+	})
+}
+
+// ── reflexive.go ──────────────────────────────────────────────────────────────
+
+// TestCovReflexive_TargetDeleted covers reflexiveTableMatches when the target
+// entity has been deleted (reflexive.go:76-78 — rec == nil → return false).
+func TestCovReflexive_TargetDeleted(t *testing.T) {
+	w := flecs.New()
+	var R, target flecs.ID
+	type compRefl struct{ V int }
+	flecs.RegisterComponent[compRefl](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		R = fw.NewEntity()
+		target = fw.NewEntity()
+		flecs.SetReflexive(w, R)
+		// Give e2 a component so there's a non-empty table to iterate
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, compRefl{V: 1})
+		_ = e2
+	})
+	// Delete target: w.index.Get(target) returns nil after deletion.
+	w.Write(func(fw *flecs.Writer) { fw.Delete(target) })
+
+	// Query for (R, target) where target is deleted (rec == nil).
+	// reflexiveTableMatches → rec == nil → return false (line 76-78 covered).
+	q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(R, target)))
+	it := q.Iter()
+	count := 0
+	for it.Next() {
+		count += it.Count()
+	}
+	if count != 0 {
+		t.Errorf("reflexive deleted target: expected 0 matches, got %d", count)
+	}
+}
+
+// ── writeonce.go ──────────────────────────────────────────────────────────────
+
+// TestCovWriteOnce_PairCompKey covers the id.IsPair() branch in
+// clearWriteOnceTracking (writeonce.go:105-107 — compKey = id for pair IDs).
+func TestCovWriteOnce_PairCompKey(t *testing.T) {
+	w := flecs.New()
+	type woComp struct{ V int }
+	cid := flecs.RegisterComponent[woComp](w)
+	flecs.SetWriteOnce(w, cid)
+
+	var parent, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parent = fw.NewEntity()
+		e = fw.NewEntity()
+		// Set WriteOnce component: initializes writeOnceHasBeenSet map.
+		flecs.Set(fw, e, woComp{V: 1})
+		// Add a pair (ChildOf, parent) so we can remove it next.
+		fw.AddID(e, flecs.MakePair(w.ChildOf(), parent))
+	})
+	// Remove the pair: removeIDImmediate → clearWriteOnceTracking(w, e, pairID)
+	// writeOnceHasBeenSet != nil AND id.IsPair() == true → compKey = id (line 105-107).
+	w.Write(func(fw *flecs.Writer) {
+		fw.RemoveID(e, flecs.MakePair(w.ChildOf(), parent))
+	})
+}
+
+// ── scope.go ──────────────────────────────────────────────────────────────────
+
+// TestCovScope_HasID_UnionNoStore covers r.HasID when the union relationship
+// has a policy but no store yet (scope.go:82-84 — !ok → return false).
+func TestCovScope_HasID_UnionNoStore(t *testing.T) {
+	w := flecs.New()
+	var R flecs.ID
+	w.Write(func(fw *flecs.Writer) { R = fw.NewEntity() })
+	flecs.SetUnion(w, R) // R is in unionPolicies but no store exists
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
+
+	w.Read(func(r *flecs.Reader) {
+		// R is union but unionStore[R] doesn't exist → !ok → return false (line 82-84)
+		has := r.HasID(e, flecs.MakePair(R, w.Wildcard()))
+		if has {
+			t.Error("HasID union no store: expected false, got true")
+		}
+	})
+}

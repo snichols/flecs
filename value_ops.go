@@ -81,6 +81,7 @@ func (w *World) SetPairByID(e, rel, tgt ID, v any) {
 		panic("flecs: SetPairByID: v must not be nil")
 	}
 	checkPairIsTag(w, rel)
+	checkUnionPair(w, rel)
 	pairID := MakePair(rel, tgt)
 	vType := reflect.TypeOf(v)
 	if existing, ok := w.registry.LookupByID(pairID); ok {

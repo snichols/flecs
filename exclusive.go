@@ -1,5 +1,7 @@
 package flecs
 
+import "fmt"
+
 // Exclusive returns the ID of the built-in Exclusive trait entity.
 //
 // Marking a relationship exclusive constrains it to at most one target per
@@ -21,7 +23,16 @@ func (w *World) Exclusive() ID { return w.exclusiveID }
 // source entity is allowed. Adding a second target replaces the first.
 //
 // Equivalent to fw.AddID(relID, w.Exclusive()).
+//
+// Panics if relID already has the Union trait (Union subsumes Exclusive; use
+// SetUnion from the start to get both at-most-one and non-fragmenting semantics).
 func SetExclusive(w *World, relID ID) {
+	if w.unionPolicies[ID(relID.Index())] {
+		panic(fmt.Sprintf(
+			"flecs: SetExclusive: relationship %v is already marked Union (Union subsumes Exclusive)",
+			relID,
+		))
+	}
 	applyExclusivePolicy(w, relID)
 }
 

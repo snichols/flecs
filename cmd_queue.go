@@ -138,6 +138,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		case cmdDelete:
 			deleted = true
 		case cmdAddID:
+			// Union pair: do not modify archetype; dispatch will call addIDImmediate
+			// which routes to the union store. Union pairs never appear in archetypes.
+			if c.id.IsPair() && w.unionPolicies[ID(c.id.First().Index())] {
+				break // keep c.kind = cmdAddID; skip scratch1 modification and cmdSkip
+			}
 			if c.id.IsPair() && w.exclusivePolicies[c.id.First()] {
 				// Exclusive pair: remove any existing (R, A) before inserting (R, B)
 				// so the net signature has exactly one target for this relationship.
@@ -203,6 +208,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			expandWithIntoScratch(w, c.id, &q.scratch1)
 			c.kind = cmdSkip
 		case cmdRemoveID:
+			// Union pair: do not modify archetype; dispatch will call removeIDImmediate
+			// which routes to the union store. Union pairs never appear in archetypes.
+			if c.id.IsPair() && w.unionPolicies[ID(c.id.First().Index())] {
+				break // keep c.kind = cmdRemoveID; skip scratch1 modification and cmdSkip
+			}
 			// Sparse or DontFragment: do not modify archetype signature; removal is handled via dispatch.
 			if !c.id.IsPair() && (w.sparsePolicies[ID(c.id.Index())] || w.dontFragmentPolicies[ID(c.id.Index())]) {
 				// leave kind; dispatch will call removeIDImmediate which handles sparse/DF

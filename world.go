@@ -111,6 +111,8 @@ type World struct {
 	sparseStorage        map[ID]*sparseSet               // per-component sparse-set; backs both Sparse and DontFragment components
 	sparseHeld           map[uint32][]ID                 // entity raw-index → sparse/DontFragment component IDs held (for O(k) delete cleanup)
 	dontFragmentPolicies map[ID]bool                     // component entity index → dontFragment flag
+	unionPolicies        map[ID]bool                     // relationship entity index → union flag
+	unionStore           map[ID]*unionRelStore           // relationship index → per-relationship union store
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -703,6 +705,10 @@ func (w *World) deleteOne(e ID) bool {
 			}
 		}
 	}
+	// Clean up union-store entries for e. For each union relationship that has an
+	// active target stored for e, fire OnRemove and remove the entry.
+	// This mirrors the sparseHeld cleanup above but uses the union side store.
+	unionStoreRemoveEntity(w, e)
 	freed := w.index.Free(e)
 	if freed && w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "entity deleted",
@@ -794,6 +800,19 @@ func deleteImmediate(w *World, e ID) bool {
 		}
 	}
 
+	// If any entity being deleted is a union relationship, drop its entire union
+	// store so that subsequent queries return no stale results. We don't fire
+	// OnRemove for every entity that held the pair; the relationship itself is
+	// going away and callers must handle the cascade.
+	if w.unionStore != nil {
+		for _, del := range toDelete {
+			relKey := ID(del.Index())
+			if w.unionPolicies[relKey] {
+				delete(w.unionStore, relKey)
+				delete(w.unionPolicies, relKey)
+			}
+		}
+	}
 	// Delete in post-order: deepest descendants first, root last.
 	for i := len(toDelete) - 1; i >= 0; i-- {
 		w.deleteOne(toDelete[i])

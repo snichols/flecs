@@ -73,7 +73,27 @@ func (r *Reader) EachTableFor(id ID, fn func(*table.Table) bool) {
 // first == second gate is evaluated before the policy map lookup so that
 // non-self queries pay zero extra cost (no map access).
 func (r *Reader) HasID(e ID, id ID) bool {
-	rec := r.world.index.Get(e)
+	w := r.world
+	// Union pair: consult union store (pairs never appear in the archetype type).
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			store, ok := w.unionStore[relKey]
+			if !ok {
+				return false
+			}
+			pos, has := store.index[ID(e.Index())]
+			if !has {
+				return false
+			}
+			termTarget := id.Second()
+			if isWildcardID(w, termTarget) {
+				return true
+			}
+			return store.dense[pos].target.Index() == termTarget.Index()
+		}
+	}
+	rec := w.index.Get(e)
 	if rec == nil {
 		return false
 	}
@@ -87,18 +107,38 @@ func (r *Reader) HasID(e ID, id ID) bool {
 	if id.IsPair() {
 		second := id.Second() // target entity index (generation-stripped by MakePair)
 		if second == ID(e.Index()) {
-			if r.world.reflexivePolicies[id.First()] {
+			if w.reflexivePolicies[id.First()] {
 				return true
 			}
 		}
 	}
-	return hasViaIsA(r.world, e, id, nil)
+	return hasViaIsA(w, e, id, nil)
 }
 
 // OwnsID reports whether entity e locally owns the component or tag identified
 // by id. Local-only: does not walk the IsA chain.
 func (r *Reader) OwnsID(e ID, id ID) bool {
-	rec := r.world.index.Get(e)
+	w := r.world
+	// Union pair: consult union store (pairs never appear in the archetype type).
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			store, ok := w.unionStore[relKey]
+			if !ok {
+				return false
+			}
+			pos, has := store.index[ID(e.Index())]
+			if !has {
+				return false
+			}
+			termTarget := id.Second()
+			if isWildcardID(w, termTarget) {
+				return true
+			}
+			return store.dense[pos].target.Index() == termTarget.Index()
+		}
+	}
+	rec := w.index.Get(e)
 	if rec == nil {
 		return false
 	}
@@ -325,6 +365,7 @@ func (fw *Writer) SetPairByID(e, rel, tgt ID, v any) {
 		panic("flecs: SetPairByID: v must not be nil")
 	}
 	checkPairIsTag(fw.world, rel)
+	checkUnionPair(fw.world, rel)
 	pairID := MakePair(rel, tgt)
 	vType := reflect.TypeOf(v)
 	if existing, ok := fw.world.registry.LookupByID(pairID); ok {
@@ -395,6 +436,25 @@ func HasID(s scope, e ID, id ID) bool {
 			return has
 		}
 	}
+	// Union pair: consult union store (pairs never appear in the archetype type).
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			store, ok := w.unionStore[relKey]
+			if !ok {
+				return false
+			}
+			pos, has := store.index[ID(e.Index())]
+			if !has {
+				return false
+			}
+			termTarget := id.Second()
+			if isWildcardID(w, termTarget) {
+				return true // entity has any active target
+			}
+			return store.dense[pos].target.Index() == termTarget.Index()
+		}
+	}
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -425,6 +485,25 @@ func OwnsID(s scope, e ID, id ID) bool {
 			}
 			_, has := ss.index[e.Index()]
 			return has
+		}
+	}
+	// Union pair: consult union store (pairs never appear in the archetype type).
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			store, ok := w.unionStore[relKey]
+			if !ok {
+				return false
+			}
+			pos, has := store.index[ID(e.Index())]
+			if !has {
+				return false
+			}
+			termTarget := id.Second()
+			if isWildcardID(w, termTarget) {
+				return true
+			}
+			return store.dense[pos].target.Index() == termTarget.Index()
 		}
 	}
 	rec := w.index.Get(e)
@@ -525,6 +604,7 @@ func SetPair[T any](fw *Writer, e ID, rel ID, tgt ID, v T) {
 		return
 	}
 	checkPairIsTag(fw.world, rel)
+	checkUnionPair(fw.world, rel)
 	pairID := MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[T](fw.world.registry, pairID)
 	if pairInfo.Size > 0 {
@@ -569,6 +649,26 @@ func RemoveID(fw *Writer, e ID, id ID) bool {
 		}
 		if _, has := ss.index[e.Index()]; !has {
 			return false
+		}
+		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
+		return true
+	}
+	// Union pair: check union store (pairs never appear in the archetype).
+	if id.IsPair() && fw.world.unionPolicies[ID(id.First().Index())] {
+		relKey := ID(id.First().Index())
+		store, ok := fw.world.unionStore[relKey]
+		if !ok {
+			return false
+		}
+		entityKey := ID(e.Index())
+		pos, has := store.index[entityKey]
+		if !has {
+			return false
+		}
+		currentTarget := store.dense[pos].target
+		termTarget := id.Second()
+		if !isWildcardID(fw.world, termTarget) && currentTarget.Index() != termTarget.Index() {
+			return false // different specific target → no-op
 		}
 		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
 		return true
