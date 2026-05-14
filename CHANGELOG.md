@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.75.0 — 2026-05-14 — Phase 16.20: Query scopes (WithoutScope)
+
+Ports the upstream C flecs `EcsScopeOpen` / `EcsScopeClose` scope mechanism (`include/flecs.h:1989–1992`, `src/query/validator.c:1427–1452`, `src/query/compiler/compiler_term.c:785–803`) as a Go-idiomatic closure-based API. A query scope negates a sub-expression of arbitrary terms as a single unit, enabling expressions such as `Position AND NOT (Velocity OR Speed)` that cannot be written as a flat list of `Without` terms.
+
+### Added
+
+- **`WithoutScope(buildFn func(*ScopeBuilder)) Term`** — top-level term constructor. Calls `buildFn` with a fresh `*ScopeBuilder`, collects the accumulated inner terms into a `TermScope` term, and returns it. Panics if `buildFn` produces zero inner terms (mirrors upstream `validator.c:1441` empty-scope rejection). The returned term drops into any `NewQueryFromTerms` / `NewCachedQueryFromTerms` positional term list unchanged.
+- **`type ScopeBuilder struct`** — closure receiver exposing:
+  - `b.With(id) *ScopeBuilder` — require `id` inside the scope.
+  - `b.Without(id) *ScopeBuilder` — require absence of `id` inside the scope.
+  - `b.Or(id) *ScopeBuilder` — OR with the preceding term (C flecs OR-group convention: `With` is first member, adjacent `Or` calls extend the group).
+  - `b.Maybe(id) *ScopeBuilder` — optional `id` inside the scope.
+  - `b.Source(src ID) *ScopeBuilder` — fix the preceding term's source entity (parallel to `(Term).Source`).
+  - `b.WithoutScope(fn func(*ScopeBuilder)) *ScopeBuilder` — nested negated sub-scope; arbitrary depth.
+- **`TermScope TermKind = 4`** — new term kind. `TermScope` terms carry `Sub []Term` (the inner term list); `ID = 0`; negation is implicit. Exposed via `String() → "Scope"`.
+- **`Sub []Term` field on `Term`** — populated only for `TermScope` terms.
+
+### Behaviour
+
+- **Table-level fast path**: when all inner terms are plain `TermAnd` (no DontFragment / Union / Sparse / fixed source, not followed by an Or), `matchesTable` / `tryMatchTable` evaluates the scope at table granularity: if every inner component ID is present in the table's archetype signature the scope rejects the table (all entities in that table have the excluded component set). Otherwise the scope passes for the whole table and no per-entity work is needed.
+- **Per-entity slow path**: complex scopes (containing Or-groups, TermNot, nested scopes, DontFragment, Union, Sparse, or fixed-source terms) are evaluated entity-by-entity via `evalScopeSubTerms`. Queries containing at least one complex scope set `hasSparseTerms = true` to route through the `nextMixed()` path regardless of whether any actual sparse components are present.
+- **OR-group semantics inside scope**: a `TermAnd` immediately followed by one or more `TermOr` terms in `Sub` forms an OR-group matching C flecs convention — the first member uses the And slot, subsequent members use Or slots. The group is satisfied when at least one member is present on the entity.
+- **Nested scope semantics**: a `TermScope` inside `Sub` is evaluated recursively by `evalScopeSubTerms`; its result is flipped (NOT of inner) before contributing to the parent scope's conjunction.
+- **Fixed-source terms inside scope**: `entityHasTermInScope` resolves fixed-source terms by looking up the named entity's table at evaluation time (not at iter start), consistent with per-entity evaluation semantics.
+- **allSparse mode (`it.current == nil`)**: even simple scopes are evaluated per-entity via the index-lookup fallback in `entityHasTermInScope`; the table-level fast path is gated on `it.current != nil`.
+- **Cached query participation**: scope-internal component IDs are included in `tryMatchTable`'s archetype match for simple scopes. `Changed()` consults scope-internal sparse-set `ChangeCount` values alongside regular term IDs, so a mutation to any scope-internal component flips `Changed()` correctly.
+- **Go-flecs vs upstream cache granularity**: upstream C flecs marks scoped terms `EcsTermIsScope` and strips `EcsTermIsCacheable` / `EcsTermIsTrivial` flags because its cache operates at per-term instruction granularity. Go-flecs caches at table-list granularity, so the parent `CachedQuery` remains fully cached; scope-internal IDs are treated as additional table-match dependencies instead.
+
+### Tests
+
+- 18 new tests in `query_scope_test.go`:
+  1. `TestWithoutScope_PositionNotVelocityOrSpeed` — Position AND NOT (Velocity OR Speed).
+  2. `TestWithoutScope_DeMorganEquivalence` — de-Morgan sanity: scope ≡ flat `Without` on simple presence-OR.
+  3. `TestWithoutScope_PositionNotVelocityAndSpeed` — Position AND NOT (Velocity AND Speed); verifies result differs from case 1.
+  4. `TestWithoutScope_Nested` — Position AND NOT (Velocity AND NOT Frozen); nested scope.
+  5. `TestWithoutScope_MultiOr` — Position AND NOT (A OR B OR C); three-member OR-group.
+  6. `TestWithoutScope_EmptyPanic` — `WithoutScope(func(*ScopeBuilder) {})` panics with clear message.
+  7. `TestWithoutScope_SparseComponent` — sparse component inside scope; per-entity path.
+  8. `TestWithoutScope_DontFragmentComponent` — DontFragment component inside scope.
+  9. `TestWithoutScope_FixedSource` — fixed-source term inside scope resolves at named entity.
+  10. `TestWithoutScope_CachedQuery` — cached query with scope; `Changed()` flips after inner-scope mutation.
+  11. `TestWithoutScope_AllMatch` — all entities match when none have the scoped components.
+  12. `TestWithoutScope_NoneMatch` — no entities match when all have the scoped components.
+  13. `TestWithoutScope_ComplexOr` — `With(A).Or(B).With(C).Or(D)` — two independent OR-groups inside one scope.
+  14. `TestWithoutScope_ScopeWithWithout` — `Without` term inside scope (TermNot inside TermScope).
+  15. `TestWithoutScope_CachedQueryChanged` — `Changed()` re-arms correctly across multiple mutations.
+  16. `TestWithoutScope_NestedScopeDeep` — three-level nested scope.
+  17. `TestWithoutScope_MatchesTableIncrementalTable` — table added after cached query construction is picked up.
+  18. `TestWithoutScope_SparseOuterSimpleScope` — outer-simple scope in allSparse (`it.current == nil`) mode exercises index-lookup fallback.
+
+### Documentation
+
+- `docs/Queries.md` — new `### Query scopes` section (after `### Not (Without)`) with code examples, OR-group table, de-Morgan note, nested-scope example, and empty-scope behaviour.
+- `docs/README.md` line 114 — query-scopes gap entry flipped to ✅ shipped in v0.75.0.
+- `README.md` — `NewQueryFromTerms` feature-list entry updated to include `WithoutScope`.
+- `ROADMAP.md` — heading bumped to `Shipped (through v0.75.0)`; Phase 16.20 bullet added.
+
 ## v0.74.0 — 2026-05-14 — Phase 16.19: Entity scoping (push/pop)
 
 Ports upstream C flecs `ecs_set_scope` / `ecs_get_scope` (`src/entity_name.c:785-808`) as a Go-idiomatic closure-based API. When a scope is active, `NewEntity` and `RangeNew` automatically add `(ChildOf, scope)` to each new entity without an explicit `AddID` call.

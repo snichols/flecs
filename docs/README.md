@@ -111,7 +111,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Query groups** — ✅ **shipped in v0.66.0** via `NewCachedQueryFromTermsWithOptions` + `WithGroupBy`. `GroupByFunc` partitions matched tables; `IterGroup` for O(1) group access; `WithGroupBy` + `AndOrderBy` compose (sort within each group). `Cascade` retains its dedicated implementation; refactor deferred. See [Queries.md § Query groups](Queries.md#query-groups).
 - **Equality operators** — `$this == Foo`, `$this != Foo`, `$this ~= "partial"` name-match filter terms in the Flecs Query Language. not yet ported in Go flecs.
 - **AndFrom / OrFrom / NotFrom operators** — expand the component list of a given entity into implicit AND / OR / NOT terms, useful with prefab type-lists. not yet ported in Go flecs.
-- **Query scopes** — `scope_open` / `scope_close` negate a sub-expression of arbitrary terms (e.g., `Position, !{ Velocity || Speed }`). not yet ported in Go flecs.
+- **Query scopes** — ✅ **shipped in v0.75.0** via [`WithoutScope(buildFn func(*ScopeBuilder)) Term`](../query.go) / `*ScopeBuilder`. Negates a sub-expression of arbitrary terms (e.g., `Position AND NOT (Velocity OR Speed)`). Closure-based API prevents unbalanced-scope bugs; empty scope panics at construction. Supports nested scopes, sparse/DontFragment/Union components inside, and fixed-source terms inside. See [Queries.md § Query scopes](Queries.md#query-scopes).
 - **Access modifiers on query terms** — `In` / `InOut` / `Out` / `None` per-term annotations used by the C scheduler for pipeline sync-point inference. Go flecs governs mutation via `Read`/`Write` world scopes; per-term annotations are not ported.
 
 ### Additional gaps discovered in Phase 14.3 (Relationships port)

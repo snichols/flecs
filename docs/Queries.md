@@ -193,6 +193,65 @@ q := flecs.NewQueryFromTerms(w,
 )
 ```
 
+### Query scopes
+
+`flecs.WithoutScope(buildFn func(*ScopeBuilder)) Term` negates an entire sub-expression of arbitrary terms as a single unit. Use it when a plain `Without` is not expressive enough — for example when the excluded condition is a disjunction (OR) or a conjunction of multiple components.
+
+```go
+type Position struct{ X, Y float32 }
+type Velocity struct{ DX, DY float32 }
+type Speed    struct{ Value float32 }
+
+w := flecs.New()
+posID   := flecs.RegisterComponent[Position](w)
+velID   := flecs.RegisterComponent[Velocity](w)
+speedID := flecs.RegisterComponent[Speed](w)
+
+// Match entities with Position AND NOT (Velocity OR Speed).
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.WithoutScope(func(b *flecs.ScopeBuilder) {
+        b.With(velID).Or(speedID)
+    }),
+)
+```
+
+The closure receives a `*ScopeBuilder` whose methods mirror the top-level term constructors:
+
+| ScopeBuilder method | Meaning inside scope |
+|---|---|
+| `b.With(id)` | Require component `id` |
+| `b.Without(id)` | Require absence of `id` |
+| `b.Or(id)` | OR with the preceding term |
+| `b.Maybe(id)` | Optional component `id` |
+| `b.Source(src)` | Fix the preceding term's source to `src` |
+| `b.WithoutScope(fn)` | Nested negated sub-scope |
+
+**De-Morgan note** — for the simple OR-of-presence case, the scope is logically equivalent to individual `Without` terms:
+
+```
+Position AND NOT (Velocity OR Speed)
+    ≡ Position AND NOT Velocity AND NOT Speed   (de Morgan's law)
+```
+
+The scope form is required when the inner expression mixes AND and OR, contains nested scopes, uses fixed-source terms, or includes sparse / DontFragment components.
+
+**Nested scopes** are supported to arbitrary depth:
+
+```go
+// Position AND NOT (Velocity AND NOT Frozen)
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.WithoutScope(func(b *flecs.ScopeBuilder) {
+        b.With(velID).WithoutScope(func(b2 *flecs.ScopeBuilder) {
+            b2.With(frozenID)
+        })
+    }),
+)
+```
+
+**Empty scope panics** — `WithoutScope` panics at construction when the builder function adds no terms, mirroring upstream's compile-time rejection of `!{}`.
+
 ### Optional (Maybe)
 
 `flecs.Maybe(id)` builds a TermOptional term: matched tables may or may not include `id`. Optional terms do not affect which tables are matched — they just make the component column available when present.
