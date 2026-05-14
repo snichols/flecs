@@ -81,7 +81,7 @@ func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKin
 			}
 			fn(fw, ev, e, v)
 		}
-		node := w.addObserverNode(id, ev, callback)
+		node := w.addObserverNode(id, eventKindToEntity(w, ev), callback)
 		node.observer = obs
 		obs.nodes = append(obs.nodes, node)
 

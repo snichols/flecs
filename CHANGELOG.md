@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.63.0 — 2026-05-14 — Phase 16.8: Custom events
+
+Ports upstream C flecs's custom event mechanism. Applications can now define arbitrary event entities, subscribe observers to them, and emit them as a typed event bus inside an ECS app. The dispatch table now keys on event entity IDs — a structural change that keeps the `EventKind` convenience enum as a 1:1 mapping to built-in event entities while making the dispatch path uniform across built-in and custom events.
+
+**Breaking change**: built-in entity count increases from 40 to 45 (five new built-in event entities at indices 40–44). User entity allocation now starts at index 45 (previously 40). Serialized worlds (`MarshalJSON`) use serial numbers, not raw indices, so existing snapshots round-trip correctly. Code that hardcodes world entity counts must be updated.
+
+**No breaking change** to any existing observer or hook API signatures: `Observe[T]`, `ObserveID`, `Observe2[T]`, `ObserveWithOptions[T]`, `OnTableCreate`, `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, `OnReplace[T]`, `EventOnAdd`, `EventOnSet`, `EventOnRemove`, `EventOnTableCreate` all keep their existing signatures and semantics.
+
+### Added
+
+- **`RegisterEvent(fw *Writer, name string) ID`** — allocates a new entity as a custom event identifier. Applies the built-in `Event` tag so `HasID(eventID, w.Event())` is true. The entity can be named, queried, and deleted like any other.
+- **`Emit(fw *Writer, eventID ID, entity ID, payload interface{})`** — fires `eventID` for `entity` with an opaque payload. Synchronous; all subscribed observers fire in registration order before `Emit` returns. Payload is shallow-copied at the API boundary.
+- **`EmitTyped[T any](fw *Writer, eventID ID, entity ID, payload T)`** — typed wrapper around `Emit`.
+- **`ObserveEvent(w *World, eventID ID, fn func(fw *Writer, e ID, payload interface{})) *Observer`** — subscribes to a custom event. Payload arrives as `interface{}`. Returns `*Observer`; call `Unsubscribe` to cancel.
+- **`ObserveEventTyped[T any](w *World, eventID ID, fn func(fw *Writer, e ID, payload T)) *Observer`** — typed-payload variant; panics with a clear message on type mismatch at dispatch time.
+- **Built-in event entity accessors** on `*World`: `EventOnAdd() ID`, `EventOnSet() ID`, `EventOnRemove() ID`, `EventOnTableCreate() ID`, `Event() ID`. These map 1:1 to the existing `EventKind` constants via `eventKindToEntity`.
+- **`eventKindToEntity(w *World, ev EventKind) ID`** (unexported) — maps `EventKind` enum to built-in event entity IDs; used internally at the boundary between legacy callers and the entity-keyed dispatch table.
+
+### Changed
+
+- **`observerKey`** (`observer.go`) — field `event EventKind` replaced by `eventEntity ID`. The dispatch table now keys on event entity IDs for both built-in and custom events.
+- **`addObserverNode` / `dispatchObservers`** (`observer.go`) — signatures updated from `event EventKind` to `eventEntity ID`.
+- **`fireOnAdd` / `fireOnSet` / `fireOnRemove`** (`hooks.go`) — updated to pass `w.eventOnAddID` / `w.eventOnSetID` / `w.eventOnRemoveID` to `dispatchObservers` instead of `EventOnAdd` / `EventOnSet` / `EventOnRemove`.
+- **`notifyTableCreated`** (`world.go`) — updated to pass `w.eventOnTableCreateID` instead of `EventOnTableCreate`.
+- **`OnTableCreateWithOptions`** (`observer_table.go`) — updated to pass `w.eventOnTableCreateID` to `addObserverNode`.
+- **`deleteOne`** (`world.go`) — when an entity is deleted, its custom event observer entry `{id:e, eventEntity:e}` is removed from the observer map, making subsequent `Emit` calls for that event a no-op.
+- **Built-in entity count**: 40 → 45. User entities now start at index 45. `MarshalJSON` skip set updated to exclude all five new built-in event entities.
+
+### Design decisions recorded
+
+1. **Payload type**: untyped `interface{}` for `Emit` + typed generic wrapper `EmitTyped[T]`. Matches upstream `void *param` flexibility without forcing a payload-type registration step.
+2. **`Event` tag built-in**: index 44; `RegisterEvent` always applies it. Enables `HasID(eventID, w.Event())` discrimination.
+3. **Dispatch key for custom events**: `{id: eventID, eventEntity: eventID}` — both fields equal the event entity ID. Distinct from component observers (`{componentID, eventOnAddID}`) and table-create observers (`{0, eventOnTableCreateID}`).
+4. **yield_existing on custom events**: `ObserveEvent` is intentionally not wired to `ObserverOptions`; passing `WithYieldExisting()` is a silent no-op (there is no "currently matching" concept for an arbitrary event).
+5. **Re-entrant emit**: synchronous fire path matching the existing hook/observer dispatch. Mutations from within the handler still defer via the existing Writer cmd queue.
+6. **Event entity deletion**: O(1) cleanup in `deleteOne` via `delete(w.observers, observerKey{id:e, eventEntity:e})`. Subsequent `Emit` is a no-op.
+
 ## v0.62.0 — 2026-05-14 — Phase 16.7: OnTableCreate observer event
 
 Ports `EcsOnTableCreate` from upstream C flecs as a new observer event kind. Observers register via `OnTableCreate(w, fn)` and fire once per archetype table when the table is first created (first entity migrates into a previously-unseen component signature). Closes the OnTableCreate half of `docs/README.md` gap entry; `OnTableDelete` is deferred pending table-reclamation infrastructure.

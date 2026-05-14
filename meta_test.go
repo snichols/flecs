@@ -16,8 +16,9 @@ import (
 // Reflexive(21), Acyclic(22), Final(23), OneOf(24), Singleton(25), WriteOnce(26),
 // Traversable(27), Relationship(28), Target(29), Trait(30), PairIsTag(31),
 // With(32), OrderedChildren(33), Sparse(34), DontFragment(35), Disabled(36),
-// Prefab(37), Wildcard(38), Any(39).
-const builtinEntityCount = 39
+// Prefab(37), Wildcard(38), Any(39), EventOnAdd(40), EventOnSet(41),
+// EventOnRemove(42), EventOnTableCreate(43), Event(44).
+const builtinEntityCount = 44
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

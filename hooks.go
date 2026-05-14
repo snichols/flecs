@@ -153,7 +153,7 @@ func (w *World) fireOnAdd(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 	if info != nil && info.Hooks.OnAdd != nil {
 		info.Hooks.OnAdd(&w.writeCapability, e, ptr)
 	}
-	w.dispatchObservers(id, EventOnAdd, e, ptr)
+	w.dispatchObservers(id, w.eventOnAddID, e, ptr)
 }
 
 // fireOnSet invokes the OnSet hook (if set) then dispatches observers for id.
@@ -164,7 +164,7 @@ func (w *World) fireOnSet(info *component.TypeInfo, id ID, e ID, ptr unsafe.Poin
 	if info != nil && info.Hooks.OnSet != nil {
 		info.Hooks.OnSet(&w.writeCapability, e, ptr)
 	}
-	w.dispatchObservers(id, EventOnSet, e, ptr)
+	w.dispatchObservers(id, w.eventOnSetID, e, ptr)
 }
 
 // fireOnRemove invokes the OnRemove hook (if set) then dispatches observers for id.
@@ -175,5 +175,5 @@ func (w *World) fireOnRemove(info *component.TypeInfo, id ID, e ID, ptr unsafe.P
 	if info != nil && info.Hooks.OnRemove != nil {
 		info.Hooks.OnRemove(&w.writeCapability, e, ptr)
 	}
-	w.dispatchObservers(id, EventOnRemove, e, ptr)
+	w.dispatchObservers(id, w.eventOnRemoveID, e, ptr)
 }

@@ -39,9 +39,28 @@ func (ev EventKind) String() string {
 }
 
 // observerKey is the composite map key for the observer store.
+// id is the component/tag entity ID (or a sentinel for table-create/custom events).
+// eventEntity is the built-in or user-allocated event entity ID.
 type observerKey struct {
-	id    ID
-	event EventKind
+	id          ID
+	eventEntity ID
+}
+
+// eventKindToEntity maps the convenience EventKind enum to the corresponding
+// built-in event entity ID. Returns 0 for unknown kinds.
+func eventKindToEntity(w *World, ev EventKind) ID {
+	switch ev {
+	case EventOnAdd:
+		return w.eventOnAddID
+	case EventOnSet:
+		return w.eventOnSetID
+	case EventOnRemove:
+		return w.eventOnRemoveID
+	case EventOnTableCreate:
+		return w.eventOnTableCreateID
+	default:
+		return 0
+	}
 }
 
 // observerNode holds the internal state of one observer subscription.
@@ -118,7 +137,7 @@ func Observe[T any](w *World, event EventKind, fn func(fw *Writer, e ID, v T)) *
 		fn(fw, e, v)
 	}
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(id, event, callback)
+	node := w.addObserverNode(id, eventKindToEntity(w, event), callback)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 	if w.logger != nil {
@@ -139,7 +158,7 @@ func Observe[T any](w *World, event EventKind, fn func(fw *Writer, e ID, v T)) *
 func ObserveID(w *World, id ID, event EventKind, fn func(fw *Writer, e ID, ptr unsafe.Pointer)) *Observer {
 	w.checkExclusiveAccessWrite()
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(id, event, fn)
+	node := w.addObserverNode(id, eventKindToEntity(w, event), fn)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 	if w.logger != nil {
@@ -169,7 +188,7 @@ func Observe2[T any](w *World, events []EventKind, fn func(fw *Writer, event Eve
 			}
 			fn(fw, ev, e, v)
 		}
-		node := w.addObserverNode(id, ev, callback)
+		node := w.addObserverNode(id, eventKindToEntity(w, ev), callback)
 		node.observer = obs
 		obs.nodes = append(obs.nodes, node)
 		if w.logger != nil {
@@ -181,13 +200,13 @@ func Observe2[T any](w *World, events []EventKind, fn func(fw *Writer, event Eve
 	return obs
 }
 
-// addObserverNode creates an observerNode for (id, event) and appends it to
+// addObserverNode creates an observerNode for (id, eventEntity) and appends it to
 // the world's observer map, compacting removed entries lazily before insertion.
-func (w *World) addObserverNode(id ID, event EventKind, callback func(fw *Writer, e ID, ptr unsafe.Pointer)) *observerNode {
+func (w *World) addObserverNode(id ID, eventEntity ID, callback func(fw *Writer, e ID, ptr unsafe.Pointer)) *observerNode {
 	if w.observers == nil {
 		w.observers = make(map[observerKey][]*observerNode)
 	}
-	key := observerKey{id: id, event: event}
+	key := observerKey{id: id, eventEntity: eventEntity}
 	// Compact removed nodes lazily on each new registration for this key.
 	if existing := w.observers[key]; len(existing) > 0 {
 		live := existing[:0]
@@ -203,16 +222,16 @@ func (w *World) addObserverNode(id ID, event EventKind, callback func(fw *Writer
 	return node
 }
 
-// dispatchObservers fires all active observers for (id, event) in registration
+// dispatchObservers fires all active observers for (id, eventEntity) in registration
 // order. Observers with removed=true are skipped. An observer that calls
 // Unsubscribe during its callback takes effect immediately: not-yet-visited
 // observers in the same dispatch are skipped; already-fired observers are
 // unaffected.
-func (w *World) dispatchObservers(id ID, event EventKind, e ID, ptr unsafe.Pointer) {
+func (w *World) dispatchObservers(id ID, eventEntity ID, e ID, ptr unsafe.Pointer) {
 	if w.observers == nil {
 		return
 	}
-	key := observerKey{id: id, event: event}
+	key := observerKey{id: id, eventEntity: eventEntity}
 	nodes := w.observers[key]
 	for _, n := range nodes {
 		if n.removed || (n.observer != nil && !n.observer.enabled) {

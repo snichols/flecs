@@ -221,6 +221,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Observer disabling _(v0.60.0)_ | `obs.SetEnabled(false)` / `obs.IsEnabled()` — pause/resume without removing; mirrors system disabling |
 | yield_existing _(v0.60.0)_ | `ObserveWithOptions[T](w, WithYieldExisting(), events, fn)` — retroactively fire for all existing matching entities at registration; OnAdd/OnSet only; synchronous; skips Disabled/Prefab |
 | OnTableCreate observer _(v0.62.0)_ | `OnTableCreate(w, fn)` / `OnTableCreateWithOptions(w, WithYieldExisting(), fn)` — fires once per new archetype table; untyped (no `[T]`); handler reads `t.Type()` / `t.Count()`; does not fire for the empty root table |
+| Custom events _(v0.63.0)_ | `RegisterEvent(fw, name)`, `Emit(fw, eventID, entity, payload)`, `EmitTyped[T]`, `ObserveEvent(w, eventID, fn)`, `ObserveEventTyped[T]` — arbitrary user-defined event entities; events ARE entities; synchronous dispatch; payload is `interface{}` with typed wrapper; built-in event entity accessors: `w.EventOnAdd()` etc. |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
 | Readonly concurrency window | `w.Readonly(fn)`, `ReadonlyBegin`, `ReadonlyEnd` |
 | Exclusive-access ownership assertion | `ExclusiveAccessBegin`, `ExclusiveAccessEnd` — always on; panics with `ErrExclusiveAccessViolation` on cross-goroutine violations; common case costs one `atomic.Load` per call |

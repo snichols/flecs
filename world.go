@@ -86,7 +86,12 @@ type World struct {
 	disabledID           ID                              // built-in Disabled tag entity (index 36)
 	prefabID             ID                              // built-in Prefab tag entity (index 37)
 	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 38; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 39; _); user entities start at index 40
+	anyID                ID                              // built-in Any query-term sentinel (index 39; _)
+	eventOnAddID         ID                              // built-in EventOnAdd event entity (index 40)
+	eventOnSetID         ID                              // built-in EventOnSet event entity (index 41)
+	eventOnRemoveID      ID                              // built-in EventOnRemove event entity (index 42)
+	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
+	eventTagID           ID                              // built-in Event tag entity (index 44); user entities start at index 45
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -173,7 +178,12 @@ type World struct {
 //   - Index 37: Prefab built-in tag entity
 //   - Index 38: Wildcard built-in query-term sentinel (*)
 //   - Index 39: Any built-in query-term sentinel (_)
-//   - Index 40+: user entities (NewEntity)
+//   - Index 40: EventOnAdd built-in event entity
+//   - Index 41: EventOnSet built-in event entity
+//   - Index 42: EventOnRemove built-in event entity
+//   - Index 43: EventOnTableCreate built-in event entity
+//   - Index 44: Event built-in tag entity (marks an entity as an event identifier)
+//   - Index 45+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -417,6 +427,36 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(any_))
 	w.anyID = any_
+	// Allocate the built-in EventOnAdd event entity (gets index 40).
+	eventOnAdd := w.index.Alloc()
+	rec = w.index.Get(eventOnAdd)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnAdd))
+	w.eventOnAddID = eventOnAdd
+	// Allocate the built-in EventOnSet event entity (gets index 41).
+	eventOnSet := w.index.Alloc()
+	rec = w.index.Get(eventOnSet)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnSet))
+	w.eventOnSetID = eventOnSet
+	// Allocate the built-in EventOnRemove event entity (gets index 42).
+	eventOnRemove := w.index.Alloc()
+	rec = w.index.Get(eventOnRemove)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnRemove))
+	w.eventOnRemoveID = eventOnRemove
+	// Allocate the built-in EventOnTableCreate event entity (gets index 43).
+	eventOnTableCreate := w.index.Alloc()
+	rec = w.index.Get(eventOnTableCreate)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnTableCreate))
+	w.eventOnTableCreateID = eventOnTableCreate
+	// Allocate the built-in Event tag entity (gets index 44).
+	eventTag := w.index.Alloc()
+	rec = w.index.Get(eventTag)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventTag))
+	w.eventTagID = eventTag
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
@@ -550,6 +590,25 @@ func (w *World) PostUpdate() ID { return w.postUpdateID }
 // each Progress call and always receive the fixed timestep as dt.
 // Use SetFixedTimestep to configure the step; a zero step disables this phase.
 func (w *World) OnFixedUpdate() ID { return w.onFixedUpdateID }
+
+// EventOnAdd returns the ID of the built-in EventOnAdd event entity.
+// Observers registered via Observe[T] or ObserveID for EventOnAdd subscribe
+// to the same event entity as this accessor returns.
+func (w *World) EventOnAdd() ID { return w.eventOnAddID }
+
+// EventOnSet returns the ID of the built-in EventOnSet event entity.
+func (w *World) EventOnSet() ID { return w.eventOnSetID }
+
+// EventOnRemove returns the ID of the built-in EventOnRemove event entity.
+func (w *World) EventOnRemove() ID { return w.eventOnRemoveID }
+
+// EventOnTableCreate returns the ID of the built-in EventOnTableCreate event entity.
+func (w *World) EventOnTableCreate() ID { return w.eventOnTableCreateID }
+
+// Event returns the ID of the built-in Event tag entity.
+// RegisterEvent automatically adds this tag to every custom event entity,
+// enabling HasID(eventID, w.Event()) discrimination.
+func (w *World) Event() ID { return w.eventTagID }
 
 // Time returns the total simulated time accumulated across all Progress calls.
 func (w *World) Time() float32 { return w.time }
@@ -730,6 +789,11 @@ func (w *World) deleteOne(e ID) bool {
 	// active target stored for e, fire OnRemove and remove the entry.
 	// This mirrors the sparseHeld cleanup above but uses the union side store.
 	unionStoreRemoveEntity(w, e)
+	// If e was a custom event entity, remove its observer entry so subsequent
+	// Emit calls for e become no-ops. Custom events register with {id:e, eventEntity:e}.
+	if w.observers != nil {
+		delete(w.observers, observerKey{id: e, eventEntity: e})
+	}
 	freed := w.index.Free(e)
 	if freed && w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "entity deleted",
@@ -1370,7 +1434,7 @@ func (w *World) notifyTableCreated(t *table.Table) {
 	// The empty root table (len == 0) is excluded intentionally, matching
 	// upstream's is_root suppression at table.c:1278.
 	if len(t.Type()) > 0 {
-		w.dispatchObservers(tableCreateSentinelID, EventOnTableCreate, 0, unsafe.Pointer(t))
+		w.dispatchObservers(tableCreateSentinelID, w.eventOnTableCreateID, 0, unsafe.Pointer(t))
 	}
 	if w.logger != nil {
 		sig := t.Type()
