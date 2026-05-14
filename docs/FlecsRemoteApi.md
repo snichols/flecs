@@ -97,6 +97,7 @@ the world API.
 | GET | `/entities/{id}` | Entity detail |
 | GET | `/snapshot` | Full world snapshot (JSON) |
 | PUT | `/snapshot` | Load a world snapshot |
+| GET | `/type_info/{path}` | Reflection schema for a named component; `Cache-Control: max-age=300` |
 
 All other C flecs REST endpoints are **not yet ported** — see the [unimplemented endpoints](#unimplemented-c-flecs-rest-endpoints) table below.
 
@@ -619,6 +620,102 @@ if resp.StatusCode != http.StatusNoContent {
 
 ---
 
+## GET /type_info/{path}
+
+Returns the reflection schema for a named component as JSON. The path is a dot-separated
+name resolved via `world.Lookup` (e.g. `"Position"`, `"physics.Velocity"`). Supports
+typed Go components (struct fields with name, type, and byte offset), dynamic components
+registered via `RegisterDynamicComponent` (size/align only; `opaque: true`), and
+zero-size tag components.
+
+> **Path separator divergence from C upstream.** C flecs uses `/` as the path separator
+> (`ecs_lookup_path_w_sep(..., "/", ...)`). Go flecs uses `.` (the `world.Lookup` default).
+> Request `GET /type_info/physics.Velocity`, not `GET /type_info/physics/Velocity`. Nested
+> struct fields are rendered as opaque `reflect.Type.String()` strings — depth-1 only; no
+> recursive field expansion in v1.
+
+```
+GET /type_info/{path}
+→ 200 OK  application/json  Cache-Control: max-age=300
+→ 404 Not Found             (path unknown, or entity has no TypeInfo in the registry)
+```
+
+### Curl
+
+```
+curl http://localhost:8080/type_info/Position
+```
+
+### Go client
+
+```go
+resp, err := http.Get("http://localhost:8080/type_info/Position")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
+
+var info struct {
+    Name   string `json:"name"`
+    Size   uint64 `json:"size"`
+    Align  uint64 `json:"align"`
+    Fields []struct {
+        Name   string `json:"name"`
+        Type   string `json:"type"`
+        Offset uint64 `json:"offset"`
+    } `json:"fields"`
+    Opaque bool   `json:"opaque,omitempty"`
+    Unit   string `json:"unit,omitempty"`
+}
+json.NewDecoder(resp.Body).Decode(&info)
+fmt.Println(info.Name, info.Size, len(info.Fields))
+```
+
+### Response shape
+
+For a typed Go component `Position { X, Y float64 }`:
+
+```json
+{
+  "name": "main.Position",
+  "size": 16,
+  "align": 8,
+  "fields": [
+    { "name": "X", "type": "float64", "offset": 0 },
+    { "name": "Y", "type": "float64", "offset": 8 }
+  ]
+}
+```
+
+For a dynamic component registered via `RegisterDynamicComponent(fw, "DynComp", 8, 8)`:
+
+```json
+{
+  "name": "DynComp",
+  "size": 8,
+  "align": 8,
+  "fields": [],
+  "opaque": true
+}
+```
+
+### Fields
+
+- `name` — `reflect.Type.String()` for typed Go components (e.g. `"main.Position"`), or
+  the registered string name for dynamic components.
+- `size` — `unsafe.Sizeof` of the component type; `0` for zero-size structs.
+- `align` — `unsafe.Alignof` of the component type; `0` for zero-size structs.
+- `fields` — ordered struct fields at depth 1; `[]` for zero-size, dynamic, or non-struct
+  types. Each field: `name` (Go field name), `type` (`reflect.Type.String()`; pointer /
+  interface / slice / nested-struct fields are rendered as opaque type strings), `offset`
+  (byte offset within the struct).
+- `opaque` — `true` only for dynamic components (`TypeInfo.Type == nil`); omitted
+  otherwise.
+- `unit` — unit entity name if `world.UnitFor(id)` returns a registered unit; omitted
+  otherwise.
+
+---
+
 ## Error responses
 
 All error responses use JSON with an `"error"` field:
@@ -686,9 +783,11 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Type-info and reflection endpoints
 
-> **Not yet ported in Go flecs.** `GET /type_info/<path>` returns the reflection schema
-> for a component as JSON, using `ecs_type_info_to_json`. This requires the meta /
-> reflection module which is not yet ported.
+> **Partially ported in Go flecs (v0.87.0).** `GET /type_info/{path}` is now implemented
+> — see [`## GET /type_info/{path}`](#get-type_infopath) above. It supports typed Go
+> structs (depth-1 field walk), dynamic components, and zero-size tags. Full meta-cursor
+> parity (`ecs_type_info_to_json` depth-N recursion, primitive-type annotations, enum
+> members) is **not yet ported** — the Go `reflect` walk is sufficient for v1.
 
 ### Listing endpoints
 
@@ -739,5 +838,5 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 - **Entity / component mutation endpoints** (`PUT /entity`, `DELETE /entity`, `PUT /component`, `DELETE /component`) — require reflection/meta module; not ported.
 - **Toggle endpoint** (`PUT /toggle`) — requires entity disabling (`Disabled` tag) and `CanToggle` trait; not ported.
 - **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
-- **Type-info / reflection endpoint** (`GET /type_info`) — requires meta-cursor (`ecs_meta_cursor`); not ported.
+- **Type-info / reflection endpoint** (`GET /type_info/{path}`) — depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, and full meta-cursor parity not yet ported.
 - **FlecsExplorer integration** — browser UI requires unported endpoints; not integrated.

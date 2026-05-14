@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"reflect"
 	"strconv"
 	"time"
 )
@@ -38,6 +40,7 @@ import (
 //	GET /entities/{id}      — entity detail (200 or 404)
 //	GET /snapshot           — full world MarshalJSON output (200 or 500)
 //	PUT /snapshot           — replace world state; body is MarshalJSON output (204, 400)
+//	GET /type_info/{path}   — reflection schema for a named component (200, 404)
 func NewRESTHandler(w *World) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", restStats(w))
@@ -49,6 +52,7 @@ func NewRESTHandler(w *World) http.Handler {
 	mux.HandleFunc("GET /entities/{id}", restEntityByID(w))
 	mux.HandleFunc("GET /snapshot", restSnapshotGet(w))
 	mux.HandleFunc("PUT /snapshot", restSnapshotPut(w))
+	mux.HandleFunc("GET /type_info/{path...}", restTypeInfo(w))
 	return mux
 }
 
@@ -145,6 +149,26 @@ func toComponentInfoResponse(info ComponentInfo) componentInfoResponse {
 		Align: uint64(info.Align),
 		Type:  typeName,
 	}
+}
+
+// typeInfoFieldResponse is the JSON shape for a single field entry in a type_info response.
+type typeInfoFieldResponse struct {
+	Name   string  `json:"name"`
+	Type   string  `json:"type"`
+	Offset uintptr `json:"offset"`
+}
+
+// typeInfoResponse is the JSON shape for GET /type_info/{path}.
+type typeInfoResponse struct {
+	Name         string                  `json:"name"`
+	Size         uintptr                 `json:"size"`
+	Align        uintptr                 `json:"align"`
+	Fields       []typeInfoFieldResponse `json:"fields"`
+	Opaque       bool                    `json:"opaque,omitempty"`
+	Unit         string                  `json:"unit,omitempty"`
+	IsPair       bool                    `json:"is_pair,omitempty"`
+	Relationship string                  `json:"relationship,omitempty"`
+	Target       string                  `json:"target,omitempty"`
 }
 
 func parseID(s string) (ID, bool) {
@@ -354,5 +378,63 @@ func restSnapshotPut(w *World) http.HandlerFunc {
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func restTypeInfo(w *World) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		path, _ := url.PathUnescape(r.PathValue("path"))
+
+		var resp typeInfoResponse
+		var found bool
+		w.Read(func(fr *Reader) {
+			id, ok := fr.Lookup(path)
+			if !ok {
+				return
+			}
+			info, ok := w.registry.LookupByID(id)
+			if !ok {
+				return
+			}
+			found = true
+
+			resp = typeInfoResponse{
+				Name:   info.Name,
+				Size:   info.Size,
+				Align:  info.Align,
+				Fields: []typeInfoFieldResponse{},
+			}
+
+			if info.Type != nil {
+				if info.Type.Kind() == reflect.Struct {
+					t := info.Type
+					n := t.NumField()
+					resp.Fields = make([]typeInfoFieldResponse, n)
+					for i := range n {
+						f := t.Field(i)
+						resp.Fields[i] = typeInfoFieldResponse{
+							Name:   f.Name,
+							Type:   f.Type.String(),
+							Offset: f.Offset,
+						}
+					}
+				}
+			} else {
+				resp.Opaque = true
+			}
+
+			if unitID, ok := w.UnitFor(id); ok {
+				if name, nameOK := fr.GetName(unitID); nameOK {
+					resp.Unit = name
+				}
+			}
+		})
+
+		if !found {
+			writeError(rw, http.StatusNotFound, "type info not found")
+			return
+		}
+		rw.Header().Set("Cache-Control", "max-age=300")
+		writeJSON(rw, http.StatusOK, resp)
 	}
 }

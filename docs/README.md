@@ -87,7 +87,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Entity scoping** (`ecs_set_scope` / push-pop) — ✅ **shipped in v0.74.0** via `WithinScope` / `PushScope` / `PopScope` / `GetScope`. See [docs/HierarchiesManual.md § Entity scoping](HierarchiesManual.md#entity-scoping).
 - **Singleton API shortcuts** (`world.set<T>`, `world.get<T>`) — **shipped in v0.44.0** via `SetSingleton` / `IsSingleton` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]`. Go semantic: at most one holder (vs. C must-be-self). See [ComponentTraits.md#singleton](ComponentTraits.md#singleton).
 - **Timer addon** (independent rate control per system) — partial (`timer.go` exists; full addon API pending).
-- **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only. Stats endpoints (`GET /stats/world`, `GET /stats/pipeline`) shipped in v0.86.0; mutation endpoints, query DSL (`GET /query?expr=`), `GET /type_info`, and multi-period stats aggregation remain outstanding.
+- **REST explorer** (full `FlecsExplorer` integration) — minimal read-only handler only. Stats endpoints (`GET /stats/world`, `GET /stats/pipeline`) shipped in v0.86.0; type-info endpoint (`GET /type_info/{path}`) shipped in v0.87.0; mutation endpoints, query DSL (`GET /query?expr=`), and multi-period stats aggregation remain outstanding.
 
 These are listed for operator prioritization; no follow-up issues were filed in Phase 14.0.
 
@@ -178,5 +178,5 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Entity / component mutation endpoints** (`PUT /entity`, `DELETE /entity`, `PUT /component`, `DELETE /component`) — create, delete, and mutate entities and components via REST. Require the reflection / meta-cursor API (`ecs_meta_cursor`); not yet ported in Go flecs.
 - **Toggle endpoint** (`PUT /toggle`) — enable/disable an entity or a per-component enable bit via REST. Requires entity disabling (`Disabled` tag) and the `CanToggle` component trait; not yet ported in Go flecs.
 - **Aggregated stats (FlecsStats module)** — `GET /stats/world` and `GET /stats/pipeline` return multi-period aggregated statistics collected by the `FlecsStats` addon. FlecsStats module not yet ported in Go flecs.
-- **Type-info / reflection endpoint** (`GET /type_info/<path>`) — returns the reflection schema for a component type. Requires the meta-cursor module (`ecs_meta_cursor`); not yet ported in Go flecs.
+- **Type-info / reflection endpoint** (`GET /type_info/{path}`) — ✅ **shipped in v0.87.0** via depth-1 `reflect` walk. Supports typed Go structs, dynamic components, zero-size tags, and unit annotations. Full meta-cursor parity (depth-N recursion, primitive-type annotations) not yet ported. See [docs/FlecsRemoteApi.md](FlecsRemoteApi.md#get-type_infopath).
 - **FlecsExplorer integration** — the browser-based world inspector at `https://flecs.dev/explorer` connects via the C REST API and requires entity mutation, query execution, and type-info endpoints. Not integrated with the Go REST handler.
