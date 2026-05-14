@@ -68,8 +68,12 @@ Navigate to `http://localhost:8080/flecs/stats`.
 `*World` is not goroutine-safe on its own. `NewRESTHandler` wraps every call in the
 appropriate world scope:
 
-- **GET endpoints** call `w.Read(func(*Reader) { ... })`, which acquires a read lock.
-  Multiple concurrent GET requests are safe as long as no write is in progress.
+- **GET endpoints** (except the stats-snapshot endpoints below) call
+  `w.Read(func(*Reader) { ... })`, which acquires a read lock. Multiple concurrent GET
+  requests are safe as long as no write is in progress.
+- **GET /stats/world and GET /stats/pipeline** call `w.StatsSnapshot()` directly.
+  `StatsSnapshot` acquires only a lightweight stats read-lock (`statsMu.RLock`) and is
+  goroutine-safe from any goroutine — no outer `w.Read` scope is needed or taken.
 - **PUT /snapshot** calls `w.Write(func(*Writer) { ... })`, which acquires an exclusive
   write lock. This must not run concurrently with any other world operation.
 
@@ -84,7 +88,9 @@ the world API.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/stats` | World stats snapshot |
+| GET | `/stats` | World stats snapshot (legacy `Stats` struct) |
+| GET | `/stats/world` | `WorldStats` snapshot; `Cache-Control: no-store` |
+| GET | `/stats/pipeline` | `PipelineStats` snapshot (world + systems + phases); `Cache-Control: no-store` |
 | GET | `/components` | All registered component infos |
 | GET | `/components/{id}` | Single component info by numeric ID |
 | GET | `/entities` | Alive entities (optional `?limit=N`) |
@@ -158,6 +164,165 @@ fmt.Println(s.EntityCount, s.FrameCount)
 The JSON field names are the exported Go field names (no struct tags on `flecs.Stats`).
 `Duration` is a `time.Duration` — encoded as an `int64` in nanoseconds.
 `LastFramePhases` is `null` if `Progress` has never been called.
+
+---
+
+## GET /stats/world
+
+Returns the `WorldStats` portion of the current `StatsSnapshot()` as JSON. Calls
+`world.StatsSnapshot()` directly — no outer `Read` scope needed; the method is
+goroutine-safe. Returns `503 Service Unavailable` if the world panics (e.g. during
+teardown).
+
+```
+GET /stats/world
+→ 200 OK  application/json  Cache-Control: no-store
+→ 503 Service Unavailable   (world panic / teardown)
+```
+
+### Curl
+
+```
+curl http://localhost:8080/stats/world
+```
+
+### Go client
+
+```go
+resp, err := http.Get("http://localhost:8080/stats/world")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
+
+var result struct {
+    World struct {
+        EntityCount   int     `json:"entity_count"`
+        FrameCount    uint64  `json:"frame_count"`
+        LastTickDelta float64 `json:"last_tick_delta"`
+    } `json:"world"`
+}
+json.NewDecoder(resp.Body).Decode(&result)
+fmt.Println(result.World.FrameCount, result.World.LastTickDelta)
+```
+
+### Response shape
+
+```json
+{
+  "world": {
+    "entity_count": 42,
+    "table_count": 7,
+    "archetype_count": 7,
+    "frame_count": 100,
+    "total_time": 1.666,
+    "last_tick_delta": 0.016
+  }
+}
+```
+
+Fields (all snake_case):
+- `entity_count` — alive entities at the end of the last tick.
+- `table_count` — number of archetype tables.
+- `archetype_count` — mirrors `table_count`; each table is one archetype.
+- `frame_count` — number of `Progress` calls since world creation.
+- `total_time` — total accumulated simulation time in seconds.
+- `last_tick_delta` — `dt` passed to the most recent `Progress` call; `0` before first call.
+
+---
+
+## GET /stats/pipeline
+
+Returns the full `PipelineStats` snapshot as JSON: world counters, per-system
+performance metrics, and per-phase timing. Calls `world.StatsSnapshot()` directly
+(goroutine-safe). Returns `503 Service Unavailable` if the world panics.
+
+```
+GET /stats/pipeline
+→ 200 OK  application/json  Cache-Control: no-store
+→ 503 Service Unavailable   (world panic / teardown)
+```
+
+### Curl
+
+```
+curl http://localhost:8080/stats/pipeline
+```
+
+### Go client
+
+```go
+resp, err := http.Get("http://localhost:8080/stats/pipeline")
+if err != nil {
+    log.Fatal(err)
+}
+defer resp.Body.Close()
+
+var result struct {
+    World   map[string]any   `json:"world"`
+    Systems []map[string]any `json:"systems"`
+    Phases  []map[string]any `json:"phases"`
+}
+json.NewDecoder(resp.Body).Decode(&result)
+fmt.Println("systems:", len(result.Systems), "phases:", len(result.Phases))
+```
+
+### Response shape
+
+```json
+{
+  "world": {
+    "entity_count": 42,
+    "table_count": 7,
+    "archetype_count": 7,
+    "frame_count": 100,
+    "total_time": 1.666,
+    "last_tick_delta": 0.016
+  },
+  "systems": [
+    {
+      "name": "movement",
+      "last_tick_duration": 250000,
+      "invocations": 100,
+      "avg_duration": 240000,
+      "total_skipped": 0
+    }
+  ],
+  "phases": [
+    {
+      "name": "PreUpdate",
+      "system_count": 0,
+      "duration": 0,
+      "cumulative_duration": 0,
+      "invocations": 100
+    },
+    {
+      "name": "OnUpdate",
+      "system_count": 1,
+      "duration": 250000,
+      "cumulative_duration": 24000000,
+      "invocations": 100
+    }
+  ]
+}
+```
+
+Fields:
+- `world` — same shape as `GET /stats/world`.
+- `systems` — per-system entries in pipeline order; `null` before first `Progress` call.
+  - `name` — display name set via `(*System).SetName`; auto-generated otherwise.
+  - `last_tick_duration` — wall-clock nanoseconds in the most recent tick; `0` if skipped.
+  - `invocations` — total number of times this system ran since world creation.
+  - `avg_duration` — `invocations > 0 ? total / invocations : 0`.
+  - `total_skipped` — ticks skipped by interval or rate gating.
+- `phases` — per-phase entries in topological order; `null` before first `Progress` call.
+  - `name` — phase display name (e.g. `"PreUpdate"`, `"OnUpdate"`).
+  - `system_count` — active systems in this phase during the last tick.
+  - `duration` — phase wall-clock nanoseconds in the last tick.
+  - `cumulative_duration` — total across all ticks since world creation.
+  - `invocations` — number of `Progress` calls in which this phase ran.
+
+Duration values are `time.Duration` encoded as `int64` nanoseconds.
 
 ---
 
@@ -533,10 +698,11 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Aggregated stats endpoints (FlecsStats module)
 
-> **Not yet ported in Go flecs.** `GET /stats/world` and `GET /stats/pipeline` return
-> aggregated multi-period statistics collected by the `FlecsStats` module (import
-> `FlecsStats` in C). The Go `GET /stats` endpoint returns a single-frame snapshot from
-> `World.Stats()`. Multi-period aggregation and the FlecsStats module are not yet ported.
+> **Partially ported in Go flecs (v0.86.0).** `GET /stats/world` and `GET /stats/pipeline`
+> are now implemented and return the single-frame `StatsSnapshot()` data (world counters,
+> per-system metrics, per-phase timing). The upstream C equivalents return *multi-period*
+> aggregated statistics collected by the `FlecsStats` module; multi-period aggregation and
+> the `?period=` query parameter are **not yet ported**.
 
 ### Command capture endpoints
 
@@ -572,6 +738,6 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 - **Query execution endpoint** (`GET /query?expr=`) — requires FlecsQueryLanguage DSL; not ported to Go flecs.
 - **Entity / component mutation endpoints** (`PUT /entity`, `DELETE /entity`, `PUT /component`, `DELETE /component`) — require reflection/meta module; not ported.
 - **Toggle endpoint** (`PUT /toggle`) — requires entity disabling (`Disabled` tag) and `CanToggle` trait; not ported.
-- **Aggregated stats (FlecsStats module)** — `GET /stats/world`, `GET /stats/pipeline`; FlecsStats module not ported.
+- **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
 - **Type-info / reflection endpoint** (`GET /type_info`) — requires meta-cursor (`ecs_meta_cursor`); not ported.
 - **FlecsExplorer integration** — browser UI requires unported endpoints; not integrated.

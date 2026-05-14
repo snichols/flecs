@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // NewRESTHandler returns an http.Handler that exposes read-only inspection
@@ -16,6 +17,10 @@ import (
 // for all GET endpoints; concurrent GET requests must be externally serialized,
 // or the world must not be mutated while they run.
 //
+// GET /stats/world and GET /stats/pipeline are the exception: they call
+// w.StatsSnapshot() directly, which acquires only a stats read-lock and is
+// goroutine-safe without an outer w.Read scope.
+//
 // PUT /snapshot replaces world state and MUST NOT run concurrently with any
 // other world operation — whether another GET request, a direct Set/Delete
 // call, or a second PUT /snapshot. Callers that need concurrent access must
@@ -25,6 +30,8 @@ import (
 // # Routes
 //
 //	GET /stats              — world stats JSON (200)
+//	GET /stats/world        — WorldStats snapshot as JSON; Cache-Control: no-store (200 or 503)
+//	GET /stats/pipeline     — PipelineStats snapshot as JSON; Cache-Control: no-store (200 or 503)
 //	GET /components         — all registered component infos (200)
 //	GET /components/{id}    — single component by uint64 ID (200 or 404)
 //	GET /entities           — alive entities; optional ?limit=N (default 1000, max 10000) (200 or 400)
@@ -34,6 +41,8 @@ import (
 func NewRESTHandler(w *World) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", restStats(w))
+	mux.HandleFunc("GET /stats/world", restStatsWorld(w))
+	mux.HandleFunc("GET /stats/pipeline", restStatsPipeline(w))
 	mux.HandleFunc("GET /components", restComponents(w))
 	mux.HandleFunc("GET /components/{id}", restComponentByID(w))
 	mux.HandleFunc("GET /entities", restEntities(w))
@@ -41,6 +50,62 @@ func NewRESTHandler(w *World) http.Handler {
 	mux.HandleFunc("GET /snapshot", restSnapshotGet(w))
 	mux.HandleFunc("PUT /snapshot", restSnapshotPut(w))
 	return mux
+}
+
+// worldStatsResponse is the JSON shape for the WorldStats portion of a snapshot.
+// Field names are snake_case to match upstream REST conventions.
+type worldStatsResponse struct {
+	EntityCount    int     `json:"entity_count"`
+	TableCount     int     `json:"table_count"`
+	ArchetypeCount int     `json:"archetype_count"`
+	FrameCount     uint64  `json:"frame_count"`
+	TotalTime      float64 `json:"total_time"`
+	LastTickDelta  float64 `json:"last_tick_delta"`
+}
+
+// systemStatsResponse is the JSON shape for a single SystemStats entry.
+type systemStatsResponse struct {
+	Name             string        `json:"name"`
+	LastTickDuration time.Duration `json:"last_tick_duration"`
+	Invocations      uint64        `json:"invocations"`
+	AvgDuration      time.Duration `json:"avg_duration"`
+	TotalSkipped     uint64        `json:"total_skipped"`
+}
+
+// phaseStatsResponse is the JSON shape for a single PhaseStats entry.
+type phaseStatsResponse struct {
+	Name               string        `json:"name"`
+	SystemCount        int           `json:"system_count"`
+	Duration           time.Duration `json:"duration"`
+	CumulativeDuration time.Duration `json:"cumulative_duration"`
+	Invocations        uint64        `json:"invocations"`
+}
+
+// pipelineStatsResponse is the JSON shape for the GET /stats/pipeline endpoint.
+type pipelineStatsResponse struct {
+	World   worldStatsResponse    `json:"world"`
+	Systems []systemStatsResponse `json:"systems"`
+	Phases  []phaseStatsResponse  `json:"phases"`
+}
+
+func toWorldStatsResponse(s WorldStats) worldStatsResponse {
+	return worldStatsResponse(s)
+}
+
+func toPipelineStatsResponse(snap PipelineStats) pipelineStatsResponse {
+	systems := make([]systemStatsResponse, len(snap.Systems))
+	for i, s := range snap.Systems {
+		systems[i] = systemStatsResponse(s)
+	}
+	phases := make([]phaseStatsResponse, len(snap.Phases))
+	for i, p := range snap.Phases {
+		phases[i] = phaseStatsResponse(p)
+	}
+	return pipelineStatsResponse{
+		World:   toWorldStatsResponse(snap.World),
+		Systems: systems,
+		Phases:  phases,
+	}
 }
 
 // componentInfoResponse is the JSON shape for a registered component.
@@ -105,6 +170,32 @@ func restStats(w *World) http.HandlerFunc {
 		var stats Stats
 		w.Read(func(fr *Reader) { stats = fr.Stats() })
 		writeJSON(rw, http.StatusOK, stats)
+	}
+}
+
+func restStatsWorld(w *World) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			}
+		}()
+		snap := w.StatsSnapshot()
+		rw.Header().Set("Cache-Control", "no-store")
+		writeJSON(rw, http.StatusOK, map[string]worldStatsResponse{"world": toWorldStatsResponse(snap.World)})
+	}
+}
+
+func restStatsPipeline(w *World) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			}
+		}()
+		snap := w.StatsSnapshot()
+		rw.Header().Set("Cache-Control", "no-store")
+		writeJSON(rw, http.StatusOK, toPipelineStatsResponse(snap))
 	}
 }
 

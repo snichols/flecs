@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.86.0 — 2026-05-14 — Phase 16.31: REST stats endpoints
+
+Adds two new HTTP endpoints to the read-only REST handler so external monitoring tools
+can poll the Phase 16.29 `StatsSnapshot()` over HTTP without embedding the Go API.
+Coverage 100% on new code in `rest.go`.
+
+### API additions
+
+- **`GET /stats/world`** — returns `{ "world": <WorldStats JSON> }` with snake_case field names.
+  Calls `w.StatsSnapshot()` directly (goroutine-safe; no outer `Read` scope). Response headers:
+  `Content-Type: application/json`, `Cache-Control: no-store`. Returns `503 Service Unavailable`
+  on world panic (e.g. teardown).
+- **`GET /stats/pipeline`** — returns `{ "world": ..., "systems": [...], "phases": [...] }`.
+  Same goroutine and header semantics as `/stats/world`.
+
+### Response types (unexported)
+
+- `worldStatsResponse` — snake_case JSON wrapper for `WorldStats`:
+  `entity_count`, `table_count`, `archetype_count`, `frame_count`, `total_time`, `last_tick_delta`.
+- `systemStatsResponse` — snake_case JSON wrapper for `SystemStats`:
+  `name`, `last_tick_duration`, `invocations`, `avg_duration`, `total_skipped`.
+- `phaseStatsResponse` — snake_case JSON wrapper for `PhaseStats`:
+  `name`, `system_count`, `duration`, `cumulative_duration`, `invocations`.
+
+### Semantics
+
+- **Snapshot freshness** — a new `StatsSnapshot()` is taken on every request; data reflects
+  the end of the most recently completed `Progress` call.
+- **Before first Progress** — `systems` and `phases` are `null`; world counters are zero.
+- **Duration encoding** — `time.Duration` values are encoded as `int64` nanoseconds.
+- **No multi-period aggregation** — single-frame snapshot only; the `?period=` query parameter
+  from upstream C flecs is out of scope.
+
+### Non-goals (unchanged)
+
+Mutation endpoints, query DSL, `GET /type_info`, multi-period stats aggregation, authentication,
+and CORS are not added.
+
+### Test file
+
+`rest_stats_test.go` — 10 test cases: response shape, header correctness, field names,
+after-Progress values, system metrics, 503 panic recovery (nil world), concurrent requests.
+Race-detector clean.
+
+---
+
 ## v0.85.0 — 2026-05-14 — Phase 16.30: Units addon
 
 Ports the upstream flecs Units addon to Go. Components can be tagged with typed unit semantics so debug overlays, serializers, and conversion helpers can render values as `5.2 m` instead of raw floats. Coverage ≥ 100% on `units.go`.
