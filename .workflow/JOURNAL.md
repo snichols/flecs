@@ -6,3 +6,7 @@ Phase 15.20 (v0.52.0): Sparse query integration complete. Three-mode iterator (a
 
 Coverage gap resolved: added 4 new test functions and sparseArch2 helper type to sparse_test.go. query.go coverage raised from 92.7% to 95.8% (461/481 statements), clearing the ≥95.0% gate. sparse.go remains at 96.6%. Tests cover: Count()/Table()/Entities() API on sparse iterators, nextMixed non-matching-table branch (line 624), matchesTable sparse-Not skip (line 785), updateOptionalPresenceMixed (lines 692-706, all branches including cleanup loop), and IsFieldSelf continue/panic paths. All tests pass -race -count=1, go vet clean.
 
+## iterate iteration 3 (2026-05-13)
+
+Fixed two gofmt formatting violations in query.go and sparse_test.go that caused golangci-lint to fail. All other requirements remain satisfied: coverage gates pass, all tests pass with -race, lint is now clean.
+
