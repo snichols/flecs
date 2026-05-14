@@ -626,11 +626,11 @@ func TestOrderedChildren_BuiltinIndex(t *testing.T) {
 	if got := w.Sparse().Index(); got != 34 {
 		t.Errorf("Sparse index: want 34, got %d", got)
 	}
-	if got := w.Wildcard().Index(); got != 35 {
-		t.Errorf("Wildcard index: want 35, got %d", got)
+	if got := w.Wildcard().Index(); got != 36 {
+		t.Errorf("Wildcard index: want 36, got %d", got)
 	}
-	if got := w.Any().Index(); got != 36 {
-		t.Errorf("Any index: want 36, got %d", got)
+	if got := w.Any().Index(); got != 37 {
+		t.Errorf("Any index: want 37, got %d", got)
 	}
 }
 

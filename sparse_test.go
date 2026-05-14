@@ -77,9 +77,10 @@ func TestSparse_HasID(t *testing.T) {
 	})
 }
 
-// TestSparse_NoArchetypeTransition verifies that adding a Sparse component does NOT
-// change the entity's archetype. The entity stays in the same table.
-func TestSparse_NoArchetypeTransition(t *testing.T) {
+// TestSparse_ArchetypeTransition verifies that adding a Sparse-only component DOES
+// cause an archetype transition (v0.53.0 behavior: Sparse alone ≠ DontFragment).
+// To suppress the transition, also apply SetDontFragment.
+func TestSparse_ArchetypeTransition(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[sparsePos](w)
 	flecs.SetSparse(w, posID)
@@ -87,19 +88,29 @@ func TestSparse_NoArchetypeTransition(t *testing.T) {
 	var e flecs.ID
 	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() })
 
-	// Capture the table before Set.
 	tablesBefore := w.TablesFor(posID)
 
 	w.Write(func(fw *flecs.Writer) {
 		flecs.Set(fw, e, sparsePos{X: 5, Y: 5})
 	})
 
-	// No new archetype table should be created for posID.
+	// Sparse-only: a new archetype table IS created for posID in v0.53.0.
 	tablesAfter := w.TablesFor(posID)
-	if len(tablesAfter) != len(tablesBefore) {
-		t.Errorf("Sparse Set created an archetype table: before=%d tables, after=%d tables",
+	if len(tablesAfter) <= len(tablesBefore) {
+		t.Errorf("Sparse-only Set should have created an archetype table: before=%d, after=%d",
 			len(tablesBefore), len(tablesAfter))
 	}
+
+	// But data lives in sparse-set (pointer-stable).
+	w.Read(func(r *flecs.Reader) {
+		pos, ok := flecs.Get[sparsePos](r, e)
+		if !ok {
+			t.Fatal("Get: expected ok=true after Sparse Set")
+		}
+		if pos.X != 5 || pos.Y != 5 {
+			t.Errorf("Get: got (%v,%v), want (5,5)", pos.X, pos.Y)
+		}
+	})
 }
 
 // TestSparse_Remove verifies that Remove on a Sparse component works.
@@ -682,7 +693,9 @@ func TestSparse_MarshalRoundTrip(t *testing.T) {
 		t.Fatalf("MarshalJSON failed: %v", err)
 	}
 
-	// Verify JSON contains sparse metadata.
+	// Verify JSON contains sparse_components (policy flag) but NOT sparse_data.
+	// In v0.53.0, Sparse-only data is in the entity body (archetype-stored path);
+	// sparse_data is only emitted for DontFragment components.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
@@ -690,8 +703,8 @@ func TestSparse_MarshalRoundTrip(t *testing.T) {
 	if _, ok := raw["sparse_components"]; !ok {
 		t.Error("MarshalJSON: missing sparse_components field")
 	}
-	if _, ok := raw["sparse_data"]; !ok {
-		t.Error("MarshalJSON: missing sparse_data field")
+	if _, ok := raw["sparse_data"]; ok {
+		t.Error("MarshalJSON: sparse_data should be absent for Sparse-only components (data is in entity body)")
 	}
 
 	// Restore into a fresh world.
@@ -1321,8 +1334,9 @@ func TestSparse_QueryMarshalRoundTrip(t *testing.T) {
 }
 
 // TestSparse_QueryIterSparseCountTableEntities verifies the iterator API on
-// pure-sparse iterators: Count() returns 1, Table() panics, and Entities()
-// returns nil after exhaustion.
+// mixed sparse iterators: Count() returns 1 (entity-at-a-time), Table() returns
+// the archetype table (Sparse-only components ARE in the archetype in v0.53.0),
+// and Entities() returns the current entity.
 func TestSparse_QueryIterSparseCountTableEntities(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[sparsePos](w)
@@ -1335,32 +1349,42 @@ func TestSparse_QueryIterSparseCountTableEntities(t *testing.T) {
 
 	q := flecs.NewQueryFromTerms(w, flecs.With(posID))
 
-	// Count() must return 1 for pure-sparse iterators (entity-at-a-time mode).
+	// Count() must return 1 for mixed-sparse iterators (entity-at-a-time mode).
 	q.Each(func(it *flecs.QueryIter) {
 		if c := it.Count(); c != 1 {
-			t.Errorf("sparse Count(): got %d, want 1", c)
+			t.Errorf("Sparse-only Count(): got %d, want 1", c)
 		}
 	})
 
-	// Table() must panic on a pure-sparse iterator (no archetype table).
+	// Table() must NOT panic on a Sparse-only mixed iterator (entity is in archetype).
 	it := q.Iter()
-	it.Next()
+	if !it.Next() {
+		t.Fatal("Next(): expected true for Sparse-only query with one entity")
+	}
+	tbl := it.Table()
+	if tbl == nil {
+		t.Error("Table(): expected non-nil table for Sparse-only iterator")
+	}
+
+	// DontFragment-only queries are pure-sparse; Table() panics for them.
+	type dfOnlyPos struct{ X float32 }
+	dfID := flecs.RegisterComponent[dfOnlyPos](w)
+	flecs.SetDontFragment(w, dfID)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, dfOnlyPos{X: 2})
+	})
+	qDF := flecs.NewQueryFromTerms(w, flecs.With(dfID))
+	itDF := qDF.Iter()
+	itDF.Next()
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
-				t.Error("Table() on sparse iterator: expected panic, got none")
+				t.Error("Table() on DontFragment-only iterator: expected panic, got none")
 			}
 		}()
-		_ = it.Table()
+		_ = itDF.Table()
 	}()
-
-	// After the iterator is exhausted, Entities() returns nil (sparseEntity == 0).
-	it2 := q.Iter()
-	for it2.Next() {
-	}
-	if got := it2.Entities(); got != nil {
-		t.Errorf("Entities() after exhaustion on sparse iter: got %v, want nil", got)
-	}
 }
 
 // TestSparse_QueryMixedNonMatchingTable verifies that nextMixed skips archetype

@@ -148,7 +148,10 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
-		terms[i] = Term{ID: id, Kind: TermAnd, Sparse: isSparseTermID(w, id)}
+		terms[i] = Term{ID: id, Kind: TermAnd,
+			Sparse:       isSparseTermID(w, id),
+			DontFragment: isDontFragmentTermID(w, id),
+		}
 		applyInheritablePromotion(w, &terms[i])
 	}
 	return newCachedQueryInternal(w, terms, cp, nil)
@@ -198,20 +201,21 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		}
 	}
 
-	// Determine if all And terms are sparse (pure-sparse cached query).
-	sparseAndCount := 0
+	// Determine if all And terms are DontFragment (pure sparse-set cached query).
+	// Sparse-only terms still live in archetype tables, so they don't qualify.
+	dontFragmentAndCount := 0
 	archetypeAndCount := 0
 	for _, t := range terms {
 		if t.Kind != TermAnd {
 			continue
 		}
-		if t.Sparse {
-			sparseAndCount++
+		if t.DontFragment {
+			dontFragmentAndCount++
 		} else {
 			archetypeAndCount++
 		}
 	}
-	sparseAndOnly := archetypeAndCount == 0 && sparseAndCount > 0
+	sparseAndOnly := archetypeAndCount == 0 && dontFragmentAndCount > 0
 
 	cq := &CachedQuery{
 		w:               w,
@@ -319,12 +323,12 @@ func (cq *CachedQuery) Iter() *QueryIter {
 	wildcardIdx := findWildcardTermIdx(cq.w, cq.terms)
 
 	if cq.sparseAndOnly {
-		// Pure-sparse: build a fresh sparse driver (sparse-sets may have mutated).
+		// Pure-DontFragment: build a fresh sparse driver (sparse-sets may have mutated).
 		var driver []sparseEntry
 		zeroDriver := false
 		minLen := -1
 		for _, term := range cq.terms {
-			if term.Kind != TermAnd || !term.Sparse {
+			if term.Kind != TermAnd || !term.DontFragment {
 				continue
 			}
 			key := ID(term.ID.Index())
@@ -366,7 +370,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 	}
 
 	if hasSparseTerms {
-		// Mixed: use cached archetype tables; per-entity sparse filtering in nextMixed.
+		// Mixed: use cached archetype tables; per-entity sparse/DontFragment filtering in nextMixed.
 		return &QueryIter{
 			world:           cq.w,
 			terms:           cq.terms,
@@ -469,12 +473,13 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 		return
 	}
 	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).
-	// Sparse terms are skipped: they do not live in archetype tables.
+	// DontFragment terms are skipped: they do not live in archetype tables.
+	// Sparse-only terms DO live in archetype tables, so they are checked here.
 	for _, term := range cq.terms {
 		switch term.Kind {
 		case TermAnd:
-			if term.Sparse {
-				break // sparse term: skip archetype check; verified per-entity at iteration time
+			if term.DontFragment {
+				break // DontFragment term: skip archetype check; verified per-entity at iteration time
 			}
 			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
 				// Wildcard/Any pair matching: sentinel IDs never appear in table
@@ -508,8 +513,8 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 				}
 			}
 		case TermNot:
-			if term.Sparse {
-				break // sparse not terms checked per-entity; skip archetype check
+			if term.DontFragment {
+				break // DontFragment not-terms checked per-entity; skip archetype check
 			}
 			if t.HasComponent(term.ID) {
 				return
@@ -601,6 +606,21 @@ func (cq *CachedQuery) Changed() bool {
 		}
 		for _, t := range cq.tables {
 			cq.lastChangeCounts[t] = t.ChangeCount()
+		}
+		// Sync sparse versions so the next call doesn't double-report the same change.
+		for _, term := range cq.terms {
+			if !term.Sparse {
+				continue
+			}
+			key := ID(term.ID.Index())
+			ss := cq.w.sparseStorage[key]
+			if ss == nil {
+				continue
+			}
+			if cq.sparseVersions == nil {
+				cq.sparseVersions = make(map[ID]uint64)
+			}
+			cq.sparseVersions[key] = ss.version
 		}
 		return true
 	}

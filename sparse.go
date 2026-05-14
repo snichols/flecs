@@ -47,19 +47,19 @@ type sparseSet struct {
 // sparse-set keyed by entity ID rather than in the archetype column table. The
 // consequences are:
 //
-//   - Adding/removing a Sparse component does NOT cause an archetype transition
-//     for the owning entity — the entity stays in its current archetype table.
-//   - The Sparse component's address is pointer-stable: it does not move when
-//     other components on the same entity change (archetype migrations do not
-//     affect the sparse-set allocation).
-//   - HasID and OwnsID consult the sparse-set, not the entity's archetype type.
-//   - Query terms naming a Sparse component iterate the sparse-set natively
-//     (v0.52.0). Pure-sparse, mixed archetype+sparse, Not, and Optional on sparse
-//     terms are all supported. See docs/Queries.md for worked examples.
+//   - Data is stored in a per-component sparse-set (pointer-stable, heap-allocated).
+//   - Adding/removing a Sparse component DOES cause an archetype transition — the
+//     component appears in the entity's archetype type. (Use DontFragment to also
+//     suppress the archetype transition.)
+//   - HasID and OwnsID consult the entity's archetype type (the component is present
+//     in the entity's type after first add).
+//   - Query terms naming a Sparse-only component use mixed archetype+sparse iteration.
 //
-// Note: Go-flecs Sparse consolidates the upstream C EcsSparse + EcsIdDontFragment
-// behaviors into a single trait. When DontFragment lands in a later phase, the
-// split can be revisited. This consolidation is documented in CHANGELOG.md v0.51.0.
+// Canonical pattern — use Sparse + DontFragment together (matches v0.51.0–v0.52.0 behavior):
+//
+//	posID := flecs.RegisterComponent[Position](w)
+//	flecs.SetSparse(w, posID)
+//	flecs.SetDontFragment(w, posID)
 //
 // Usage:
 //
@@ -211,15 +211,24 @@ func sparseSetRemove(w *World, e ID, componentID ID) {
 }
 
 // isSparseTermID reports whether a query term with the given id refers to a
-// component stored in sparse-set storage. For non-pair IDs, this checks the
-// sparse policy directly. For pair IDs, pairs are stored in archetype tables in
-// v0.52.0 regardless of whether the relationship is also a sparse scalar
-// component — so pair terms are never considered sparse.
+// component stored in sparse-set storage (Sparse OR DontFragment). For non-pair IDs,
+// this checks both policies. For pair IDs, pairs are archetype-stored so always false.
 func isSparseTermID(w *World, id ID) bool {
 	if id.IsPair() {
-		return false // pairs are archetype-stored in v0.52.0
+		return false
 	}
-	return w.sparsePolicies[ID(id.Index())]
+	key := ID(id.Index())
+	return w.sparsePolicies[key] || w.dontFragmentPolicies[key]
+}
+
+// isDontFragmentTermID reports whether a query term with the given id refers to a
+// DontFragment component (not present in the entity's archetype type). Returns false
+// for pair IDs. Sparse-only components are NOT DontFragment.
+func isDontFragmentTermID(w *World, id ID) bool {
+	if id.IsPair() {
+		return false
+	}
+	return w.dontFragmentPolicies[ID(id.Index())]
 }
 
 // EachSparse iterates all entities that hold component T as Sparse, calling fn

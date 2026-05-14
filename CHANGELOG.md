@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.53.0 — 2026-05-13 — Phase 15.21: Sparse/DontFragment split (BREAKING)
+
+### Breaking changes
+
+- **`Sparse` alone no longer suppresses archetype transitions.** In v0.52.0, `SetSparse` consolidated
+  upstream `EcsSparse + EcsIdDontFragment` into a single trait. In v0.53.0, these are split:
+  - `Sparse` alone: data in sparse-set, entity DOES transition archetype tables on add/remove.
+  - `DontFragment` alone: data in sparse-set, entity does NOT transition archetype tables.
+  - `Sparse + DontFragment` together: the canonical combination matching v0.51.0–v0.52.0 `Sparse` behavior.
+  See `MIGRATING.md` for the full migration guide.
+- **Built-in entity index shift:** `DontFragment` inserted at index 35; `Wildcard` shifts 35→36;
+  `Any` shifts 36→37; user entities now start at index 38. The built-in entity count is now 37.
+- **`MarshalJSON` format changed:** `sparse_data` now only covers DontFragment components.
+  New `dont_fragment_components` field. Sparse-only data is in the entity body. v0.52.0 snapshots
+  are not forward-compatible; regenerate snapshots after migrating.
+
+### Added
+
+- **`DontFragment` trait** — `SetDontFragment(w *World, componentID ID)`, `IsDontFragment(s scope, componentID ID) bool`,
+  `w.DontFragment() ID` (index 35), `fw.AddID(compID, w.DontFragment())` bare-tag form.
+  `SetDontFragment` panics if the component is already in use. `applyDontFragmentPolicy` initializes
+  the backing sparse-set storage (shared with `Sparse`).
+- **`isDontFragmentTermID(w *World, id ID) bool`** — returns true when a component has the DontFragment
+  trait. Used by query terms (`Term.DontFragment`) to select iteration mode (pure sparse-set vs mixed).
+- **`Term.DontFragment bool`** — new field on `Term`, stamped by `validateAndSortTerms` and `NewQuery`.
+  Drives iteration mode selection: DontFragment terms trigger pure sparse-set iteration.
+- **Three-way dispatch in `setImmediateByPtr`** — `DontFragment` path (no archetype migrate),
+  `Sparse-only` path (`migrateArchetypeOnly` + sparse-set write), archetype path.
+- **`migrateArchetypeOnly(e, addID, removeID)`** — helper that performs archetype table migration
+  without firing `OnAdd`/`OnRemove` hooks. Used by Sparse-only add/remove paths where hooks are
+  fired externally with the sparse-set pointer.
+- **10 new tests** in `dont_fragment_test.go` — built-in index, no-archetype-transition, sparse-only
+  does-transition, Sparse+DontFragment=old-behavior, IsDontFragment roundtrip, HasID/OwnsID,
+  Remove, after-use panic, query integration, marshal roundtrip, bare-tag AddID form.
+- **`MIGRATING.md`** — full migration guide from v0.52.0 to v0.53.0.
+
+### Changed
+
+- **`isSparseTermID`** — now returns true for both `Sparse` and `DontFragment` components (data in sparse-set).
+- **`sparseAndOnly` in `CachedQuery`** — now driven by `dontFragmentAndCount` (not `sparseAndCount`).
+  Only pure-DontFragment queries use the sparse-set driver; Sparse-only queries use mixed archetype-seeded iteration.
+- **`tryMatchTable` in `CachedQuery`** — now skips `term.DontFragment` (not `term.Sparse`) for archetype checks.
+- **`HasID` / `OwnsID`** — now check `sparsePolicies OR dontFragmentPolicies` before falling through to archetype.
+- **`Remove[T]` deferred path** — now checks `dontFragmentPolicies` in addition to `sparsePolicies`.
+- **`deleteOne`** — skips OnRemove for Sparse-only components in the archetype loop; `sparseHeld` cleanup fires OnRemove with the correct sparse-set pointer.
+- **`MarshalJSON`** — emits `dont_fragment_components` list; `sparse_data` now covers DontFragment data only.
+- **`UnmarshalJSON` Phase 0** — restores both `sparse_components` and `dont_fragment_components` policies.
+- **`CachedQuery.Changed()` tablesAdded path** — now also syncs `sparseVersions` to prevent double-reporting.
+- **`TestSparse_NoArchetypeTransition` → `TestSparse_ArchetypeTransition`** — updated to reflect that Sparse-only DOES cause an archetype transition in v0.53.0.
+- **`TestSparse_QueryIterSparseCountTableEntities`** — updated: Sparse-only uses mixed mode (Table() does not panic); DontFragment-only added to verify Table() panic.
+- **`TestSparse_MarshalRoundTrip`** — updated: sparse_data absent for Sparse-only; data in entity body.
+- **`builtinEntityCount`** updated from 36 → 37 in `meta_test.go`.
+- **Wildcard/Any index assertions** updated in `ordered_children_test.go`, `with_test.go`, `isa_test.go`.
+
 ## v0.52.0 — 2026-05-13 — Phase 15.20: Sparse query integration
 
 ### Added

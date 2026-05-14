@@ -17,9 +17,15 @@ func addIDOnWorld(w *World, e ID, e2 ID) bool {
 		if rec == nil {
 			panic("flecs: AddID called on dead entity")
 		}
-		// Sparse components are data-bearing and cannot be added as a bare tag.
-		if !e2.IsPair() && w.sparsePolicies[ID(e2.Index())] {
-			panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", e2))
+		// Data-bearing sparse/DontFragment components cannot be added as a bare tag.
+		if !e2.IsPair() {
+			eIdx := ID(e2.Index())
+			if w.sparsePolicies[eIdx] {
+				panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", e2))
+			}
+			if w.dontFragmentPolicies[eIdx] {
+				panic(fmt.Sprintf("flecs: AddID: cannot add DontFragment component %v as a tag; use Set with a value", e2))
+			}
 		}
 		if rec.Table != nil && rec.Table.HasComponent(e2) {
 			return false
@@ -40,9 +46,15 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		return false
 	}
 	w.registry.EnsureID(id)
-	// Sparse components are data-bearing and cannot be added as a bare tag.
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", id))
+	// Data-bearing sparse/DontFragment components cannot be added as a bare tag.
+	if !id.IsPair() {
+		iIdx := ID(id.Index())
+		if w.sparsePolicies[iIdx] {
+			panic(fmt.Sprintf("flecs: AddID: cannot add Sparse component %v as a tag; use Set with a value", id))
+		}
+		if w.dontFragmentPolicies[iIdx] {
+			panic(fmt.Sprintf("flecs: AddID: cannot add DontFragment component %v as a tag; use Set with a value", id))
+		}
 	}
 	// When a cleanup-trait pair is added to an entity, translate the pair into
 	// an entry in the world's cleanupPolicies map. This makes the pair-add path
@@ -166,6 +178,11 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// Bare Sparse tag added to component entity e: mark e as Sparse-stored.
 		// This is the fw.AddID(componentID, w.Sparse()) form.
 		applySparsePolicy(w, e)
+	} else if w.dontFragmentID != 0 && id.Index() == w.dontFragmentID.Index() {
+		// Bare DontFragment tag added to component entity e: mark e as DontFragment.
+		// This is the fw.AddID(componentID, w.DontFragment()) form, mirroring C's
+		// ecs_add_id(world, ecs_id(Position), EcsDontFragment).
+		applyDontFragmentPolicy(w, e)
 	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
@@ -315,16 +332,36 @@ func overrideCopyForInstance(w *World, instance, prefab ID, seen map[ID]struct{}
 }
 
 func removeIDImmediate(w *World, e ID, id ID) bool {
-	// Sparse: remove from per-component sparse-set; do NOT cause an archetype transition.
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		ptr := sparseSetGet(w, e, id)
-		if ptr == nil {
-			return false
+	if !id.IsPair() {
+		iIdx := ID(id.Index())
+		// DontFragment (alone or with Sparse): remove from sparse-set; do NOT cause
+		// an archetype transition (component was never in the archetype type).
+		if w.dontFragmentPolicies[iIdx] {
+			ptr := sparseSetGet(w, e, id)
+			if ptr == nil {
+				return false
+			}
+			info, _ := w.registry.LookupByID(id)
+			w.fireOnRemove(info, id, e, ptr)
+			sparseSetRemove(w, e, id)
+			return true
 		}
-		info, _ := w.registry.LookupByID(id)
-		w.fireOnRemove(info, id, e, ptr)
-		sparseSetRemove(w, e, id)
-		return true
+		// Sparse-only (no DontFragment): remove from sparse-set AND cause an archetype
+		// transition (component IS in the archetype type).
+		if w.sparsePolicies[iIdx] {
+			ptr := sparseSetGet(w, e, id)
+			if ptr == nil {
+				return false
+			}
+			info, _ := w.registry.LookupByID(id)
+			w.fireOnRemove(info, id, e, ptr)
+			sparseSetRemove(w, e, id)
+			rec := w.index.Get(e)
+			if rec != nil && rec.Table != nil && rec.Table.HasComponent(id) {
+				w.migrateArchetypeOnly(e, 0, id)
+			}
+			return true
+		}
 	}
 	rec := w.index.Get(e)
 	if rec == nil {

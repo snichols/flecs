@@ -15,8 +15,9 @@ func getRefOnWorld[T any](w *World, e ID) *T {
 	if !ok || info.Component == 0 {
 		return nil
 	}
-	// Sparse: return boxed pointer directly — it is pointer-stable.
-	if w.sparsePolicies[ID(info.Component.Index())] {
+	// Sparse or DontFragment: return boxed pointer directly — it is pointer-stable.
+	cIdx := ID(info.Component.Index())
+	if w.sparsePolicies[cIdx] || w.dontFragmentPolicies[cIdx] {
 		ptr := sparseSetGet(w, e, info.Component)
 		if ptr == nil {
 			return nil
@@ -120,13 +121,16 @@ func (w *World) GetByID(e ID, id ID) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	// Sparse: fetch from sparse-set.
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		ptr := sparseSetGet(w, e, id)
-		if ptr == nil {
-			return nil, false
+	// Sparse or DontFragment: fetch from sparse-set.
+	if !id.IsPair() {
+		iIdx := ID(id.Index())
+		if w.sparsePolicies[iIdx] || w.dontFragmentPolicies[iIdx] {
+			ptr := sparseSetGet(w, e, id)
+			if ptr == nil {
+				return nil, false
+			}
+			return materializeByPtr(info, ptr), true
 		}
-		return materializeByPtr(info, ptr), true
 	}
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -273,34 +277,74 @@ func setByIDImmediate(w *World, e ID, id ID, v any) {
 // w.registry; info is its TypeInfo. srcPtr points to the value to write
 // (nil for tag components, where the column write is a no-op).
 func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *component.TypeInfo) {
-	// Sparse: route to per-component sparse-set; do NOT call w.migrate.
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		rec := w.index.Get(e)
-		if rec == nil {
-			panic("flecs: Set called on dead entity")
+	if !id.IsPair() {
+		iIdx := ID(id.Index())
+		isDontFragment := w.dontFragmentPolicies[iIdx]
+		isSparse := w.sparsePolicies[iIdx]
+
+		// DontFragment (alone or with Sparse): route to sparse-set; do NOT call migrate.
+		// Component does not appear in the entity's archetype type.
+		if isDontFragment {
+			rec := w.index.Get(e)
+			if rec == nil {
+				panic("flecs: Set called on dead entity")
+			}
+			ss := w.sparseStorage[iIdx]
+			_, isExisting := ss.index[e.Index()]
+			if srcPtr != nil {
+				checkAndSetWriteOnce(w, e, id)
+			}
+			if w.singletonPolicies[iIdx] {
+				checkSingleton(w, id, e)
+			}
+			if !isExisting {
+				if srcPtr != nil {
+					sparseSetInsert(w, e, id, srcPtr)
+				}
+				w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
+				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+			} else {
+				if srcPtr != nil {
+					sparseSetInsert(w, e, id, srcPtr)
+				}
+				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+			}
+			return
 		}
-		key := ID(id.Index())
-		ss := w.sparseStorage[key]
-		_, isExisting := ss.index[e.Index()]
-		if srcPtr != nil {
-			checkAndSetWriteOnce(w, e, id)
-		}
-		if w.singletonPolicies[key] {
-			checkSingleton(w, id, e)
-		}
-		if !isExisting {
+
+		// Sparse-only (no DontFragment): data goes to sparse-set; component appears in
+		// the entity's archetype type (entity DOES transition tables on first add).
+		if isSparse {
+			rec := w.index.Get(e)
+			if rec == nil {
+				panic("flecs: Set called on dead entity")
+			}
+			ss := w.sparseStorage[iIdx]
+			_, isExisting := ss.index[e.Index()]
+			if srcPtr != nil {
+				checkAndSetWriteOnce(w, e, id)
+			}
+			if w.singletonPolicies[iIdx] {
+				checkSingleton(w, id, e)
+			}
 			if srcPtr != nil {
 				sparseSetInsert(w, e, id, srcPtr)
 			}
-			w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
-			w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
-		} else {
-			if srcPtr != nil {
-				sparseSetInsert(w, e, id, srcPtr)
+			t := rec.Table
+			if t == nil || !t.HasComponent(id) {
+				// First add: migrate archetype to include this component in the type,
+				// then fire OnAdd with the sparse-set pointer (not the table column).
+				w.migrateArchetypeOnly(e, id, 0)
+				w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
+				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+			} else {
+				if !isExisting {
+					w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
+				}
+				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
 			}
-			w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+			return
 		}
-		return
 	}
 	rec := w.index.Get(e)
 	if rec == nil {

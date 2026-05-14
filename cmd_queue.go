@@ -203,18 +203,18 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			expandWithIntoScratch(w, c.id, &q.scratch1)
 			c.kind = cmdSkip
 		case cmdRemoveID:
-			// Sparse: do not modify archetype signature; removal is handled via dispatch.
-			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
-				// leave kind; dispatch will call removeIDImmediate which handles sparse
+			// Sparse or DontFragment: do not modify archetype signature; removal is handled via dispatch.
+			if !c.id.IsPair() && (w.sparsePolicies[ID(c.id.Index())] || w.dontFragmentPolicies[ID(c.id.Index())]) {
+				// leave kind; dispatch will call removeIDImmediate which handles sparse/DF
 				break
 			}
 			q.scratch1 = sortedIDDelete(q.scratch1, c.id)
 			c.kind = cmdSkip
 		case cmdSetByID, cmdSetPair:
-			// Sparse: do not modify archetype signature; value is routed via sparse-set.
-			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+			// Sparse or DontFragment: do not modify archetype signature; value is routed via sparse-set.
+			if !c.id.IsPair() && (w.sparsePolicies[ID(c.id.Index())] || w.dontFragmentPolicies[ID(c.id.Index())]) {
 				hasSet = true
-				// keep kind; dispatch handles sparse Set via setImmediateByPtr
+				// keep kind; dispatch handles Set via setImmediateByPtr
 				break
 			}
 			q.scratch1 = sortedIDInsert(q.scratch1, c.id)
@@ -362,9 +362,9 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 	for {
 		c := &q.cmds[idx]
 		if c.kind == cmdSetByID || c.kind == cmdSetPair {
-			if !c.id.IsPair() && w.sparsePolicies[ID(c.id.Index())] {
+			if !c.id.IsPair() && (w.sparsePolicies[ID(c.id.Index())] || w.dontFragmentPolicies[ID(c.id.Index())]) {
 				// Leave as cmdSetByID: dispatch will call setImmediateByPtr which
-				// fires OnAdd (first Set) and OnSet correctly for sparse storage.
+				// fires OnAdd (first Set) and OnSet correctly for sparse/DF storage.
 			} else {
 				c.kind = cmdModified
 			}
