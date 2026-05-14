@@ -20,7 +20,7 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction. See [EntitiesCo
 - [Change Detection](#change-detection)
 - [Performance Notes](#performance-notes)
 - [Fixed per-term source](#fixed-per-term-source)
-- [Query variables (single-variable v1)](#query-variables-single-variable-v1)
+- [Query variables](#query-variables)
 - [Not Yet Ported](#not-yet-ported)
 
 ---
@@ -1243,13 +1243,13 @@ This is a deliberate divergence from C upstream, which treats optional fixed-sou
 
 ---
 
-## Query variables (single-variable v1)
+## Query variables
 
-**Shipped in v0.80.0.**
+**Shipped in v0.80.0 (single-variable); extended to N variables in v0.81.0.**
 
 Query variables let terms express **relational joins** rather than per-entity filters. Instead of filtering the iterated entity (`$this`) against a fixed component set, a variable name acts as a runtime-resolved entity slot that is constrained to satisfy other terms in the same query.
 
-The canonical motivating example — "spaceships docked to a planet":
+The single-variable motivating example — "spaceships docked to a planet":
 
 ```go
 type SpaceShip struct{}
@@ -1275,6 +1275,45 @@ for it.Next() {
 
 If spaceships A, B, C and planets P1, P2 are arranged as A→P1, B→P1, B→P2, C→P2, this query yields exactly four rows: (A, P1), (B, P1), (B, P2), (C, P2).
 
+### Multi-variable queries
+
+Multiple named variables can appear in the same query, enabling multi-hop relational joins. The canonical example — "spaceships docked to a planet that orbits a star":
+
+```go
+type SpaceShip struct{}
+type Planet   struct{ Name string }
+type Star     struct{}
+
+shipID    := flecs.RegisterComponent[SpaceShip](w)
+planetID  := flecs.RegisterComponent[Planet](w)
+starID    := flecs.RegisterComponent[Star](w)
+orbitsID  := /* relationship entity */
+dockedToID := /* relationship entity */
+
+// Query: SpaceShip($this), DockedTo($this,$planet), Planet($planet),
+//        Orbits($planet,$star), Star($star)
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(shipID),
+    flecs.WithPairTgtVar(dockedToID, "planet"),          // $this has (DockedTo, $planet)
+    flecs.WithVar(planetID, "planet"),                    // $planet has Planet
+    flecs.With(orbitsID).SrcVar("planet").TgtVar("star"), // $planet has (Orbits, $star)
+    flecs.WithVar(starID, "star"),                        // $star has Star
+)
+it := q.Iter()
+for it.Next() {
+    ship   := it.Entities()[0]
+    planet := it.Var("planet")
+    star   := it.Var("star")
+    _ = ship; _ = planet; _ = star
+}
+```
+
+With ships A→P1, B→P1,P2, C→P2 and both planets orbiting S1, this yields four rows: (A, P1, S1), (B, P1, S1), (B, P2, S1), (C, P2, S1).
+
+**Performance note**: multi-variable runtime is O(d₁ × d₂ × … × dN) where dN is each variable's domain size. Structure queries so that inner variables are heavily constrained by outer bindings.
+
+**Join order**: the first variable defined in the term list is always the outermost (driver) loop. Smarter join-order optimization (driver selection by domain size, mirroring upstream `compiler.c:1002-1021`) is deferred to Phase 16.27.
+
 ### Constructors
 
 ```go
@@ -1287,8 +1326,12 @@ flecs.WithVar(componentID ID, varName string) Term
 flecs.WithPairTgtVar(rel ID, varName string) Term
 
 // Chained setters — symmetrical with (Term).Source(e) from Phase 16.18.
+// SrcVar: check relID on the entity bound to srcVarName.
+// TgtVar: the pair (relID, $tgtVarName) — resolved at iteration time.
+// Combined: $srcVarName has (relID, $tgtVarName).
 flecs.With(componentID).SrcVar("varName")
 flecs.With(relID).TgtVar("varName")
+flecs.With(relID).SrcVar("srcVar").TgtVar("tgtVar")
 ```
 
 Panics at construction if `varName` is empty or if `componentID` / `rel` is zero.
@@ -1312,13 +1355,22 @@ _ = planets[0].Name                          // "P1" or "P2"
 
 ### Join semantics
 
-- **Driver variable**: the first variable name encountered in the term list (left-to-right) is the *driver*. Its domain is enumerated at `Iter()` time by intersecting all `WithVar` constraints for that name. No auto-optimization; first-defined wins.
-- **Result materialisation**: all `(driver-entity, $this-entity)` pairs are pre-computed at `Iter()` time. Each `Next()` advances to the next pre-computed row.
+- **Driver variable**: the first variable name encountered in the term list (left-to-right) is the *driver* (outermost join loop). Additional variables are enumerated in topo-dependency order nested inside it.
+- **Dependency order**: variable B depends on variable A when a term has `srcVar=A, tgtVar=B` (B's domain requires A's binding). A topo-sort determines the nested loop order. Cycles panic at construction with the cycle path.
+- **Result materialisation**: all `(variable-bindings, $this-entity)` tuples are pre-computed at `Iter()` time. Each `Next()` advances to the next pre-computed row.
 - **Backward compat**: queries with zero variables use the existing fast path; no overhead.
 
 ### Variable count cap
 
-v1 caps at **8 named variables** per query. Exceeding this panics at `NewQueryFromTerms` / `NewCachedQueryFromTerms` construction time.
+Up to **16 named variables** per query. Exceeding this panics at `NewQueryFromTerms` / `NewCachedQueryFromTerms` construction time. Upstream `EcsQueryMaxVarCount = 64` allows future increases.
+
+### Cycle detection
+
+If variable A's domain depends on B and B's domain depends on A, construction panics with a message of the form:
+
+```
+flecs: NewQueryFromTerms: variable dependency cycle detected: planet → star → planet
+```
 
 ### Cached queries
 
@@ -1329,6 +1381,8 @@ cq := flecs.NewCachedQueryFromTerms(w,
     flecs.With(shipID),
     flecs.WithPairTgtVar(dockedToID, "planet"),
     flecs.WithVar(planetID, "planet"),
+    flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+    flecs.WithVar(starID, "star"),
 )
 // Two separate iterations produce identical row sets (bindings re-computed each time).
 it1 := cq.Iter()
@@ -1339,27 +1393,26 @@ it2 := cq.Iter()
 
 Variable queries compose with:
 
-- **Fixed-source terms** (`WithSourceTerm` / `(Term).Source(e)`) — resolved once at iter start, independent of variable bindings.
+- **Fixed-source terms** (`WithSourceTerm` / `(Term).Source(e)`) — a fixed-source term may also carry a `TgtVar` to constrain a variable's domain to pair targets held by the fixed entity (e.g., `With(relID).Source(config).TgtVar("planet")` means "config has (rel, $planet)").
 - **`Without` terms** — applied as archetype filters on `$this` candidate tables.
 - **`Or` groups** — evaluated per candidate table in `varCheckTable`.
 
-### v1 limitations
+### Current limitations
 
-- **Single variable**: only one named variable plus the implicit `$this`. Multi-variable join (e.g., `$planet` and `$star`) is deferred to Phase 16.25.x.
 - **Entity-kind variables only**: no table-kind variables (`EcsVarTable`).
 - **Positive constraints only**: `WithVar` / `WithPairTgtVar` only. Negative-variable constraints (`!Foo($this, $planet)`) are not supported.
 - **`src` and `second` positions only**: variable in relationship name position (`$Rel($this, target)`) is not supported.
 - **No FQL string parsing**: programmatic API only; the `$Var` string syntax from Flecs Query Language is not parsed by the Go port.
-- **No join-order optimization**: first-defined variable is always the driver. Auto-optimization (matching upstream `compiler.c:1002-1021`) is Phase 16.25.x.
+- **No join-order optimization**: first-defined variable is always the driver. Auto-optimization (Phase 16.27 candidate, matching upstream `compiler.c:1002-1021`) is deferred.
 
 ### Upstream C references
 
 - `EcsIsVariable` (`include/flecs.h:772`) — flag marking a term ref as a variable.
 - `ecs_term_ref_t` (`include/flecs.h:799-811`) — term ref struct; `.src` / `.second` can be variables.
-- Variable kinds (`src/query/types.h:20-37`) — `EcsVarEntity` (single-entity); v1 ports this kind only.
+- Variable kinds (`src/query/types.h:20-37`) — `EcsVarEntity` (single-entity); Go port uses this kind only.
 - Variable discovery: `flecs_query_discover_vars` (`src/query/compiler/compiler.c:128`).
 - Iterator binding: `flecs_query_var_set_entity` / `flecs_query_var_reset` (`src/query/engine/eval_utils.c:58-235`).
-- Join-order optimizer (`compiler.c:1002-1021`) — explicitly out of scope for v1.
+- Join-order optimizer (`compiler.c:1002-1021`) — Phase 16.27 candidate.
 
 ---
 
@@ -1415,7 +1468,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Fixed per-term source** — ✅ **shipped in v0.73.0.** See [§ Fixed per-term source](#fixed-per-term-source) below.
 
-**Query variables** — ✅ **shipped in v0.80.0** (single-variable v1). See [§ Query variables (single-variable v1)](#query-variables-single-variable-v1) above. Multi-variable join optimization deferred to Phase 16.25.x.
+**Query variables** — ✅ **shipped in v0.80.0** (single-variable); **extended to N variables in v0.81.0**. See [§ Query variables](#query-variables) above. Join-order optimization deferred to Phase 16.27.
 
 **Sorted queries** — ✅ shipped in v0.59.0. See [§ Sorted queries](#sorted-queries) below.
 

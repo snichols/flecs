@@ -512,8 +512,6 @@ func WithSourceTerm(componentID, sourceEntity ID) Term {
 //
 // Panics if componentID or varName is zero/empty.
 //
-// v1 limitation: only the first-defined variable is the driver; multi-variable
-// join optimization is deferred to Phase 16.25.x.
 // Mirrors EcsIsVariable on ecs_term_ref_t.src (upstream include/flecs.h:772).
 func WithVar(componentID ID, varName string) Term {
 	if componentID == 0 {
@@ -574,11 +572,15 @@ type Query struct {
 	// Slots are assigned in term-list order of first appearance. Nil = no variables.
 	// Mirrors upstream query->vars[] ownership (src/query/types.h:439-444).
 	varSlots map[string]int
-	// driverVar is the name of the first-defined variable (driver for the join loop).
-	// The driver's domain is enumerated at Iter(); all other terms are evaluated per
-	// binding. No auto-optimization for v1; first-defined is always the driver.
-	// See upstream compiler.c:1002-1021 (optimizer — explicitly out of scope for v1).
+	// driverVar is the name of the first-defined variable (outermost join loop).
+	// The driver's domain is enumerated at Iter(); additional variables are enumerated
+	// in nested loops in topo-dependency order. No auto-optimization; first-defined is
+	// always the driver. See upstream compiler.c:1002-1021 (Phase 16.27 candidate).
 	driverVar string
+	// varOrder is the topo-sorted variable enumeration order for the nested join loop.
+	// varOrder[0] is always driverVar (outermost); varOrder[N-1] is innermost.
+	// Built once at construction; nil when varSlots is nil.
+	varOrder []string
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -686,9 +688,10 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 		}
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewQueryFromTerms", terms)
+	varOrder := buildVarTopoOrder("flecs: NewQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar}
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -769,6 +772,12 @@ func buildFixedSourcePtrs(w *World, terms []Term) (map[ID]unsafe.Pointer, map[ID
 		if term.Src == 0 {
 			continue
 		}
+		if term.tgtVar != "" {
+			// Fixed-source + variable pair target: the concrete pair ID is not known at
+			// iter start. The constraint is consumed during variable domain collection
+			// (collectVarDomainFor) rather than as a static component lookup.
+			continue
+		}
 		ptr, ok := resolveFixedSourcePtr(w, term)
 		if !ok && term.Kind == TermAnd {
 			return nil, nil, true // dead: required component absent
@@ -792,21 +801,23 @@ type varRow struct {
 	bindings   []ID
 }
 
-// collectVarDomain enumerates the set of entities that can serve as the driver
-// variable binding.
+// collectVarDomainFor enumerates the set of candidate entity bindings for varName
+// given the current partial bindings (outer variables already bound).
 //
-// When SrcVar driver-constraining terms exist (WithVar(comp, driverVar)), the
-// domain is the intersection of entities that own those components — built by
-// walking TablesFor(comp) for each constraining term (upstream compiler.c:128+).
+// SrcVar constraints (WithVar(comp, varName) terms, i.e., srcVar==varName with no
+// tgtVar) contribute an intersection over entities owning those components.
 //
-// When only TgtVar terms reference the driver (WithPairTgtVar), the domain is
-// all entities that appear as a pair target for those relationships — found by
-// scanning all tables for matching pair components.
-func (q *Query) collectVarDomain() []ID {
-	// Collect SrcVar domain (intersection across all SrcVar constraints on the driver).
+// TgtVar constraints (tgtVar==varName terms) contribute candidates from:
+//   - srcVar=="" (source is $this): all pair targets for the relationship across all tables
+//   - srcVar!="" (source is another variable): pair targets for the relationship on the
+//     specific entity currently bound to srcVar
+//
+// When both kinds exist the final domain is their intersection.
+func (q *Query) collectVarDomainFor(varName string, bindings []ID) []ID {
+	// SrcVar constraints: terms where srcVar==varName and tgtVar=="" (component ownership).
 	var srcSet map[ID]struct{}
 	for _, t := range q.terms {
-		if t.srcVar != q.driverVar {
+		if t.srcVar != varName || t.tgtVar != "" {
 			continue
 		}
 		tables := q.w.TablesFor(t.ID)
@@ -829,6 +840,86 @@ func (q *Query) collectVarDomain() []ID {
 			srcSet = next
 		}
 	}
+
+	// TgtVar constraints: terms where tgtVar==varName.
+	var tgtSet map[ID]struct{}
+	for _, t := range q.terms {
+		if t.tgtVar != varName {
+			continue
+		}
+		var candidates []ID
+		if t.Src != 0 {
+			// Fixed-source entity with variable pair target: collect pair targets on t.Src.
+			rec := q.w.index.Get(t.Src)
+			if rec == nil || rec.Table == nil {
+				return nil
+			}
+			for _, cid := range rec.Table.Type() {
+				if !cid.IsPair() {
+					continue
+				}
+				if cid.First() == t.ID {
+					candidates = append(candidates, cid.Second())
+				}
+			}
+		} else if t.srcVar == "" {
+			// Source is $this: scan all tables for pair targets.
+			for _, tbl := range q.w.tables {
+				for _, cid := range tbl.Type() {
+					if !cid.IsPair() {
+						continue
+					}
+					if cid.First() == t.ID {
+						candidates = append(candidates, cid.Second())
+					}
+				}
+			}
+		} else {
+			// Source is another variable: use its current binding.
+			slot := q.varSlots[t.srcVar]
+			srcEnt := bindings[slot]
+			if srcEnt == 0 {
+				return nil // outer variable not yet bound (shouldn't happen post-topo-sort)
+			}
+			rec := q.w.index.Get(srcEnt)
+			if rec == nil || rec.Table == nil {
+				return nil
+			}
+			for _, cid := range rec.Table.Type() {
+				if !cid.IsPair() {
+					continue
+				}
+				if cid.First() == t.ID {
+					candidates = append(candidates, cid.Second())
+				}
+			}
+		}
+		if tgtSet == nil {
+			tgtSet = make(map[ID]struct{}, len(candidates))
+			for _, e := range candidates {
+				tgtSet[e] = struct{}{}
+			}
+		} else {
+			next := make(map[ID]struct{}, len(tgtSet))
+			for _, e := range candidates {
+				if _, ok := tgtSet[e]; ok {
+					next[e] = struct{}{}
+				}
+			}
+			tgtSet = next
+		}
+	}
+
+	// Merge srcSet and tgtSet into the result domain.
+	if srcSet != nil && tgtSet != nil {
+		domain := make([]ID, 0, len(srcSet))
+		for e := range srcSet {
+			if _, ok := tgtSet[e]; ok {
+				domain = append(domain, e)
+			}
+		}
+		return domain
+	}
 	if srcSet != nil {
 		domain := make([]ID, 0, len(srcSet))
 		for e := range srcSet {
@@ -836,30 +927,14 @@ func (q *Query) collectVarDomain() []ID {
 		}
 		return domain
 	}
-
-	// No SrcVar constraints: collect all pair targets for TgtVar relationships.
-	seen := make(map[ID]struct{})
-	var domain []ID
-	for _, t := range q.terms {
-		if t.tgtVar != q.driverVar {
-			continue
+	if tgtSet != nil {
+		domain := make([]ID, 0, len(tgtSet))
+		for e := range tgtSet {
+			domain = append(domain, e)
 		}
-		for _, tbl := range q.w.tables {
-			for _, cid := range tbl.Type() {
-				if !cid.IsPair() {
-					continue
-				}
-				if ID(cid.First()) == t.ID {
-					target := cid.Second()
-					if _, ok := seen[target]; !ok {
-						seen[target] = struct{}{}
-						domain = append(domain, target)
-					}
-				}
-			}
-		}
+		return domain
 	}
-	return domain
+	return nil
 }
 
 // varCheckTable returns true if table t satisfies all non-variable archetype
@@ -876,8 +951,10 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 		switch term.Kind {
 		case TermAnd:
 			switch {
-			case term.tgtVar != "":
-				// Variable-target pair: resolve binding and check concrete pair.
+			case term.tgtVar != "" && term.srcVar == "" && term.Src == 0:
+				// Variable-target pair on $this: resolve binding and check concrete pair.
+				// Terms where srcVar!="" or Src!=0 are variable-to-variable or fixed-source
+				// constraints consumed during domain collection (collectVarDomainFor) — skip here.
 				slot := q.varSlots[term.tgtVar]
 				binding := bindings[slot]
 				if binding == 0 || !t.HasComponent(MakePair(term.ID, binding)) {
@@ -916,20 +993,16 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 // variable query and returns them as pre-computed rows. Called once per Iter().
 //
 // Driver domain enumeration mirrors upstream flecs_query_var_set_entity / range
-// (src/query/engine/eval_utils.c:58-235). Join order: driver outer, $this inner.
-// No auto-optimization (upstream compiler.c:1002-1021 is out of scope for v1).
+// (src/query/engine/eval_utils.c:58-235). Join order: first-defined variable as driver
+// (outermost), additional variables in topo-dependency order nested inside.
+// No auto-optimization (upstream compiler.c:1002-1021 is Phase 16.27 candidate).
 func (q *Query) buildVarRows() []varRow {
-	driverDomain := q.collectVarDomain()
-	if len(driverDomain) == 0 {
-		return nil
-	}
-	driverSlot := q.varSlots[q.driverVar]
 	nSlots := len(q.varSlots)
 
 	// hasThisConstraint: true when any TermAnd term constrains $this — either a regular
-	// And term (SrcVar="") or a TgtVar pair term. Pure SrcVar terms (SrcVar!="") only
-	// constrain the driver entity and do not drive $this iteration.
-	// When false, the driver entity itself acts as $this (single-loop mode).
+	// And term (srcVar=="") or a $this-source TgtVar pair term (srcVar=="" with tgtVar!="").
+	// Pure SrcVar terms (srcVar!="") only constrain a named variable, not $this.
+	// When false, the innermost variable entity acts as $this (single-loop mode).
 	hasThisConstraint := false
 	for _, t := range q.terms {
 		if t.Kind == TermAnd && t.srcVar == "" && t.Src == 0 {
@@ -939,8 +1012,8 @@ func (q *Query) buildVarRows() []varRow {
 	}
 
 	// Pre-compute $this candidate tables from the smallest non-variable regular And term.
-	// TgtVar pair terms are excluded from seeding (they need per-binding resolution);
-	// all world tables are used as the base when no regular seed term exists.
+	// TgtVar pair terms and SrcVar terms are excluded from seeding; all world tables are
+	// used as the base when no regular seed term exists.
 	var baseTables []*table.Table
 	if hasThisConstraint {
 		seedIdx := -1
@@ -948,7 +1021,7 @@ func (q *Query) buildVarRows() []varRow {
 		for i, t := range q.terms {
 			if t.Kind != TermAnd || t.srcVar != "" || t.tgtVar != "" || t.Src != 0 ||
 				t.DontFragment || t.Union || t.Traverse != TraverseSelf {
-				continue // TgtVar, SrcVar, fixed-source, sparse: not archetype seeds
+				continue // variable, fixed-source, sparse: not archetype seeds
 			}
 			c := q.w.compIndex.Count(t.ID)
 			if seedIdx == -1 || c < minCount {
@@ -968,24 +1041,35 @@ func (q *Query) buildVarRows() []varRow {
 
 	bindings := make([]ID, nSlots)
 	var rows []varRow
-	for _, driverEnt := range driverDomain {
-		bindings[driverSlot] = driverEnt
+	q.buildVarRowsRec(q.varOrder, 0, bindings, baseTables, hasThisConstraint, &rows)
+	return rows
+}
 
+// buildVarRowsRec recursively binds each variable in varOrder (topo-sorted) and,
+// once all variables are bound, enumerates matching $this entities.
+func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, baseTables []*table.Table, hasThisConstraint bool, rows *[]varRow) {
+	nSlots := len(q.varSlots)
+
+	if depth == len(varOrder) {
+		// All variables bound — enumerate $this.
 		if !hasThisConstraint {
-			// Single-loop: driver entity is $this. Apply all table-level checks on its table.
-			// Used for queries like: WithVar(Planet, "planet"), Without(Star).
-			rec := q.w.index.Get(driverEnt)
+			// Single-entity mode: the innermost variable binding IS $this.
+			// Use the last-bound variable (driver in the single-variable case).
+			lastVar := varOrder[len(varOrder)-1]
+			lastSlot := q.varSlots[lastVar]
+			ent := bindings[lastSlot]
+			rec := q.w.index.Get(ent)
 			if rec == nil || rec.Table == nil {
-				continue
+				return
 			}
 			if !q.varCheckTable(rec.Table, bindings) {
-				continue
+				return
 			}
 			b := make([]ID, nSlots)
 			copy(b, bindings)
-			rows = append(rows, varRow{thisEntity: driverEnt, thisTable: rec.Table, bindings: b})
+			*rows = append(*rows, varRow{thisEntity: ent, thisTable: rec.Table, bindings: b})
 		} else {
-			// Nested-loop: find $this entities from baseTables, filtered by variable constraints.
+			// Nested-loop: find $this entities from baseTables filtered by variable constraints.
 			for _, t := range baseTables {
 				if !q.varCheckTable(t, bindings) {
 					continue
@@ -993,12 +1077,21 @@ func (q *Query) buildVarRows() []varRow {
 				for _, e := range t.Entities() {
 					b := make([]ID, nSlots)
 					copy(b, bindings)
-					rows = append(rows, varRow{thisEntity: e, thisTable: t, bindings: b})
+					*rows = append(*rows, varRow{thisEntity: e, thisTable: t, bindings: b})
 				}
 			}
 		}
+		return
 	}
-	return rows
+
+	varName := varOrder[depth]
+	slot := q.varSlots[varName]
+	domain := q.collectVarDomainFor(varName, bindings)
+	for _, ent := range domain {
+		bindings[slot] = ent
+		q.buildVarRowsRec(varOrder, depth+1, bindings, baseTables, hasThisConstraint, rows)
+	}
+	bindings[slot] = 0 // reset for subsequent outer iterations
 }
 
 // Iter starts a fresh iteration over all archetype tables matching the query.
@@ -2370,8 +2463,8 @@ func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
 // buildVarSlotsFromTerms scans terms for srcVar/tgtVar fields, assigns slot indices
 // in first-appearance order, and returns the slot map and the driver variable name.
 // The driver is the first variable encountered across all terms (term-list order,
-// srcVar before tgtVar within a single term). Panics if more than 8 distinct names
-// are found (v1 cap; upstream EcsQueryMaxVarCount = 64).
+// srcVar before tgtVar within a single term). Panics if more than 16 distinct names
+// are found (Go cap; upstream EcsQueryMaxVarCount = 64 allows further increases).
 func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string) {
 	var slots map[string]int
 	var driver string
@@ -2384,8 +2477,8 @@ func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string
 				slots = make(map[string]int)
 			}
 			if _, ok := slots[name]; !ok {
-				if len(slots) >= 8 {
-					panic(caller + ": query variable count exceeds the v1 cap of 8 (upstream EcsQueryMaxVarCount = 64; multi-variable support is Phase 16.25.x)")
+				if len(slots) >= 16 {
+					panic(caller + ": query variable count exceeds the cap of 16 (upstream EcsQueryMaxVarCount = 64 allows further increases)")
 				}
 				slots[name] = len(slots)
 				if driver == "" {
@@ -2395,6 +2488,145 @@ func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string
 		}
 	}
 	return slots, driver
+}
+
+// buildVarTopoOrder returns variable names in dependency order for the nested join loop:
+// variables with no dependencies come first (outermost), dependents follow.
+// driverVar is always placed first among roots (first-defined = outermost, per spec).
+// Panics with a cycle-path message if the dependency graph contains a cycle.
+//
+// Dependency rule: variable B depends on variable A if any term has srcVar==A and tgtVar==B,
+// meaning B's domain must be resolved with A already bound.
+func buildVarTopoOrder(caller string, varSlots map[string]int, terms []Term, driverVar string) []string {
+	if len(varSlots) == 0 {
+		return nil
+	}
+	if len(varSlots) == 1 {
+		return []string{driverVar}
+	}
+
+	// Build adjacency: deps[B] = set of A that B depends on.
+	deps := make(map[string]map[string]struct{}, len(varSlots))
+	for name := range varSlots {
+		deps[name] = make(map[string]struct{})
+	}
+	for _, t := range terms {
+		if t.srcVar != "" && t.tgtVar != "" {
+			deps[t.tgtVar][t.srcVar] = struct{}{} // tgtVar depends on srcVar
+		}
+	}
+
+	// Build reverse adjacency: adjacents[A] = list of B that depend on A.
+	adjacents := make(map[string][]string, len(varSlots))
+	for b, depsB := range deps {
+		for a := range depsB {
+			adjacents[a] = append(adjacents[a], b)
+		}
+	}
+	for a := range adjacents {
+		sort.Strings(adjacents[a]) // deterministic
+	}
+
+	// inDeg[name] = number of unresolved dependencies.
+	inDeg := make(map[string]int, len(varSlots))
+	for name, depsName := range deps {
+		inDeg[name] = len(depsName)
+	}
+
+	// Kahn's algorithm: process nodes with zero in-degree.
+	// Among zero-in-degree nodes, driverVar is enqueued first; others in slot order.
+	slotOf := func(name string) int { return varSlots[name] }
+	enqueueZero := func(queue []string, candidates []string) []string {
+		// Sort by slot index (first-defined first), but driverVar always wins.
+		sort.Slice(candidates, func(i, j int) bool {
+			ai, bi := candidates[i], candidates[j]
+			if ai == driverVar {
+				return true
+			}
+			if bi == driverVar {
+				return false
+			}
+			return slotOf(ai) < slotOf(bi)
+		})
+		return append(queue, candidates...)
+	}
+
+	var initialRoots []string
+	for name, deg := range inDeg {
+		if deg == 0 {
+			initialRoots = append(initialRoots, name)
+		}
+	}
+	queue := enqueueZero(nil, initialRoots)
+
+	order := make([]string, 0, len(varSlots))
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		order = append(order, node)
+		var newRoots []string
+		for _, b := range adjacents[node] {
+			inDeg[b]--
+			if inDeg[b] == 0 {
+				newRoots = append(newRoots, b)
+			}
+		}
+		if len(newRoots) > 0 {
+			queue = enqueueZero(queue, newRoots)
+		}
+	}
+
+	if len(order) != len(varSlots) {
+		// Cycle: trace one cycle path for the error message.
+		inOrder := make(map[string]bool, len(order))
+		for _, n := range order {
+			inOrder[n] = true
+		}
+		var cycleStart string
+		for name := range varSlots {
+			if !inOrder[name] {
+				cycleStart = name
+				break
+			}
+		}
+		path := traceVarCycle(cycleStart, deps)
+		panic(caller + ": variable dependency cycle detected: " + strings.Join(path, " → "))
+	}
+	return order
+}
+
+// traceVarCycle follows dependency edges from start to find and return one cycle path.
+func traceVarCycle(start string, deps map[string]map[string]struct{}) []string {
+	visited := make(map[string]bool)
+	var path []string
+	var dfs func(node string) bool
+	dfs = func(node string) bool {
+		if visited[node] {
+			// Found the cycle: trim path to the cycle portion.
+			for i, n := range path {
+				if n == node {
+					return true // path[i:] is the cycle; caller appends start again
+				}
+				_ = i
+			}
+			return true
+		}
+		visited[node] = true
+		path = append(path, node)
+		for dep := range deps[node] {
+			if dfs(dep) {
+				return true
+			}
+		}
+		path = path[:len(path)-1]
+		visited[node] = false
+		return false
+	}
+	dfs(start)
+	if len(path) > 0 {
+		path = append(path, path[0]) // close the cycle
+	}
+	return path
 }
 
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
