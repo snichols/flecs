@@ -17,8 +17,8 @@ import (
 // Traversable(27), Relationship(28), Target(29), Trait(30), PairIsTag(31),
 // With(32), OrderedChildren(33), Sparse(34), DontFragment(35), Disabled(36),
 // Prefab(37), Wildcard(38), Any(39), EventOnAdd(40), EventOnSet(41),
-// EventOnRemove(42), EventOnTableCreate(43), Event(44).
-const builtinEntityCount = 44
+// EventOnRemove(42), EventOnTableCreate(43), Event(44), DependsOn(45).
+const builtinEntityCount = 45
 
 // ── Components() ─────────────────────────────────────────────────────────────
 
@@ -50,9 +50,13 @@ func TestComponentsBasic(t *testing.T) {
 	if !has(velID) {
 		t.Error("Components() missing Velocity")
 	}
-	// Built-in tag entities must NOT appear.
+	// Built-in phase entities must NOT appear in Components().
+	phaseIDSet := make(map[flecs.ID]bool)
+	for _, pid := range flecs.BuiltinPhaseEntityIDs(w) {
+		phaseIDSet[pid] = true
+	}
 	for _, id := range ids {
-		if id == w.PreUpdate() || id == w.OnUpdate() || id == w.PostUpdate() || id == w.OnFixedUpdate() {
+		if phaseIDSet[id] {
 			t.Errorf("Components() contains built-in phase entity %v", id)
 		}
 	}

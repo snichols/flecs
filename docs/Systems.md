@@ -52,12 +52,12 @@ Because systems use cached queries, iteration cost is proportional to the number
 
 Go flecs has four built-in pipeline phases that run in a fixed order on every `Progress` call:
 
-| Phase accessor | Purpose |
-|---|---|
-| `w.PreUpdate()` | Input, network receive |
-| `w.OnFixedUpdate()` | Physics (fixed timestep, accumulator loop) |
-| `w.OnUpdate()` | Game logic — **default for `NewSystem`** |
-| `w.PostUpdate()` | Rendering, network send |
+| Phase accessor | Returns | Purpose |
+|---|---|---|
+| `w.PreUpdate()` | `*flecs.Phase` | Input, network receive |
+| `w.OnFixedUpdate()` | `*flecs.Phase` | Physics (fixed timestep, accumulator loop) |
+| `w.OnUpdate()` | `*flecs.Phase` | Game logic — **default for `NewSystem`** |
+| `w.PostUpdate()` | `*flecs.Phase` | Rendering, network send |
 
 Use `NewSystemInPhase` to register a system in a specific phase:
 
@@ -85,7 +85,103 @@ PreUpdate → OnFixedUpdate (accumulator) → OnUpdate → PostUpdate
 
 Deferred commands from each phase are flushed before the next phase starts, so a `PostUpdate` system sees every mutation queued during `OnUpdate`.
 
-> **Not yet ported in Go flecs:** Custom pipeline phases (beyond the four built-ins), `DependsOn` ordering between arbitrary system entities, and per-system rate filters (`SetInterval` / `SetRate`) are not available.
+---
+
+## Custom Pipeline Phases
+
+`NewPhase` creates additional pipeline phases beyond the four built-ins. Every custom phase must declare its position in the pipeline via `DependsOn`:
+
+```go
+w := flecs.New()
+posID := flecs.RegisterComponent[Position](w)
+q := flecs.NewCachedQuery(w, posID)
+
+// Custom phase that runs after OnUpdate.
+postPhysics := flecs.NewPhase(w, "PostPhysics")
+postPhysics.DependsOn(w.OnUpdate())
+
+flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(dt float32, it *flecs.QueryIter) {
+    for it.Next() { /* integrate velocities */ }
+})
+flecs.NewSystemInPhase(w, postPhysics, q, func(dt float32, it *flecs.QueryIter) {
+    for it.Next() { /* resolve constraints */ }
+})
+
+w.Progress(1.0 / 60.0)
+// execution order: PreUpdate → OnFixedUpdate → OnUpdate → PostPhysics → PostUpdate
+```
+
+Chains of custom phases are supported:
+
+```go
+phaseA := flecs.NewPhase(w, "A")
+phaseA.DependsOn(w.OnUpdate())
+
+phaseB := flecs.NewPhase(w, "B")
+phaseB.DependsOn(phaseA) // B runs after A
+
+phaseC := flecs.NewPhase(w, "C")
+phaseC.DependsOn(phaseA) // C also runs after A (sibling of B)
+```
+
+Kahn's topological sort determines the execution order. Registration order breaks ties between sibling phases.
+
+**Orphan custom phases** — a custom phase that has no `DependsOn` edge causes `Progress` to panic on the first tick:
+
+```go
+orphan := flecs.NewPhase(w, "Orphan") // no DependsOn
+w.Progress(0)                          // panics: "phase "Orphan" has no DependsOn relation"
+```
+
+**Cycle detection** — a dependency cycle among phases causes `Progress` to panic:
+
+```go
+a := flecs.NewPhase(w, "A")
+b := flecs.NewPhase(w, "B")
+a.DependsOn(w.OnUpdate())
+b.DependsOn(a)
+a.DependsOn(b) // cycle: A→B→A
+w.Progress(0)  // panics: "phase cycle detected"
+```
+
+**Enabling / disabling** a phase skips it (and all its systems) during `Progress`:
+
+```go
+postPhysics.SetEnabled(false)
+w.Progress(0) // PostPhysics systems are skipped
+postPhysics.SetEnabled(true)
+```
+
+---
+
+## System DependsOn Ordering
+
+Within a single phase, systems normally run in registration order. `(*System).DependsOn` overrides that to guarantee one system runs after another, regardless of registration order:
+
+```go
+w := flecs.New()
+posID := flecs.RegisterComponent[Position](w)
+q := flecs.NewCachedQuery(w, posID)
+
+// Register B before A, but want A to always run first.
+sysB := flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(dt float32, it *flecs.QueryIter) {
+    for it.Next() { /* B: consume position */ }
+})
+sysA := flecs.NewSystemInPhase(w, w.OnUpdate(), q, func(dt float32, it *flecs.QueryIter) {
+    for it.Next() { /* A: produce position */ }
+})
+sysB.DependsOn(sysA) // B runs after A, overriding registration order
+```
+
+`DependsOn` is idempotent and returns the receiver for chaining. It panics if the two systems are in different phases.
+
+**Cycle detection** — a cycle among system DependsOn edges panics at the start of `Progress`:
+
+```go
+sysA.DependsOn(sysB)
+sysB.DependsOn(sysA) // cycle
+w.Progress(0)         // panics: "system cycle detected"
+```
 
 ---
 
@@ -244,22 +340,21 @@ Mutations performed inside the callback are deferred and flushed before `RunSyst
 
 `Reader` exposes three methods for inspecting the registered system list at runtime without mutating world state.
 
-### `Phases() []ID`
+### `Phases() []*Phase`
 
-Returns the four built-in phase IDs in execution order:
+Returns all phases (built-in and custom) in topological execution order:
 
 ```go
 w.Read(func(r *flecs.Reader) {
     for _, phase := range r.Phases() {
-        fmt.Println(phase)
+        fmt.Println(phase.Name()) // e.g. "PreUpdate", "OnFixedUpdate", ...
     }
-    // prints: PreUpdate, OnFixedUpdate, OnUpdate, PostUpdate IDs
 })
 ```
 
-### `SystemsInPhase(phase ID) []*System`
+### `SystemsInPhase(phase *Phase) []*System`
 
-Returns a snapshot of all registered (including disabled) non-closed systems in the given phase, in registration order:
+Returns a snapshot of all registered (including disabled) non-closed systems in the given phase, in topological execution order:
 
 ```go
 w.Read(func(r *flecs.Reader) {
@@ -270,9 +365,9 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
-Returns an empty (non-nil) slice when no systems are registered for the phase. Panics if `phase` is not one of the four built-in phases.
+Returns an empty (non-nil) slice when no systems are registered for the phase. Panics if `phase` is nil.
 
-### `EachSystem(phase ID, fn func(*System) bool)`
+### `EachSystem(phase *Phase, fn func(*System) bool)`
 
 Zero-alloc callback variant — no slice is allocated. `fn` returning `false` halts iteration early:
 
@@ -404,7 +499,7 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
-`LastFramePhases` is indexed by phase order:
+`LastFramePhases` is a `[]PhaseStats` slice indexed by topological phase order. For a world with only the four built-in phases:
 
 | Index | Phase |
 |---|---|
@@ -413,7 +508,7 @@ w.Read(func(r *flecs.Reader) {
 | 2 | OnUpdate |
 | 3 | PostUpdate |
 
-Each `PhaseStats` entry has `Name`, `SystemCount`, and `Duration`. For `OnFixedUpdate`, `Duration` is the sum across all fixed-step iterations in the frame.
+Custom phases appear after the built-ins in their DependsOn-sorted order. Each `PhaseStats` entry has `Name`, `SystemCount`, and `Duration`. For `OnFixedUpdate`, `Duration` is the sum across all fixed-step iterations in the frame.
 
 `SystemCountInPhase` returns the live count for a single phase:
 
@@ -429,16 +524,6 @@ w.Read(func(r *flecs.Reader) {
 ## Features Not Yet Ported
 
 The following features from the upstream C flecs systems API are not yet available in Go flecs. They are listed so you can plan accordingly.
-
-**Custom pipeline phases** — In C, any entity tagged with `EcsPhase` can be a pipeline phase and phases are ordered via `DependsOn` pairs. Go flecs has exactly four hard-coded built-in phases (`PreUpdate`, `OnFixedUpdate`, `OnUpdate`, `PostUpdate`). Not yet ported in Go flecs.
-
-**DependsOn ordering between systems** — C lets applications add `(DependsOn, OtherSystem)` to order two systems within a phase independently of registration order. Go flecs orders within a phase strictly by registration order. Not yet ported in Go flecs.
-
-**System tags / disabling** — C provides `ecs_enable(world, sys, false)` and the `EcsDisabled` tag to pause a system without removing it. Go flecs has no equivalent; use `sys.Close()` to remove and `NewSystem` again to re-add. Not yet ported in Go flecs.
-
-**Rate filters** (`SetInterval` / `SetRate`) — run a system every N frames or at a fixed wall-clock interval without restructuring the pipeline. Not yet ported in Go flecs.
-
-**Single-system `Run` out-of-pipeline** — C provides `ecs_run` to invoke one system synchronously outside the pipeline. Not yet ported in Go flecs.
 
 **`RunWorker` / explicit thread dispatch** — C provides `ecs_run_worker` for manual entity-range partitioning. Not yet ported in Go flecs.
 

@@ -15,8 +15,8 @@ import "fmt"
 // relationship without (Serializable, Position) accidentally allocating a
 // second Position-shaped slot per entity.
 //
-// Built-in entities bootstrapped with PairIsTag: IsA, ChildOf (mirroring
-// C bootstrap.c:1272-1273). SlotOf/DependsOn/Flag/With are not yet ported.
+// Built-in entities bootstrapped with PairIsTag: IsA, ChildOf, DependsOn
+// (mirroring C bootstrap.c:1272-1273, 1283). SlotOf/Flag are not yet ported.
 //
 // Usage:
 //

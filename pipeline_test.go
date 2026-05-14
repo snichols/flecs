@@ -10,8 +10,8 @@ import (
 type PPos struct{ X float32 }
 type PVel struct{ X float32 }
 
-// TestPipelinePhaseAccessors verifies the three built-in phase accessors return
-// distinct, alive IDs that are stable across repeated calls.
+// TestPipelinePhaseAccessors verifies the built-in phase accessors return
+// distinct, non-nil *Phase values that are stable across repeated calls.
 func TestPipelinePhaseAccessors(t *testing.T) {
 	w := flecs.New()
 
@@ -19,21 +19,18 @@ func TestPipelinePhaseAccessors(t *testing.T) {
 	on := w.OnUpdate()
 	post := w.PostUpdate()
 
+	if pre == nil || on == nil || post == nil {
+		t.Fatal("built-in phase accessors must return non-nil *Phase")
+	}
 	if pre == on || on == post || pre == post {
-		t.Fatalf("phase IDs must be distinct: PreUpdate=%v OnUpdate=%v PostUpdate=%v", pre, on, post)
+		t.Fatalf("phase pointers must be distinct: PreUpdate=%p OnUpdate=%p PostUpdate=%p", pre, on, post)
 	}
-	if !w.IsAlive(pre) {
-		t.Fatal("PreUpdate phase entity must be alive")
+	if pre.Name() != "PreUpdate" || on.Name() != "OnUpdate" || post.Name() != "PostUpdate" {
+		t.Fatalf("unexpected phase names: %q %q %q", pre.Name(), on.Name(), post.Name())
 	}
-	if !w.IsAlive(on) {
-		t.Fatal("OnUpdate phase entity must be alive")
-	}
-	if !w.IsAlive(post) {
-		t.Fatal("PostUpdate phase entity must be alive")
-	}
-	// Stable: repeated calls return the same ID.
+	// Stable: repeated calls return the same *Phase pointer.
 	if w.PreUpdate() != pre || w.OnUpdate() != on || w.PostUpdate() != post {
-		t.Fatal("phase accessors must return consistent IDs across calls")
+		t.Fatal("phase accessors must return consistent *Phase pointers across calls")
 	}
 }
 
@@ -262,9 +259,9 @@ func TestPipelineWithinPhaseNoVisibility(t *testing.T) {
 	}
 }
 
-// TestPipelineInvalidPhasePanics verifies that NewSystemInPhase panics when
-// passed a non-phase entity (e.g. w.ChildOf()).
-func TestPipelineInvalidPhasePanics(t *testing.T) {
+// TestPipelineNilPhasePanics verifies that NewSystemInPhase panics when
+// passed a nil phase.
+func TestPipelineNilPhasePanics(t *testing.T) {
 	w := flecs.New()
 	posID := flecs.RegisterComponent[PPos](w)
 	q := flecs.NewCachedQuery(w, posID)
@@ -272,10 +269,10 @@ func TestPipelineInvalidPhasePanics(t *testing.T) {
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("expected panic for invalid phase ID, got none")
+			t.Fatal("expected panic for nil phase, got none")
 		}
 	}()
-	flecs.NewSystemInPhase(w, w.ChildOf(), q, fn)
+	flecs.NewSystemInPhase(w, nil, q, fn)
 }
 
 // TestPipelineExplicitOnUpdateEquivalentToDefault verifies that

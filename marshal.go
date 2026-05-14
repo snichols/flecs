@@ -123,10 +123,10 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.ChildOf():            {},
 		w.IsA():                {},
 		w.Name():               {},
-		w.PreUpdate():          {},
-		w.OnUpdate():           {},
-		w.PostUpdate():         {},
-		w.OnFixedUpdate():      {},
+		w.preUpdateID:          {}, // built-in phase entities (no longer in public API)
+		w.onUpdateID:           {},
+		w.postUpdateID:         {},
+		w.onFixedUpdateID:      {},
 		w.OnInstantiate():      {},
 		w.Inherit():            {},
 		w.Override():           {},
@@ -164,6 +164,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.EventOnRemove():      {},
 		w.EventOnTableCreate(): {},
 		w.Event():              {},
+		w.DependsOn():          {},
 	}
 
 	var result []byte

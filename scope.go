@@ -281,50 +281,59 @@ func (r *Reader) SystemCount() int {
 	return n
 }
 
-// SystemCountInPhase returns the number of active systems in the given phase.
-func (r *Reader) SystemCountInPhase(phase ID) int {
+// SystemCountInPhase returns the number of registered non-closed systems in
+// the given phase. Disabled systems are included. Panics if phase is nil.
+func (r *Reader) SystemCountInPhase(phase *Phase) int {
 	return r.world.SystemCountInPhase(phase)
 }
 
-// Phases returns the four built-in pipeline phase IDs in execution order:
+// Phases returns all pipeline phases in topological (execution) order.
+// For a world with only the four built-in phases this is:
 // PreUpdate, OnFixedUpdate, OnUpdate, PostUpdate.
-func (r *Reader) Phases() []ID {
+// Custom phases created with [NewPhase] appear at their DependsOn-derived
+// position in the order.
+func (r *Reader) Phases() []*Phase {
 	w := r.world
-	return []ID{w.preUpdateID, w.onFixedUpdateID, w.onUpdateID, w.postUpdateID}
+	if w.pipelineDirty {
+		w.rebuildPipeline()
+	}
+	out := make([]*Phase, len(w.phaseOrder))
+	copy(out, w.phaseOrder)
+	return out
 }
 
 // SystemsInPhase returns a snapshot of all registered non-closed systems in
-// the given phase, in registration order. Disabled systems are included.
+// the given phase, in topological (DependsOn) order with registration order as
+// the tiebreaker. Disabled systems are included.
 // Returns an empty (non-nil) slice when no systems are registered for the phase.
-// Panics if phase is not one of the four built-in phases.
-func (r *Reader) SystemsInPhase(phase ID) []*System {
+// Panics if phase is nil.
+func (r *Reader) SystemsInPhase(phase *Phase) []*System {
+	if phase == nil {
+		panic("flecs: SystemsInPhase: phase must not be nil")
+	}
 	w := r.world
-	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
-		panic(fmt.Sprintf("flecs: SystemsInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+	if w.pipelineDirty {
+		w.rebuildPipeline()
 	}
-	out := make([]*System, 0)
-	for _, s := range w.systems {
-		if !s.removed && s.phase == phase {
-			out = append(out, s)
-		}
-	}
+	out := make([]*System, len(phase.orderedSystems))
+	copy(out, phase.orderedSystems)
 	return out
 }
 
 // EachSystem calls fn for each registered non-closed system in the given phase,
-// in registration order. Disabled systems are included. fn returning false halts
-// iteration early.
-// Panics if phase is not one of the four built-in phases.
-func (r *Reader) EachSystem(phase ID, fn func(*System) bool) {
-	w := r.world
-	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
-		panic(fmt.Sprintf("flecs: EachSystem: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+// in topological order. Disabled systems are included. fn returning false halts
+// iteration early. Panics if phase is nil.
+func (r *Reader) EachSystem(phase *Phase, fn func(*System) bool) {
+	if phase == nil {
+		panic("flecs: EachSystem: phase must not be nil")
 	}
-	for _, s := range w.systems {
-		if !s.removed && s.phase == phase {
-			if !fn(s) {
-				return
-			}
+	w := r.world
+	if w.pipelineDirty {
+		w.rebuildPipeline()
+	}
+	for _, s := range phase.orderedSystems {
+		if !fn(s) {
+			return
 		}
 	}
 }

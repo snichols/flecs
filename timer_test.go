@@ -412,39 +412,34 @@ func TestTimerNewSystemInPhaseOnFixedUpdate(t *testing.T) {
 	}
 }
 
-// ── NewSystemInPhase still rejects invalid phases ─────────────────────────────
+// ── NewSystemInPhase rejects nil and cross-world phases ───────────────────────
 
 func TestTimerNewSystemInPhaseInvalidPhaseStillPanics(t *testing.T) {
-	cases := []struct {
-		name  string
-		phase func(w *flecs.World) flecs.ID
-	}{
-		{"ChildOf", func(w *flecs.World) flecs.ID { return w.ChildOf() }},
-		{"IsA", func(w *flecs.World) flecs.ID { return w.IsA() }},
-		{"NewEntity", func(w *flecs.World) flecs.ID {
-			var id flecs.ID
-			w.Write(func(fw *flecs.Writer) {
-				id = fw.NewEntity()
-			})
-			return id
-		}},
-	}
+	t.Run("nil phase", func(t *testing.T) {
+		w := flecs.New()
+		posID := flecs.RegisterComponent[PPos](w)
+		q := flecs.NewCachedQuery(w, posID)
+		fn := func(_ float32, _ *flecs.QueryIter) {}
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for nil phase, got none")
+			}
+		}()
+		flecs.NewSystemInPhase(w, nil, q, fn)
+	})
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			w := flecs.New()
-			posID := flecs.RegisterComponent[PPos](w)
-			q := flecs.NewCachedQuery(w, posID)
-			fn := func(_ float32, _ *flecs.QueryIter) {}
-			phase := tc.phase(w)
-
-			defer func() {
-				if recover() == nil {
-					t.Fatalf("expected panic for phase=%v (%s), got none", phase, tc.name)
-				}
-			}()
-			flecs.NewSystemInPhase(w, phase, q, fn)
-		})
-	}
+	t.Run("cross-world phase", func(t *testing.T) {
+		w1 := flecs.New()
+		w2 := flecs.New()
+		posID := flecs.RegisterComponent[PPos](w1)
+		q := flecs.NewCachedQuery(w1, posID)
+		fn := func(_ float32, _ *flecs.QueryIter) {}
+		phase := w2.OnUpdate() // phase from w2
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for cross-world phase, got none")
+			}
+		}()
+		flecs.NewSystemInPhase(w1, phase, q, fn)
+	})
 }
