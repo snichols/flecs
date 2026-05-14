@@ -663,19 +663,19 @@ func TestIsATagInheritance(t *testing.T) {
 
 // ── Count baseline ────────────────────────────────────────────────────────────
 
-// TestIsAWorldCountBaseline verifies that a fresh world has 34 built-in entities
+// TestIsAWorldCountBaseline verifies that a fresh world has 47 built-in entities
 // (ChildOf, IsA, Name, PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate,
 // OnInstantiate, Inherit, Override, DontInherit, OnDelete, OnDeleteTarget,
 // RemoveAction, DeleteAction, PanicAction, Exclusive, CanToggle, Symmetric,
 // Transitive, Reflexive, Acyclic, Final, OneOf, Singleton, WriteOnce,
 // Traversable, Relationship, Target, Trait, PairIsTag, With, OrderedChildren, Sparse,
 // DontFragment, Disabled, Prefab, Wildcard, Any, EventOnAdd, EventOnSet,
-// EventOnRemove, EventOnTableCreate, Event)
+// EventOnRemove, EventOnTableCreate, Event, DependsOn, EventMonitor, SlotOf)
 // before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 46 {
-		t.Fatalf("fresh World.Count(): want 46 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Relationship + Target + Trait + PairIsTag + With + OrderedChildren + Sparse + DontFragment + Disabled + Prefab + Wildcard + Any + EventOnAdd + EventOnSet + EventOnRemove + EventOnTableCreate + Event + DependsOn + EventMonitor), got %d", base)
+	if base != 47 {
+		t.Fatalf("fresh World.Count(): want 47 (ChildOf + IsA + Name + PreUpdate + OnUpdate + PostUpdate + OnFixedUpdate + OnInstantiate + Inherit + Override + DontInherit + OnDelete + OnDeleteTarget + RemoveAction + DeleteAction + PanicAction + Exclusive + CanToggle + Symmetric + Transitive + Reflexive + Acyclic + Final + OneOf + Singleton + WriteOnce + Traversable + Relationship + Target + Trait + PairIsTag + With + OrderedChildren + Sparse + DontFragment + Disabled + Prefab + Wildcard + Any + EventOnAdd + EventOnSet + EventOnRemove + EventOnTableCreate + Event + DependsOn + EventMonitor + SlotOf), got %d", base)
 	}
 }

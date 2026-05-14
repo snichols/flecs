@@ -93,7 +93,8 @@ type World struct {
 	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
 	eventTagID           ID                              // built-in Event tag entity (index 44)
 	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45)
-	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46); user entities start at index 47
+	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46)
+	slotOfID             ID                              // built-in SlotOf relationship entity (index 47); user entities start at index 48
 	monitors             []*monitorObserver              // all registered monitor observers
 	preUpdate            *Phase                          // built-in PreUpdate pipeline phase
 	onUpdate             *Phase                          // built-in OnUpdate pipeline phase (NewSystem default)
@@ -196,7 +197,8 @@ type World struct {
 //   - Index 44: Event built-in tag entity (marks an entity as an event identifier)
 //   - Index 45: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
 //   - Index 46: EventMonitor built-in event entity
-//   - Index 47+: user entities (NewEntity)
+//   - Index 47: SlotOf built-in relationship entity (bootstrapped with Exclusive + PairIsTag + Relationship)
+//   - Index 48+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -479,12 +481,19 @@ func New() *World {
 	rec.Row = uint32(w.empty.Append(dependsOn))
 	w.dependsOnID = dependsOn
 	// Allocate the built-in EventMonitor event entity (gets index 46).
-	// User entity allocation starts at index 47 after this point.
 	eventMonitor := w.index.Alloc()
 	rec = w.index.Get(eventMonitor)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventMonitor))
 	w.eventMonitorID = eventMonitor
+	// Allocate the built-in SlotOf relationship entity (gets index 47).
+	// User entity allocation starts at index 48 after this point.
+	// Mirrors C src/world.c:37 (FLECS_HI_COMPONENT_ID + 12) and bootstrap.c:973.
+	slotOf := w.index.Alloc()
+	rec = w.index.Get(slotOf)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(slotOf))
+	w.slotOfID = slotOf
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
@@ -498,6 +507,7 @@ func New() *World {
 	applyExclusivePolicy(w, w.onDeleteID)
 	applyExclusivePolicy(w, w.onDeleteTargetID)
 	applyExclusivePolicy(w, w.onInstantiateID)
+	applyExclusivePolicy(w, w.slotOfID) // mirrors C bootstrap.c:1324
 	// Bootstrap IsA as reflexive, matching C src/bootstrap.c:1321.
 	// This makes HasID(a, MakePair(IsA, a)) return true for any alive entity a
 	// (deliberate divergence from C ecs_has_id; documented in CHANGELOG).
@@ -509,7 +519,7 @@ func New() *World {
 	applyTraversablePolicy(w, w.childOfID)
 	applyTraversablePolicy(w, w.isAID)
 	// Bootstrap Relationship on built-in relationships, mirroring C bootstrap.c:1280-1288.
-	// SlotOf and Identifier are upstream but not yet ported; skip.
+	// Identifier is upstream but not yet ported (skip).
 	applyRelationshipPolicy(w, w.isAID)
 	applyRelationshipPolicy(w, w.childOfID)
 	applyRelationshipPolicy(w, w.onDeleteID)
@@ -517,6 +527,7 @@ func New() *World {
 	applyRelationshipPolicy(w, w.onInstantiateID)
 	applyRelationshipPolicy(w, w.withID)
 	applyRelationshipPolicy(w, w.dependsOnID)
+	applyRelationshipPolicy(w, w.slotOfID) // mirrors C bootstrap.c:1282
 	// Bootstrap Target on built-in target entities, mirroring C bootstrap.c:1291-1293.
 	// Note: Remove, Delete, Cascade, Throw are NOT marked Target in upstream.
 	applyTargetPolicy(w, w.overrideID)
@@ -527,11 +538,12 @@ func New() *World {
 	// the target slot despite having the Relationship trait.
 	applyTraitPolicy(w, w.isAID)
 	applyTraitPolicy(w, w.childOfID)
-	// Bootstrap PairIsTag on IsA, ChildOf, and DependsOn, mirroring C bootstrap.c:1272-1273,1283.
-	// SlotOf and Flag are upstream but not yet ported; skip.
+	// Bootstrap PairIsTag on IsA, ChildOf, DependsOn, and SlotOf, mirroring C bootstrap.c:1272-1273,1283.
+	// Flag is upstream but not yet ported; skip.
 	applyPairIsTagPolicy(w, w.isAID)
 	applyPairIsTagPolicy(w, w.childOfID)
 	applyPairIsTagPolicy(w, w.dependsOnID)
+	applyPairIsTagPolicy(w, w.slotOfID) // mirrors C bootstrap.c:1274
 	// Bootstrap DontInherit on the Prefab tag so that entities inheriting from a
 	// prefab via IsA do NOT acquire the Prefab tag themselves. Mirrors C
 	// ecs_add_pair(world, EcsPrefab, EcsOnInstantiate, EcsDontInherit) at

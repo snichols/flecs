@@ -468,6 +468,25 @@ func Owns[T any](s scope, e ID) bool {
 	return ownsOnWorld[T](s.scopeWorld(), e)
 }
 
+// GetPairTarget returns the target of the first (rel, *) pair on entity e —
+// the * part — in O(1) without a name lookup. Returns (0, false) if e is not
+// alive or has no (rel, *) pair.
+//
+// Primary use case: resolving prefab slots created by [SlotOf]. After
+// instantiating a prefab that has a child c with (SlotOf, prefab), the runtime
+// adds (c, instanceChild) to the instance root. GetPairTarget retrieves that
+// instance child:
+//
+//	instTurret, ok := flecs.GetPairTarget(r, inst, turret) // → copied turret child
+func GetPairTarget(s scope, e ID, rel ID) (ID, bool) {
+	w := s.scopeWorld()
+	rec := w.index.Get(e)
+	if rec == nil || rec.Table == nil {
+		return 0, false
+	}
+	return firstPairTarget(rec.Table.Type(), rel.Index())
+}
+
 // GetPair returns the value of pair (rel, tgt) on entity e.
 func GetPair[T any](s scope, e ID, rel ID, tgt ID) (T, bool) {
 	return getPairOnWorld[T](s.scopeWorld(), e, rel, tgt)

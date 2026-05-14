@@ -133,8 +133,8 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.5 (PrefabsManual port)
 
 - **Prefab tag** (`EcsPrefab`) — ✅ **shipped in v0.57.0** via `MarkPrefab` / `IsPrefab` / `w.Prefab()`. Ordinary queries silently exclude entities carrying the `Prefab` tag; the tag is bootstrapped with `DontInherit` so IsA instances do not acquire it. See [PrefabsManual.md § Prefab tag](PrefabsManual.md#prefab-tag) and [Queries.md § Disabled and Prefab entities](Queries.md#disabled-and-prefab-entities).
-- **Prefab hierarchies** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab replicates the entire child subtree onto the instance. not yet ported in Go flecs.
-- **Prefab slots** (`SlotOf`) — `(SlotOf, prefab)` on a prefab child creates a named slot relationship on the instance that resolves to the copied child in O(1) without a name lookup. not yet ported in Go flecs.
+- **Prefab hierarchies** — ✅ **shipped in v0.69.0** — when a prefab has `(ChildOf, prefab)` children, instantiating the prefab via `AddID(e, MakePair(w.IsA(), prefab))` replicates the entire child subtree onto the instance. Same-subtree cross-references are rewritten; external references are left unchanged. See [PrefabsManual.md § Prefab hierarchies](PrefabsManual.md#prefab-hierarchies).
+- **Prefab slots** (`SlotOf`) — ✅ **shipped in v0.69.0** — `(SlotOf, prefab)` on a prefab child creates a `(prefabChild, instanceChild)` pair on the instance root during instantiation, enabling O(1) named access via `GetPairTarget(scope, inst, prefabChild)`. See [PrefabsManual.md § Prefab slots](PrefabsManual.md#prefab-slots).
 
 ### Additional gaps discovered in Phase 14.6 (Systems port)
 

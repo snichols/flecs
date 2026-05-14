@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.68.0)
+## Shipped (through v0.69.0)
 
 The following features are available in the current release:
 
@@ -70,6 +70,7 @@ The following features are available in the current release:
 - **Query groups** _(v0.66.0, Phase 16.11)_ — `WithGroupBy(compID, groupFn)` partitions a cached query's matched tables into labelled groups; `IterGroup(id)` jumps to a group in O(1); `Groups()` returns sorted group IDs. `AndGroupBy`/`AndOrderBy` chaining methods for combining both options. Composes with `WithOrderBy`: groups outer, sort inner. Lazy re-group on ChangeCount change or new-table addition. `Cascade` retains its dedicated `sortByCascadeDepth` path; refactor deferred. Closes `docs/README.md` query-groups gap entry.
 - **Fixed-source observer terms** _(v0.67.0, Phase 16.12)_ — `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions` restricts an observer to fire only when the event lands on the named entity. Dispatch table extended from `map[observerKey][]*observerNode` to `map[observerKey]*observerBucket` with lazy `fixedSource map[ID][]*observerNode`; any-entity path unchanged. `yield_existing + WithSource` is O(1). `ObserveIDWithOptions` new for raw-ID / pair IDs; `ObserveEventWithOptions` new for custom events. Composes with `WithYieldExisting()` via `.AndSource(e)`. Closes `docs/README.md` fixed-source observer gap entry.
 - **Runtime dynamic component registration** _(v0.68.0, Phase 16.13)_ — `RegisterDynamicComponent(fw, name, size, align) ID` / `RegisterDynamicComponentWithMarshaler`. Dynamic components store opaque bytes (size+alignment at registration, no Go type) and route through the same archetype / sparse / DontFragment machinery as typed components. Raw-pointer API: `GetIDPtr` / `SetIDPtr` / `EachByID`. Lifecycle hooks: `OnAddByID` / `OnSetByID` / `OnRemoveByID`. JSON: base64 by default; custom marshal/unmarshal hooks override. Internal: `TypeInfo.Type == nil` sentinel; `reflect.ArrayOf([size]byte)` synthesized backing type; deferred `SetIDPtr` routes through `cmdSetByID` arena. Closes `docs/README.md` dynamic component gap entry.
+- **Prefab hierarchies + slots** _(v0.69.0, Phase 16.14)_ — `AddID(e, MakePair(w.IsA(), prefab))` now replicates the prefab's full child subtree onto the instance (two-pass: pre-allocate all instance IDs, then copy components with same-subtree cross-reference rewriting). `SlotOf` relationship (index 47, bootstrapped Exclusive+Relationship+PairIsTag): a prefab child with `(SlotOf, prefab)` causes `(prefabChild, instanceChild)` to be added to the instance root. `GetPairTarget(scope, inst, prefabChild)` resolves the slot in O(1). `w.SlotOf()` returns the built-in entity. Nested-slot and prefab-of-prefab instantiation deferred. Closes `docs/README.md` prefab hierarchies and prefab slots gap entries.
 
 ## Documentation
 
