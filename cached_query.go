@@ -131,6 +131,10 @@ type CachedQuery struct {
 	// source entity had no inheritable components. Iter returns a zero-result iterator
 	// immediately without consulting the table cache.
 	alwaysFalse bool
+	// varSlots and driverVar mirror Query.varSlots/driverVar for variable queries.
+	// Iter() re-executes buildVarRows on each call when varSlots != nil.
+	varSlots  map[string]int
+	driverVar string
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID
 	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
@@ -217,12 +221,16 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	if w == nil {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
+	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewCachedQueryFromTerms", terms)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
 	if alwaysFalse {
 		// OrFrom with empty source: zero results guaranteed; skip table-cache setup.
 		return &CachedQuery{w: w, alwaysFalse: true}
 	}
-	return newCachedQueryInternal(w, cp, andIDs, orGroups)
+	cq := newCachedQueryInternal(w, cp, andIDs, orGroups)
+	cq.varSlots = varSlots
+	cq.driverVar = driverVar
+	return cq
 }
 
 // newCachedQueryInternal is the shared construction path for NewCachedQuery and
@@ -404,6 +412,35 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			pos:                0, // already past end
 			wildcardTermIdx:    -1,
 			wildcardPairPos:    -1,
+		}
+	}
+
+	// Variable query: re-execute bindings fresh on each Iter() call. The archetype
+	// table cache is not consulted for the join — only the component index is.
+	// This ensures mutations between consecutive Iter() calls are reflected.
+	if cq.varSlots != nil {
+		// Build a temporary Query wrapper so buildVarRows can use q.w / q.terms / etc.
+		proxy := &Query{
+			w:            cq.w,
+			terms:        cq.terms,
+			orGroups:     cq.orGroups,
+			skipDisabled: cq.skipDisabled,
+			skipPrefab:   cq.skipPrefab,
+			varSlots:     cq.varSlots,
+			driverVar:    cq.driverVar,
+		}
+		rows := proxy.buildVarRows()
+		return &QueryIter{
+			world:              cq.w,
+			terms:              cq.terms,
+			varSlots:           cq.varSlots,
+			varBindings:        make([]ID, len(cq.varSlots)),
+			varRows:            rows,
+			varRowPos:          -1,
+			wildcardTermIdx:    -1,
+			wildcardPairPos:    -1,
+			fixedSourcePtrs:    fixedPtrs,
+			fixedSourcePresent: fixedPresent,
 		}
 	}
 
