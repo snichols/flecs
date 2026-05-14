@@ -132,6 +132,17 @@ type CachedQuery struct {
 	sortedRows          []sortedFieldRow        // parallel (table, row) for each sorted entity
 	sortedLastChange    map[*table.Table]uint64 // per-table ChangeCount at last rebuild
 	sortedLastSparseVer map[ID]uint64           // per-sparse-set version at last rebuild (sparseAndOnly)
+	// Group-by state — non-nil only when WithGroupBy was used.
+	groupByComponent ID                        // component for invalidation; 0 = any change triggers re-group
+	groupByFn        GroupByFunc               // partitioning callback; nil = no grouping
+	groupsByID       map[uint64][]*table.Table // tables per group ID
+	groupIDs         []uint64                  // sorted populated group IDs
+	groupTableStart  map[uint64]int            // start index in cq.tables per group
+	groupTableEnd    map[uint64]int            // exclusive end index in cq.tables per group
+	groupLastChange  map[*table.Table]uint64   // per-table ChangeCount at last group rebuild
+	// Per-group sorted ranges — valid when both groupByFn and orderByCmp are set.
+	groupSortedStart map[uint64]int // start index in sortedEntities per group
+	groupSortedEnd   map[uint64]int // exclusive end index in sortedEntities per group
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -349,7 +360,15 @@ func (cq *CachedQuery) Iter() *QueryIter {
 	// sorted iterator. Wildcard expansion is incompatible with sorted mode and
 	// is disabled (wildcardTermIdx = -1).
 	if cq.orderByCmp != nil {
-		if cq.needsSortRebuild() {
+		if cq.groupByFn != nil {
+			// Group+sort: check both rebuild conditions before any rebuild (tablesAdded
+			// is cleared by rebuildGroups, so needsSortRebuild must be read first).
+			needsSort := cq.needsSortRebuild()
+			if needsSort || cq.needsGroupRebuild() {
+				cq.rebuildGroups()
+				cq.rebuildSorted()
+			}
+		} else if cq.needsSortRebuild() {
 			cq.rebuildSorted()
 		}
 		hasSparseTerms := false
@@ -374,6 +393,11 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			wildcardTermIdx: -1,
 			wildcardPairPos: -1,
 		}
+	}
+
+	// Group-only (no sort): reorder cq.tables in group-ID order when stale.
+	if cq.groupByFn != nil && cq.needsGroupRebuild() {
+		cq.rebuildGroups()
 	}
 
 	wildcardIdx := findWildcardTermIdx(cq.w, cq.terms)

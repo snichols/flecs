@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.66.0 — 2026-05-14 — Phase 16.11: Query groups (group_by_callback port)
+
+Ports `group_by_callback` from upstream C flecs. Closes the query-groups gap in `docs/README.md`.
+
+### Added
+
+- **`GroupByFunc func(t *table.Table) uint64`** — callback type that assigns a group ID to each matched archetype table.
+- **`WithGroupBy(componentID ID, groupFn GroupByFunc) CachedQueryOptions`** — partitions a cached query's matched tables into labelled groups. `componentID` (if non-zero) must appear as a `With` or `Maybe` term and serves as the invalidation hint; pass 0 to trigger on any table change.
+- **`(*CachedQuery).IterGroup(groupID uint64) *QueryIter`** — O(1) group-iterator lookup; yields only tables in the requested group. Returns an exhausted iterator for non-existent groups.
+- **`(*CachedQuery).Groups() []uint64`** — returns the sorted slice of currently-populated group IDs; non-nil empty slice when no tables match; nil when `WithGroupBy` was not used.
+- **`(CachedQueryOptions).AndGroupBy(componentID ID, groupFn GroupByFunc) CachedQueryOptions`** — chains group-by onto an existing options set (e.g. one produced by `WithOrderBy`).
+- **`(CachedQueryOptions).AndOrderBy(componentID ID, cmp OrderByFunc) CachedQueryOptions`** — chains sort onto an existing options set (e.g. one produced by `WithGroupBy`).
+
+### Compose with WithOrderBy
+
+Both `WithGroupBy` and `WithOrderBy` active on the same query: groups outer, sort inner. Default `Iter()` walks groups in ascending ID order; within each group, entities are yielded in sort-comparator order. `IterGroup` also yields sorted entities for the requested group.
+
+### Implementation notes
+
+1. **Cache invalidation**: full re-group on any table `ChangeCount` change or new-table addition — mirrors sort invalidation from Phase 16.4. Simpler than incremental; adequate for canonical workloads.
+2. **Storage**: `map[uint64][]*table.Table` + sorted `[]uint64` group IDs + contiguous range offsets `groupTableStart/End` in `cq.tables` for O(1) `IterGroup` slicing.
+3. **Table reordering**: `rebuildGroups` stable-sorts `cq.tables` (and the parallel `cq.tableUpSources`) in group-ID order; default `Iter()` inherits group order from the cached table slice without extra indirection.
+4. **Cascade compatibility**: `cascadeTermTrav` plumbing is untouched. `Cascade` retains its dedicated `sortByCascadeDepth` implementation; refactor onto `WithGroupBy` is a future-phase concern.
+5. **Marshal**: group state is runtime-only; not serialised. Recomputed lazily on next `Iter()` or `IterGroup()` after `UnmarshalJSON`.
+
+### Explicit non-goals (v0.66.0)
+
+- No `on_group_create` / `on_group_delete` lifecycle events.
+- No multi-key grouping (single callback, single component).
+- No persistent group identifiers across world reloads.
+- No automatic refactor of `Cascade` to use `WithGroupBy`.
+
+---
+
 ## v0.65.0 — 2026-05-14 — Phase 16.10: Monitor observers
 
 Implements monitor observers: callbacks that fire once when an entity enters or exits a multi-term query match. Closes the monitor-observers gap in `docs/README.md`.

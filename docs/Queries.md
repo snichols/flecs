@@ -833,6 +833,78 @@ cq := flecs.NewCachedQueryFromTermsWithOptions(w,
 
 ---
 
+## Query groups
+
+Query groups partition a cached query's matched tables into labelled buckets. A caller-supplied `GroupByFunc` assigns each table to a `uint64` group ID; default `Iter()` visits tables in ascending group-ID order; `IterGroup` jumps directly to a single group in O(1) time.
+
+### Creating a grouped cached query
+
+Use `NewCachedQueryFromTermsWithOptions` with `WithGroupBy`:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+velID := flecs.RegisterComponent[Velocity](w)
+
+// Group tables by how many components they carry.
+cq := flecs.NewCachedQueryFromTermsWithOptions(w,
+    flecs.WithGroupBy(posID, func(t *table.Table) uint64 {
+        return uint64(len(t.Type()))
+    }),
+    flecs.With(posID),
+)
+defer cq.Close()
+
+// Iterate all groups in ascending group-ID order.
+it := cq.Iter()
+for it.Next() { /* tables visited in group order */ }
+
+// Jump directly to group 2 (O(1) startup).
+it = cq.IterGroup(2)
+for it.Next() { /* only tables in group 2 */ }
+
+// List all populated group IDs.
+gids := cq.Groups() // returns []uint64, sorted ascending
+```
+
+`WithGroupBy(componentID, groupFn)` takes:
+
+- `componentID` — the component that acts as the invalidation hint. Must appear as a `With` or `Maybe` term. Pass `0` to trigger re-grouping on any table change. Panics at construction if non-zero and not in the term set.
+- `groupFn` — the partitioning callback. Called once per matched table; its return value is the group ID.
+
+### Combining WithGroupBy and WithOrderBy
+
+Both options can be active on the same query. Use `AndOrderBy` (or `AndGroupBy`) for chaining:
+
+```go
+cq := flecs.NewCachedQueryFromTermsWithOptions(w,
+    flecs.WithGroupBy(posID, groupFn).AndOrderBy(posID, flecs.OrderBy[Position](cmpByX)),
+    flecs.With(posID),
+)
+```
+
+Iteration order: groups in ascending ID order; within each group, entities in sort-comparator order.
+
+### Lazy invalidation
+
+Groups are rebuilt lazily whenever a table's `ChangeCount` changes (any column write or structural change) or a new matching table is added. The rebuild re-runs `groupFn` for all matched tables and re-sorts the group list. Full re-group on any change — no incremental update.
+
+### API summary
+
+| Method | Description |
+|---|---|
+| `cq.Iter()` | Walk all groups in ascending ID order |
+| `cq.IterGroup(id)` | Walk only tables in group `id`; O(1) startup |
+| `cq.Groups()` | Return sorted slice of populated group IDs |
+
+### Design notes (divergences from upstream C)
+
+- **No `on_group_create` / `on_group_delete` events** — group-lifecycle callbacks (`include/flecs.h:627-638`) are not ported in v0.66.0.
+- **No multi-key grouping** — single callback and single component only.
+- **No persistent group state** — groups are runtime-only; not marshalled.
+- **`Cascade` is not rewritten** — the existing `cascadeTermTrav` plumbing is kept as-is. `Cascade` is implementable on top of `WithGroupBy` (mirroring `flecs_query_cache_group_by_cascade` in `src/query/cache/cache.c:175-189`); refactor is deferred to a future phase.
+
+---
+
 ## Performance Notes
 
 - **Uncached query iteration** is O(smallest-matching-set × terms) per `Iter()` call. The seed term is the TermAnd component with the fewest matching tables. For all-sparse queries the driver is the smallest sparse-set, so iteration is proportional to that set size. For dense queries the inner-loop cost dominates.
@@ -905,7 +977,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Sorted queries** — ✅ shipped in v0.59.0. See [§ Sorted queries](#sorted-queries) below.
 
-**Query groups** — `group_by_callback` partitions the query cache by a computed group ID, enabling O(1) group-iterator lookups. Not yet ported in Go flecs. (`Cascade` provides hierarchy-depth ordering as a special built-in case.)
+**Query groups** — ✅ shipped in v0.66.0. `GroupByFunc` partitions matched tables into labelled groups; `IterGroup` provides O(1) group-iterator access; `WithGroupBy` + `WithOrderBy` compose (sorted within each group). See [§ Query groups](#query-groups) above. (`Cascade` retains its dedicated implementation; refactor onto `WithGroupBy` is deferred.)
 
 **Equality operators** — `$this == Foo`, `$this ~= "partial"` name-match filters in the Flecs Query Language. Not yet ported in Go flecs.
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.65.0)
+## Shipped (through v0.66.0)
 
 The following features are available in the current release:
 
@@ -67,6 +67,7 @@ The following features are available in the current release:
 - **Custom events** _(v0.63.0, Phase 16.8)_ — `RegisterEvent(fw, name)`, `Emit(fw, eventID, entity, payload)`, `EmitTyped[T]`, `ObserveEvent(w, eventID, fn)`, `ObserveEventTyped[T]`. Dispatch table refactored: observers now keyed on event entity IDs (built-in and custom share the same path). `EventKind` enum preserved as a convenience layer. Five new built-in event entities at indices 40–44; user entities now start at index 45. Closes `docs/README.md` custom-events gap entry.
 - **Custom pipeline phases + DependsOn ordering** _(v0.64.0, Phase 16.9)_ — `NewPhase(w, name)`, `(*Phase).DependsOn(other *Phase)`, `(*Phase).SetEnabled(bool)`, `(*Phase).IsEnabled() bool`, `(*Phase).Name() string`. `(*System).DependsOn(other *System)` for within-phase ordering. Lazy topological sort via Kahn's algorithm. Built-in phase accessors now return `*Phase`; `NewSystemInPhase` takes `*Phase`. Built-in entity count: 46; user entities now start at index 46.
 - **Monitor observers** _(v0.65.0, Phase 16.10)_ — `Monitor(w, terms, fn)` / `MonitorWithOptions(w, terms, opts, fn)`. Fires `fn(fw, e, entered bool)` when an entity transitions into (entered=true) or out of (entered=false) a multi-term query match. Hybrid match-state tracking: table-pair check for archetype-only monitors (O(monitors×terms) per migration, no per-entity state); per-entity matched set for sparse/DontFragment/Union monitors. `WithYieldExisting()` sweeps existing entities at registration. Disabled monitor semantics: no catch-up on re-enable. Entity deletion and `Clear` fire exit events before component removal. Unsubscribe via `Observer.Unsubscribe`. Built-in `EventMonitor` entity at index 46; user entities now start at index 47. Closes `docs/README.md` monitor-observers gap entry.
+- **Query groups** _(v0.66.0, Phase 16.11)_ — `WithGroupBy(compID, groupFn)` partitions a cached query's matched tables into labelled groups; `IterGroup(id)` jumps to a group in O(1); `Groups()` returns sorted group IDs. `AndGroupBy`/`AndOrderBy` chaining methods for combining both options. Composes with `WithOrderBy`: groups outer, sort inner. Lazy re-group on ChangeCount change or new-table addition. `Cascade` retains its dedicated `sortByCascadeDepth` path; refactor deferred. Closes `docs/README.md` query-groups gap entry.
 
 ## Documentation
 
@@ -104,7 +105,7 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.9 candidate.)
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
 - **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.9 candidate.)
-- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.11 candidate.)
+- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.12 candidate.)
 - **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.12 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
