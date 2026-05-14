@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.79.0 — 2026-05-14 — Phase 16.24: Binary world snapshots
+
+Adds a fast, binary in-memory snapshot facility. Closes the `docs/README.md` gap entry for world snapshots.
+
+### Added
+
+- **`TakeSnapshot(w *World) *Snapshot`** — captures all user entity state into an in-memory `*Snapshot`. Requires exclusive world access (panics with `ErrExclusiveAccessViolation` if called inside `w.Write` or `w.Read`). Captured state: entity index (alive + recycle queue + maxID), archetype component columns, disabled-component bitsets, sparse and DontFragment side-maps, union relationship maps, active entity ID range, cleanup / instantiate / OneOf policies, ordered-children lists.
+- **`RestoreSnapshot(w *World, s *Snapshot)`** — overwrites the world's user state from a snapshot. Same-world restriction: panics if `s` was taken from a different `*World` instance. Observers, systems, hooks, and world-level merge hooks are not restored (code, not data).
+- **`Bytes(s *Snapshot) ([]byte, error)`** — serialises a snapshot to a compact binary format (magic `[0xF1,0xEC,0x53,0x00]` + format version + worldID + payload). Suitable for disk or network.
+- **`LoadSnapshot(data []byte) (*Snapshot, error)`** — deserialises bytes produced by `Bytes`. Validates magic and format version; returns an error on mismatch or truncation rather than panicking.
+
+### New docs
+
+- **`docs/Snapshots.md`** — API reference, binary format overview, restore semantics, observer caveat, cross-world restriction, memory bound, and usage examples (undo/redo, save to disk).
+
+### Upstream C references
+
+- `src/misc.c` — `ecs_snapshot_take` / `ecs_snapshot_restore` / `ecs_snapshot_free`; the Go port replaces the C archetype-iterator approach with a direct binary serialisation over the internal index/table state, trading iterator overhead for a flat byte blob. Observer restoration is deliberately omitted (observers carry Go closures that cannot be serialised).
+
+---
+
 ## v0.78.0 — 2026-05-14 — Phase 16.23: World-level pre/post merge hooks
 
 Ports persistent world-level merge-boundary callbacks as a deliberate divergence from upstream C flecs, which has no equivalent persistent hook API. Closes the `docs/README.md` gap entry for world-level pre/post merge hooks.

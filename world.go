@@ -148,7 +148,7 @@ type World struct {
 	// inheritorCache caches BFS-ordered inheritor slices keyed by prefab entity.
 	// Evicted in full whenever any (IsA, *) pair is added or removed — correct for
 	// transitive chains (e.g. C IsA B IsA P: adding C invalidates P's entry too).
-	inheritorCache  map[ID][]ID
+	inheritorCache map[ID][]ID
 	preMergeHooks  []func(*Writer) // nil slots are tombstones; slice index = registration ID
 	postMergeHooks []func(*Writer) // nil slots are tombstones; slice index = registration ID
 }

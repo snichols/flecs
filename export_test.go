@@ -110,3 +110,15 @@ func WriterForTest(w *World) *Writer {
 func BuiltinPhaseEntityIDs(w *World) []ID {
 	return []ID{w.preUpdateID, w.onUpdateID, w.postUpdateID, w.onFixedUpdateID}
 }
+
+// SnapshotBlob returns s's internal payload blob. For snapshot tests only.
+func SnapshotBlob(s *Snapshot) []byte { return s.blob }
+
+// SnapshotWorldID returns s's world-identity token. For snapshot tests only.
+func SnapshotWorldID(s *Snapshot) uint64 { return s.worldID }
+
+// NewSnapshotRaw creates a Snapshot from raw worldID and blob. For snapshot
+// truncation/corruption tests only.
+func NewSnapshotRaw(worldID uint64, blob []byte) *Snapshot {
+	return &Snapshot{blob: blob, worldID: worldID}
+}
