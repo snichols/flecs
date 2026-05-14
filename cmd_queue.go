@@ -34,6 +34,7 @@ type cmdQueue struct {
 	scratch1 []ID            // reused per batchForEntity call: running sorted finalSet
 	scratch2 []ID            // reused per batchForEntity call: addedIDs
 	scratch3 []ID            // reused per batchForEntity call: removedIDs
+	scratch4 []ID            // reused per batchForEntity Pass 2: tracks which newly-added IDs have been firstAdd-marked
 }
 
 // append links c into the per-entity intrusive list and appends it to cmds.
@@ -368,6 +369,13 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 	// submission position so that OnSet fires with the correct per-call value.
 	// Sparse Set cmds are NOT rewritten to cmdModified — they dispatch via
 	// setImmediateByPtr which handles OnAdd+OnSet correctly without a table slot.
+	//
+	// For components newly added in this batch (in addedIDs), the first cmdModified
+	// is marked firstAdd=true so dispatch knows to skip OnReplace on that write.
+	// Subsequent cmds for the same newly-added component are NOT firstAdd, so
+	// OnReplace fires between them (matching the chained old→new semantics).
+	addedIDsP2 := q.scratch2 // sorted ascending; computed above
+	q.scratch4 = q.scratch4[:0]
 	idx = entry.first
 	for {
 		c := &q.cmds[idx]
@@ -377,6 +385,12 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 				// fires OnAdd (first Set) and OnSet correctly for sparse/DF storage.
 			} else {
 				c.kind = cmdModified
+				// Mark the first cmdModified for each newly-added component so
+				// dispatch can skip OnReplace on the initial slot write.
+				if sortedIDContains(addedIDsP2, c.id) && !sliceIDContains(q.scratch4, c.id) {
+					c.firstAdd = true
+					q.scratch4 = append(q.scratch4, c.id)
+				}
 			}
 		}
 		ni, hasNi := nextInChain(c.nextForEntity)
@@ -385,6 +399,34 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 		}
 		idx = ni
 	}
+}
+
+// sortedIDContains reports whether id is present in sorted slice s.
+// Uses binary search; O(log n).
+func sortedIDContains(s []ID, id ID) bool {
+	lo, hi := 0, len(s)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if s[mid] < id {
+			lo = mid + 1
+		} else if s[mid] > id {
+			hi = mid
+		} else {
+			return true
+		}
+	}
+	return false
+}
+
+// sliceIDContains reports whether id is present in an unsorted slice s.
+// Linear scan; intended for small slices (per-entity firstAdd tracking).
+func sliceIDContains(s []ID, id ID) bool {
+	for _, v := range s {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedIDInsert inserts id into the sorted slice s, keeping it sorted.
@@ -473,6 +515,12 @@ func (q *cmdQueue) dispatch(w *World, c *cmd) {
 				payload := q.arena.bytes(c.valueOff, c.valueSize)
 				ptr := unsafe.Pointer(&payload[0])
 				checkAndSetWriteOnce(w, c.entity, c.id)
+				// Fire OnReplace if the entity already had the component at this
+				// point in dispatch (runtime check; O(1) sparse index lookup).
+				oldPtr := sparseSetGet(w, c.entity, c.id)
+				if oldPtr != nil {
+					w.fireOnReplace(info, c.id, c.entity, oldPtr, ptr)
+				}
 				sparseSetInsert(w, c.entity, c.id, ptr)
 				w.fireOnSet(info, c.id, c.entity, sparseSetGet(w, c.entity, c.id))
 			} else {
@@ -493,6 +541,13 @@ func (q *cmdQueue) dispatch(w *World, c *cmd) {
 			ptr = unsafe.Pointer(&payload[0])
 			// WriteOnce enforcement for coalesced deferred Set commands.
 			checkAndSetWriteOnce(w, c.entity, c.id)
+			// Skip OnReplace for the first write to a just-migrated slot (first add
+			// in this batch): the slot was zero-initialized by migration, not set by
+			// user code, so this is not a "replace" in the C flecs sense.
+			if !c.firstAdd {
+				oldPtr := rec.Table.Get(int(rec.Row), c.id) // capture before overwrite
+				w.fireOnReplace(info, c.id, c.entity, oldPtr, ptr)
+			}
 			rec.Table.Set(int(rec.Row), c.id, ptr)
 			ptr = rec.Table.Get(int(rec.Row), c.id) // stable column pointer
 		} else {

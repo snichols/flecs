@@ -454,3 +454,365 @@ func TestHookReceivesWriterDirect(t *testing.T) {
 		t.Fatal("OnSet hook received nil *Writer")
 	}
 }
+
+// ── OnReplace ─────────────────────────────────────────────────────────────────
+
+// Test 1: first Set does not fire OnReplace; second Set does.
+func TestOnReplaceBasic(t *testing.T) {
+	w := flecs.New()
+	var gotOld, gotNew Position
+	calls := 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		gotOld = old
+		gotNew = new
+		calls++
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.Set[Position](fw, e, Position{1, 2}) // first set: OnReplace must NOT fire
+	})
+	if calls != 0 {
+		t.Fatalf("OnReplace must not fire on first Set, got %d calls", calls)
+	}
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{3, 4}) // replace: OnReplace must fire
+	})
+	if calls != 1 {
+		t.Fatalf("OnReplace want 1 call on second Set, got %d", calls)
+	}
+	if gotOld != (Position{1, 2}) {
+		t.Fatalf("OnReplace old want {1,2}, got %v", gotOld)
+	}
+	if gotNew != (Position{3, 4}) {
+		t.Fatalf("OnReplace new want {3,4}, got %v", gotNew)
+	}
+}
+
+// Test 2: old value matches the previous Set across N sequential Sets.
+func TestOnReplaceOldValueCapture(t *testing.T) {
+	w := flecs.New()
+	var seenOld []float32
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, _ Position) {
+		seenOld = append(seenOld, old.X)
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	for i := 2; i <= 5; i++ {
+		w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{float32(i), 0}) })
+	}
+	want := []float32{1, 2, 3, 4}
+	if len(seenOld) != len(want) {
+		t.Fatalf("want %d OnReplace calls, got %d", len(want), len(seenOld))
+	}
+	for i, w := range want {
+		if seenOld[i] != w {
+			t.Fatalf("old[%d] want %v, got %v", i, w, seenOld[i])
+		}
+	}
+}
+
+// Test 3: new value in the callback matches the current Set's value.
+func TestOnReplaceNewValueVisibility(t *testing.T) {
+	w := flecs.New()
+	var gotNew Position
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, new Position) { gotNew = new })
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{0, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{7, 9}) })
+	if gotNew != (Position{7, 9}) {
+		t.Fatalf("OnReplace new want {7,9}, got %v", gotNew)
+	}
+}
+
+// Test 4: no EventOnReplace constant; EventOnSet observer still fires alongside OnReplace.
+func TestOnReplaceNoObserverEventLeak(t *testing.T) {
+	w := flecs.New()
+	replaceCalls, observerCalls := 0, 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) { replaceCalls++ })
+	flecs.Observe[Position](w, flecs.EventOnSet, func(_ *flecs.Writer, _ flecs.ID, _ Position) { observerCalls++ })
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{2, 0}) })
+	if replaceCalls != 1 {
+		t.Fatalf("OnReplace want 1, got %d", replaceCalls)
+	}
+	if observerCalls != 2 {
+		t.Fatalf("EventOnSet observer want 2, got %d", observerCalls)
+	}
+}
+
+// Test 5: OnReplace fires before OnSet on overwrite; OnSet fires but OnReplace does not on first Set.
+func TestOnReplaceAndOnSetInterleaving(t *testing.T) {
+	w := flecs.New()
+	var order []string
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) {
+		order = append(order, "replace")
+	})
+	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) {
+		order = append(order, "set")
+	})
+	var e flecs.ID
+	// First Set: only OnSet.
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	if len(order) != 1 || order[0] != "set" {
+		t.Fatalf("first Set: want [set], got %v", order)
+	}
+	order = order[:0]
+	// Second Set (replace): OnReplace then OnSet.
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{2, 0}) })
+	if len(order) != 2 || order[0] != "replace" || order[1] != "set" {
+		t.Fatalf("second Set: want [replace, set], got %v", order)
+	}
+}
+
+// Test 6: coalesced deferred Sets on an already-present component fire OnReplace once per submission.
+func TestOnReplaceCoalescedDeferredExisting(t *testing.T) {
+	w := flecs.New()
+	type replaceCall struct{ old, new float32 }
+	var calls []replaceCall
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		calls = append(calls, replaceCall{old.X, new.X})
+	})
+	var e flecs.ID
+	// Pre-set: entity already has Position{0,0} before the Write.
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{0, 0}) })
+	// Three coalesced Sets inside one Write.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{1, 0})
+		flecs.Set[Position](fw, e, Position{2, 0})
+		flecs.Set[Position](fw, e, Position{3, 0})
+	})
+	if len(calls) != 3 {
+		t.Fatalf("want 3 OnReplace calls, got %d", len(calls))
+	}
+	want := []replaceCall{{0, 1}, {1, 2}, {2, 3}}
+	for i, wc := range want {
+		if calls[i] != wc {
+			t.Fatalf("call[%d] want %+v, got %+v", i, wc, calls[i])
+		}
+	}
+}
+
+// Test 7: first-add then replace in one Write: OnAdd once, OnSet twice, OnReplace once (on 2nd).
+func TestOnReplaceCoalescedDeferredFirstAddThenReplace(t *testing.T) {
+	w := flecs.New()
+	addCalls, setCalls := 0, 0
+	type replaceCall struct{ old, new float32 }
+	var repCalls []replaceCall
+	flecs.OnAdd[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { addCalls++ })
+	flecs.OnSet[Position](w, func(_ *flecs.Writer, _ flecs.ID, _ Position) { setCalls++ })
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		repCalls = append(repCalls, replaceCall{old.X, new.X})
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity() }) // entity has no Position
+	w.Write(func(fw *flecs.Writer) {
+		flecs.Set[Position](fw, e, Position{10, 0}) // first add
+		flecs.Set[Position](fw, e, Position{20, 0}) // replace
+	})
+	if addCalls != 1 {
+		t.Fatalf("OnAdd want 1, got %d", addCalls)
+	}
+	if setCalls != 2 {
+		t.Fatalf("OnSet want 2, got %d", setCalls)
+	}
+	if len(repCalls) != 1 {
+		t.Fatalf("OnReplace want 1 call, got %d", len(repCalls))
+	}
+	if repCalls[0] != (replaceCall{10, 20}) {
+		t.Fatalf("OnReplace want {10,20}, got %+v", repCalls[0])
+	}
+}
+
+// Test 8: cross-Write replace fires with old=pre-Write2 value, new=Write2 value.
+func TestOnReplaceCrossWrite(t *testing.T) {
+	w := flecs.New()
+	var gotOld, gotNew Position
+	calls := 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		gotOld = old
+		gotNew = new
+		calls++
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{5, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{9, 0}) })
+	if calls != 1 {
+		t.Fatalf("want 1 OnReplace call, got %d", calls)
+	}
+	if gotOld != (Position{5, 0}) {
+		t.Fatalf("old want {5,0}, got %v", gotOld)
+	}
+	if gotNew != (Position{9, 0}) {
+		t.Fatalf("new want {9,0}, got %v", gotNew)
+	}
+}
+
+// Test 9: OnReplace fires for sparse-stored components.
+func TestOnReplaceSparseComponent(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	flecs.SetSparse(w, posID)
+	calls := 0
+	var gotOld, gotNew Position
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		gotOld = old
+		gotNew = new
+		calls++
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 2}) })
+	if calls != 0 {
+		t.Fatalf("OnReplace must not fire on first Set (sparse), got %d", calls)
+	}
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{3, 4}) })
+	if calls != 1 {
+		t.Fatalf("OnReplace want 1 (sparse), got %d", calls)
+	}
+	if gotOld != (Position{1, 2}) {
+		t.Fatalf("old want {1,2}, got %v", gotOld)
+	}
+	if gotNew != (Position{3, 4}) {
+		t.Fatalf("new want {3,4}, got %v", gotNew)
+	}
+}
+
+// Test 10: OnReplace fires for DontFragment-stored components.
+func TestOnReplaceDontFragmentComponent(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	flecs.SetSparse(w, posID)
+	flecs.SetDontFragment(w, posID)
+	calls := 0
+	var gotOld, gotNew Position
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		gotOld = old
+		gotNew = new
+		calls++
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 2}) })
+	if calls != 0 {
+		t.Fatalf("OnReplace must not fire on first Set (DF), got %d", calls)
+	}
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{3, 4}) })
+	if calls != 1 {
+		t.Fatalf("OnReplace want 1 (DF), got %d", calls)
+	}
+	if gotOld != (Position{1, 2}) {
+		t.Fatalf("old want {1,2}, got %v", gotOld)
+	}
+	if gotNew != (Position{3, 4}) {
+		t.Fatalf("new want {3,4}, got %v", gotNew)
+	}
+}
+
+// Test 11: OnReplace fires on pair overwrite.
+func TestOnReplacePairForm(t *testing.T) {
+	w := flecs.New()
+	likes := flecs.RegisterComponent[Tag](w)
+	var bob flecs.ID
+	w.Write(func(fw *flecs.Writer) { bob = fw.NewEntity() })
+	calls := 0
+	var gotOld, gotNew Position
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, old, new Position) {
+		gotOld = old
+		gotNew = new
+		calls++
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.SetPair[Position](fw, e, likes, bob, Position{1, 0}) // first set: no OnReplace
+	})
+	if calls != 0 {
+		t.Fatalf("OnReplace must not fire on first SetPair, got %d", calls)
+	}
+	w.Write(func(fw *flecs.Writer) {
+		flecs.SetPair[Position](fw, e, likes, bob, Position{2, 0}) // replace: fires
+	})
+	if calls != 1 {
+		t.Fatalf("OnReplace want 1 (pair), got %d", calls)
+	}
+	if gotOld != (Position{1, 0}) {
+		t.Fatalf("old want {1,0}, got %v", gotOld)
+	}
+	if gotNew != (Position{2, 0}) {
+		t.Fatalf("new want {2,0}, got %v", gotNew)
+	}
+}
+
+// Test 12: Remove + re-Set: the re-Set is treated as a first add, OnReplace does not fire.
+func TestOnReplaceRemoveAndReSet(t *testing.T) {
+	w := flecs.New()
+	calls := 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) { calls++ })
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Remove[Position](fw, e) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{2, 0}) }) // re-add: no OnReplace
+	if calls != 0 {
+		t.Fatalf("OnReplace must not fire after Remove+Set (re-add), got %d", calls)
+	}
+}
+
+// Test 13: registering OnReplace twice replaces the prior hook.
+func TestOnReplaceRegistrationReplaces(t *testing.T) {
+	w := flecs.New()
+	calls1, calls2 := 0, 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) { calls1++ })
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) { calls2++ })
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{2, 0}) })
+	if calls1 != 0 {
+		t.Fatalf("first hook must have been replaced, got %d calls", calls1)
+	}
+	if calls2 != 1 {
+		t.Fatalf("second hook want 1, got %d", calls2)
+	}
+}
+
+// Test 14: OnReplace[T](w, nil) clears the hook.
+func TestOnReplaceNilClearsHook(t *testing.T) {
+	w := flecs.New()
+	calls := 0
+	flecs.OnReplace[Position](w, func(_ *flecs.Writer, _ flecs.ID, _, _ Position) { calls++ })
+	flecs.OnReplace[Position](w, nil) // clear
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) { e = fw.NewEntity(); flecs.Set[Position](fw, e, Position{1, 0}) })
+	w.Write(func(fw *flecs.Writer) { flecs.Set[Position](fw, e, Position{2, 0}) })
+	if calls != 0 {
+		t.Fatalf("cleared hook must not fire, got %d", calls)
+	}
+}
+
+// Test 15: OnReplaceID (untyped) — pointer-shape contract: handler can read both pointers.
+func TestOnReplaceIDUntypedContract(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[Position](w)
+	var gotOldX, gotNewX float32
+	flecs.OnReplaceID(w, posID, func(_ *flecs.Writer, _ flecs.ID, oldPtr, newPtr unsafe.Pointer) {
+		if oldPtr != nil {
+			gotOldX = (*Position)(oldPtr).X
+		}
+		if newPtr != nil {
+			gotNewX = (*Position)(newPtr).X
+		}
+	})
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		fw.SetByID(e, posID, Position{5, 0})
+	})
+	w.Write(func(fw *flecs.Writer) {
+		fw.SetByID(e, posID, Position{8, 0})
+	})
+	if gotOldX != 5 {
+		t.Fatalf("OnReplaceID old.X want 5, got %v", gotOldX)
+	}
+	if gotNewX != 8 {
+		t.Fatalf("OnReplaceID new.X want 8, got %v", gotNewX)
+	}
+}

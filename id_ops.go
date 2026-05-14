@@ -476,7 +476,10 @@ func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	}
 	t := rec.Table
 	if t != nil && t.HasComponent(pairID) {
-		t.Set(int(rec.Row), pairID, unsafe.Pointer(&v))
+		newPtr := unsafe.Pointer(&v)
+		oldPtr := t.Get(int(rec.Row), pairID) // capture before overwrite
+		w.fireOnReplace(pairInfo, pairID, e, oldPtr, newPtr)
+		t.Set(int(rec.Row), pairID, newPtr)
 		w.fireOnSet(pairInfo, pairID, e, t.Get(int(rec.Row), pairID))
 		t.BumpChange() // pair data column write
 		return

@@ -306,6 +306,8 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
 			} else {
 				if srcPtr != nil {
+					oldPtr := sparseSetGet(w, e, id) // capture before overwrite
+					w.fireOnReplace(info, id, e, oldPtr, srcPtr)
 					sparseSetInsert(w, e, id, srcPtr)
 				}
 				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
@@ -328,11 +330,17 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 			if w.singletonPolicies[iIdx] {
 				checkSingleton(w, id, e)
 			}
+			t := rec.Table
+			isFirstAdd := t == nil || !t.HasComponent(id)
+			if srcPtr != nil && isExisting && !isFirstAdd {
+				// Capture old value before sparseSetInsert overwrites the slot.
+				oldPtr := sparseSetGet(w, e, id)
+				w.fireOnReplace(info, id, e, oldPtr, srcPtr)
+			}
 			if srcPtr != nil {
 				sparseSetInsert(w, e, id, srcPtr)
 			}
-			t := rec.Table
-			if t == nil || !t.HasComponent(id) {
+			if isFirstAdd {
 				// First add: migrate archetype to include this component in the type,
 				// then fire OnAdd with the sparse-set pointer (not the table column).
 				w.migrateArchetypeOnly(e, id, 0)
@@ -355,6 +363,8 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 	if t != nil && t.HasComponent(id) {
 		if srcPtr != nil { // value write (not a tag): enforce WriteOnce
 			checkAndSetWriteOnce(w, e, id)
+			oldPtr := t.Get(int(rec.Row), id) // capture before overwrite
+			w.fireOnReplace(info, id, e, oldPtr, srcPtr)
 		}
 		t.Set(int(rec.Row), id, srcPtr)
 		w.fireOnSet(info, id, e, t.Get(int(rec.Row), id))

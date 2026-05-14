@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.54.0)
+## Shipped (through v0.55.0)
 
 The following features are available in the current release:
 
@@ -13,7 +13,7 @@ The following features are available in the current release:
 - **ChildOf hierarchy** — cascade delete of parent removes all descendants recursively; `EachChild`, `ParentOf`.
 - **IsA inheritance** — `Get`/`Has` walk the IsA chain transitively on a local miss; `Set` performs copy-on-write override; `Remove` restores inheritance; `PrefabOf`, `EachPrefab`.
 - **Hierarchical entity names** — `SetName`, `GetName`, `Lookup`, `LookupChild`, `PathOf`; dot-separated path resolution.
-- **Hooks** — single per-type hook for `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`.
+- **Hooks** — single per-type hook for `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, `OnReplace[T]` / `OnReplaceID`.
 - **Multi-subscriber observers** — `Observe[T]`, `ObserveID`, `Observe2[T]`; deferred unsubscribe via `Observer.Unsubscribe`.
 - **Coalescing deferred command queue** — `world.Write(func(*Writer))`; nested scopes; safe mutation during iteration. Tagged-union `cmd` structs replace closure captures; bump arena (`cmdArena`) eliminates per-op heap allocation; per-entity intrusive linked list folds all Add/Set/Remove ops for one entity into a single archetype migration. `BenchmarkDeferSingleSet`: 0 allocs/op. Port of C flecs `flecs_cmd_batch_for_entity`.
 - **Systems + 4-phase pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; `Progress`; frame counter; elapsed time.
@@ -56,6 +56,7 @@ The following features are available in the current release:
 - **Sparse component storage** _(v0.51.0–v0.52.0, Phases 15.19–15.20)_ — `SetSparse(w, compID)` / `IsSparse(scope, compID)` / `w.Sparse()` (index 34) / `EachSparse[T](scope, fn)`. Data stored in per-component sparse-set. Entity DOES transition archetype tables on add/remove (v0.53.0 behavior; use `SetDontFragment` to suppress transition). Pointer-stable boxed allocations (`reflect.New`). `HasID`/`OwnsID`/`GetRef`/`Get[T]` consult sparse-set. Entity-delete O(k) cleanup via `sparseHeld`. **Query integration (v0.52.0):** `NewQuery`/`NewCachedQuery` compile sparse terms; mixed iterator (archetype-seeded, entity-at-a-time). `Field[T]`/`FieldMaybe[T]` sparse branches; `Not`/`Optional` on sparse terms; `CachedQuery.Changed()` via version counter.
 - **DontFragment trait** _(v0.53.0, Phase 15.21)_ — `SetDontFragment(w, compID)` / `IsDontFragment(scope, compID)` / `w.DontFragment()` (index 35). Suppresses archetype transitions: entity does NOT transition tables when a DontFragment component is added/removed. Data stored in sparse-set (same backing as Sparse). Canonical pattern: `SetSparse + SetDontFragment` together matches v0.51.0–v0.52.0 `Sparse` behavior. `isDontFragmentTermID` drives pure-sparse query iteration mode. BREAKING: splits upstream `EcsSparse + EcsIdDontFragment`; `SetSparse` alone no longer suppresses archetype transitions. See `MIGRATING.md`. Built-in entity count: 37; user entities now start at index 38.
 - **Union relationship trait** _(v0.54.0, Phase 15.22)_ — `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`. At-most-one-target per relationship per entity, stored in a per-relationship side map (`unionStore` — dense slice + index map). Union pairs never trigger archetype transitions. Implies Exclusive. Tag-only: data-bearing `SetPair[T]` panics. `OnAdd`/`OnRemove` fire on target set, replace, and entity delete. Pure-union query iteration via `nextUnionOnly`. `CachedQuery.unionAndOnly` skips archetype tracking for all-union queries. Marshal round-trip via `union_relationship_serials` + `union_relationships` fields. Built-in entity count: 37 (unchanged); no new built-in entity; `SetUnion` registers policies at runtime.
+- **OnReplace hook** _(v0.55.0, Phase 16.0)_ — `OnReplace[T](w, fn)` / `OnReplaceID(w, id, fn)`. Fires when `Set[T]` overwrites an existing component value; receives both the previous (`old`) and incoming (`new`) value before the slot is written. Does not fire on first Set. Dispatch order on overwrite: OnReplace → column write → OnSet. Wired into archetype, sparse-only, DontFragment, pair, and deferred (`cmdModified`) paths. Deferred coalescing fires OnReplace once per surviving `cmdModified`; first write to a just-migrated slot is not a replace. Mirrors C flecs `ti->hooks.on_replace`. No `EventOnReplace` observer event.
 
 ## Documentation
 
@@ -84,6 +85,20 @@ Conceptual docs are ported from the upstream C flecs docs one phase at a time. E
 ## Future Work
 
 The following are deferred to later phases. No timeline is set; issues welcome.
+
+### Observer-system gaps (Phase 16.x candidates)
+
+Remaining observer/hook and entity gaps from the docs/README.md feature-gap list:
+
+- **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.1 candidate.)
+- **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.2 candidate.)
+- **Custom events** — `EventOnReplace` or arbitrary user-defined event entities emitted via `ecs_emit`. (Phase 16.3 candidate.)
+- **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.4 candidate.)
+- **Yield-on-create** — observer fires for entities that already match when the observer is registered. (Phase 16.5 candidate.)
+- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.6 candidate.)
+- **Monitor observers** — fire once when a query transitions from "no matches" to "has matches" and vice versa. (Phase 16.7 candidate.)
+- **Observer disabling** — temporarily suppress an observer without unsubscribing. (Phase 16.8 candidate.)
+- **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.9 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
 - **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).

@@ -216,7 +216,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | ChildOf hierarchy | `w.ChildOf()`, `EachChild`, `ParentOf`, cascade delete |
 | IsA inheritance | `w.IsA()`, `Get`/`Has` walk the chain, `PrefabOf` |
 | Named entities | `SetName`, `GetName`, `Lookup`, `PathOf` |
-| Hooks (single) | `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]` |
+| Hooks (single) | `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, `OnReplace[T]` / `OnReplaceID` |
 | Observers (multi) | `Observe[T]`, `ObserveID`, `Observe2[T]`, `Unsubscribe` |
 | Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
 | Readonly concurrency window | `w.Readonly(fn)`, `ReadonlyBegin`, `ReadonlyEnd` |

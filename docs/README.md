@@ -98,7 +98,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`SetVersion(versionedID)`** — override the generation counter on an entity. not yet ported in Go flecs.
 - **Entity ID ranges** (`range_new` / `range_set`) — constrain which IDs `NewEntity` issues; enables per-owner ID partitioning. not yet ported in Go flecs.
 - **Entity disabling** (`Enable` / `Disable`) — exclude entities from queries temporarily via a `Disabled` tag without deleting them. not yet ported in Go flecs.
-- **`on_replace` hook** — receives both the previous and new component value when a component is overwritten via `Set`. not yet ported in Go flecs.
+- **`on_replace` hook** — ✅ **shipped in v0.55.0** as `OnReplace[T]` / `OnReplaceID`. Receives both the previous and new component value when a component is overwritten via `Set`. Fires only on overwrites (not on first Set). See [ObserversManual.md § OnReplace Hook](ObserversManual.md#onreplace-hook).
 - **Runtime (dynamic) component registration** — register a component whose Go type is unknown at compile time (only size + alignment known; used by scripting layers). not yet ported in Go flecs.
 - **Cleanup policies / component-delete cascade** — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`. The `OnDelete` and `OnDeleteTarget` traits are now fully configurable with `RemoveAction`, `DeleteAction`, and `PanicAction`.
 - **`CanToggle` component trait** — **shipped in v0.35.0** via `SetCanToggle` / `EnableID` / `DisableID` / `IsEnabledID` and typed generics. `Each1`/`Each2`/`Each3`/`Each4` automatically skip disabled rows. See the [ComponentTraits manual](ComponentTraits.md#cantoggle).
@@ -148,7 +148,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 
 ### Additional gaps discovered in Phase 14.7 (ObserversManual port)
 
-- **`OnReplace` hook** — fires when `Set` overwrites an existing component value; receives both the old and new value. not yet ported in Go flecs.
+- **`OnReplace` hook** — ✅ **shipped in v0.55.0** as `OnReplace[T]` / `OnReplaceID`. Fires when `Set` overwrites an existing component value; receives both the old and new value. See [ObserversManual.md § OnReplace Hook](ObserversManual.md#onreplace-hook).
 - **`OnDelete` / `OnDeleteTarget` observer events** — C flecs fires observer callbacks for these events when a component entity or pair target is deleted. The Go port implements cleanup *policies* (v0.32.0) but not observer-driven cleanup hooks. not yet ported in Go flecs.
 - **`OnTableEmpty` / `OnTableFill` events** — fire when an archetype table transitions between empty and non-empty. not yet ported in Go flecs.
 - **Custom events** — create arbitrary event entities and emit them with `ecs_emit`; Go flecs supports only the three built-in events (`EventOnAdd`, `EventOnSet`, `EventOnRemove`). not yet ported in Go flecs.
@@ -168,7 +168,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **`Final` entity trait** — **shipped in v0.42.0** via `SetFinal(w, entityID)` / `IsFinal(scope, entityID)` / `w.Final()`. Write-time enforcement: adding `(IsA, target)` panics if target is Final. See [ComponentTraits.md § Final](ComponentTraits.md#final) and [PrefabsManual.md § Sealing prefabs with Final](PrefabsManual.md#sealing-prefabs-with-final).
 - **`OneOf` relationship trait** — constrains relationship targets to be children of a specified entity (useful for enum-style relationships). **Shipped in v0.43.0** via `SetOneOf(w, relID, parentID)` / `IsOneOf(scope, relID)` / `w.OneOf()`. Write-time enforcement: adding `(R, target)` panics if target is not a direct child of the required parent. See [ComponentTraits.md § OneOf](ComponentTraits.md#oneof).
 - **`With` relationship** — automatically co-adds a second component when a component is added; when added to a relationship, the co-added id mirrors the pair target. **Shipped in v0.49.0** via `SetWith(w, source, coAdd)` / `HasWith(scope, source) []ID` / `w.With()`. See [ComponentTraits.md § With](ComponentTraits.md#with).
-- **`Relationship` / `Target` / `Trait` enforcement traits** — restrict how an entity may be used in pairs (as relationship, as target, or as a trait); relax some constraints when the `Trait` marker is present. not yet ported in Go flecs.
+- **`Relationship` / `Target` / `Trait` enforcement traits** — ✅ **shipped in v0.47.0** via `SetRelationship(w, id)` / `SetTarget(w, id)` / `SetTrait(w, id)`. Write-time enforcement panics on constraint violations. See [ComponentTraits.md § Relationship / Target / Trait](ComponentTraits.md#relationship--target--trait).
 
 ### Additional gaps discovered in Phase 14.9 (FlecsRemoteApi port)
 
