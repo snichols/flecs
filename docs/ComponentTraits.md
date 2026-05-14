@@ -907,9 +907,57 @@ flecs.IsTraversable(fr, w.IsA())    // → true
 
 **What it does:** The `Union` trait opts a relationship into union-pair semantics, where only one of several possible relationship values can be active for an entity at a time. It is similar to `Exclusive` but is stored differently to minimize table fragmentation.
 
-**Workaround:** Manage mutual exclusion manually; use `RemoveID` of the old pair before adding a new one.
+**Shipped in v0.54.0.** Union pairs are stored in a per-relationship side map (not in the archetype table), so adding or changing the target never triggers an archetype transition. This eliminates the table fragmentation that arises when many entities cycle through many targets with a plain `Exclusive` relationship.
 
-> **Not yet ported in Go flecs.** See the [feature-gap list](README.md#feature-gap-list): *Union relationships*.
+```go
+w := flecs.New()
+var Movement, Walking, Running, Sprinting flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    Movement  = fw.NewEntity()
+    Walking   = fw.NewEntity()
+    Running   = fw.NewEntity()
+    Sprinting = fw.NewEntity()
+})
+
+flecs.SetUnion(w, Movement) // union storage — no archetype fragmentation
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    fw.AddID(e, flecs.MakePair(Movement, Walking))
+})
+w.Write(func(fw *flecs.Writer) {
+    // Replace Walking with Running — no archetype transition.
+    fw.AddID(e, flecs.MakePair(Movement, Running))
+})
+
+w.Read(func(fr *flecs.Reader) {
+    flecs.IsUnion(fr, Movement)                                // true
+    flecs.HasID(fr, e, flecs.MakePair(Movement, Running))     // true
+    flecs.HasID(fr, e, flecs.MakePair(Movement, Walking))     // false (replaced)
+    flecs.HasID(fr, e, flecs.MakePair(Movement, w.Wildcard())) // true (any target held)
+})
+```
+
+**Remove semantics:** `fw.RemoveID(e, MakePair(R, T))` removes the pair only when T matches the currently active target (no-op on mismatch). `fw.RemoveID(e, MakePair(R, w.Wildcard()))` removes the pair regardless of target.
+
+**Query support:** Union terms work in both `NewQuery` and `NewCachedQuery`. `(R, *)` yields all entities holding any target; `(R, T)` filters to those holding exactly T. Pure-union queries iterate the union store directly without visiting any archetype table.
+
+**Conflict with Exclusive:** `SetUnion` panics if the relationship already has `SetExclusive` (and vice versa). The two traits use different storage and are mutually exclusive.
+
+**Data-bearing pairs prohibited:** Union pairs are tag-only. `SetPair[T]` / `SetPairByID` on a Union relationship panics with a clear message.
+
+**Hook integration:** `OnAdd` fires when a target is first set; `OnRemove` fires when a target is replaced or the entity is deleted. `OnRemove` fires with the old target before `OnAdd` fires with the new one.
+
+**JSON round-trip:** `MarshalJSON` stores which relationships are Union (`union_relationship_serials`) and each entity's active target (`union_relationships`). `UnmarshalJSON` restores policies in Phase 1b and targets in Phase 3b.
+
+**API:**
+
+| Function | Description |
+|---|---|
+| `SetUnion(w, relID)` | Mark relID as a union relationship. Panics if already Exclusive. Idempotent. |
+| `IsUnion(s, relID) bool` | Return true if relID is a union relationship. |
+| `EachUnion(s, relID, fn func(entity, target ID))` | Iterate all active (entity, target) pairs in insertion order. |
 
 ---
 
@@ -1003,7 +1051,7 @@ The table below is the canonical reference for trait-system planning. Check the 
 | **Trait** | `EcsTrait` | ✅ shipped (v0.47.0) | `SetTrait(w, id)` / `IsTrait(scope, id)`; `w.Trait()` bare-tag form; exempts entity from `Relationship`'s no-target-slot check; `IsA` and `ChildOf` bootstrapped Trait (permits patterns like `(SomeRel, ChildOf)`) |
 | **Transitive** | `EcsTransitive` | ✅ shipped (v0.37.0) | `SetTransitive(w, relID)` / `IsTransitive(w, relID)`; `w.Transitive()` bare-tag form; lazy walk at query time with cycle detection and depth limit; cached query re-evaluates on table-create |
 | **Traversable** | `EcsTraversable` | ✅ shipped (v0.46.0) | `SetTraversable(w, relID)` / `IsTraversable(scope, relID)`; `w.Traversable()` bare-tag form; query-time enforcement: non-traversable `Up`/`SelfUp`/`Cascade` terms panic at construction; Traversable implies Acyclic; `ChildOf` + `IsA` bootstrapped Traversable; `IsA` now Acyclic as behavior change (see changelog) |
-| **Union** | `EcsUnion` | ⏳ planned | No union-pair semantics |
+| **Union** | `EcsUnion` | ✅ shipped (v0.54.0) | `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`; no built-in entity; union pairs stored in per-relationship side map (no archetype transitions); implies Exclusive; tag-only (data-bearing SetPair panics); OnAdd/OnRemove fire on set/replace/delete; JSON round-trip via `union_relationship_serials` + `union_relationships` fields |
 | **With** | `EcsWith` | ✅ shipped (v0.49.0) | `SetWith(w, source, coAdd)` / `HasWith(scope, source) []ID`; `w.With()` bare-tag accessor (index 32); auto-add on immediate and deferred paths; pair form preserves target; transitive chaining; cycle detection panics with path message; IsA no-retrigger; Exclusive one-way add-only |
 
 ---

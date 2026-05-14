@@ -27,6 +27,23 @@ func addIDOnWorld(w *World, e ID, e2 ID) bool {
 				panic(fmt.Sprintf("flecs: AddID: cannot add DontFragment component %v as a tag; use Set with a value", e2))
 			}
 		}
+		// Union pair: check union store for idempotency (pair never appears in archetype).
+		if e2.IsPair() {
+			relKey := ID(e2.First().Index())
+			if w.unionPolicies[relKey] {
+				if store, ok := w.unionStore[relKey]; ok {
+					entityKey := ID(e.Index())
+					if pos, has := store.index[entityKey]; has {
+						if store.dense[pos].target.Index() == e2.Second().Index() {
+							return false // already has this exact target
+						}
+					}
+				}
+				w.registry.EnsureID(e2)
+				s0.queue.append(cmd{kind: cmdAddID, entity: e, id: e2})
+				return true
+			}
+		}
 		if rec.Table != nil && rec.Table.HasComponent(e2) {
 			return false
 		}
@@ -184,6 +201,21 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// ecs_add_id(world, ecs_id(Position), EcsDontFragment).
 		applyDontFragmentPolicy(w, e)
 	}
+	// Union pair handling: at-most-one-target without archetype transition.
+	// Must come before the Exclusive enforcement block (union implies exclusive,
+	// but uses the union store rather than archetype migration).
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			// OneOf constraint: validate target before storing.
+			checkOneOf(w, id.First(), id.Second())
+			// Store target in union store; fire OnRemove/OnAdd.
+			unionStoreSet(w, relKey, e, id.First(), id.Second())
+			// With co-adds: fire (With, Y) pairs on the relationship entity.
+			applyWithCoAdds(w, e, id)
+			return true
+		}
+	}
 	// Usage-constraint enforcement: Relationship/Target/Trait checks fire for both
 	// bare-tag and pair-form adds, before any migration. Mirrors C
 	// component_index.c:384-481.
@@ -332,6 +364,35 @@ func overrideCopyForInstance(w *World, instance, prefab ID, seen map[ID]struct{}
 }
 
 func removeIDImmediate(w *World, e ID, id ID) bool {
+	// Union pair: remove from union store; no archetype transition.
+	if id.IsPair() {
+		relKey := ID(id.First().Index())
+		if w.unionPolicies[relKey] {
+			store, ok := w.unionStore[relKey]
+			if !ok {
+				return false
+			}
+			entityKey := ID(e.Index())
+			pos, has := store.index[entityKey]
+			if !has {
+				return false
+			}
+			currentTarget := store.dense[pos].target
+			termTarget := id.Second()
+			// Specific target: only clear if it matches the current target.
+			// Wildcard target: clear regardless.
+			if !isWildcardID(w, termTarget) && currentTarget.Index() != termTarget.Index() {
+				return false // no-op: different specific target
+			}
+			// Fire OnRemove, then remove from store.
+			oldPairID := MakePair(id.First(), currentTarget)
+			w.registry.EnsureID(oldPairID)
+			oldInfo, _ := w.registry.LookupByID(oldPairID)
+			w.fireOnRemove(oldInfo, oldPairID, e, nil)
+			unionStoreRemove(store, e)
+			return true
+		}
+	}
 	if !id.IsPair() {
 		iIdx := ID(id.Index())
 		// DontFragment (alone or with Sparse): remove from sparse-set; do NOT cause
@@ -406,6 +467,7 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 
 func setPairImmediate[T any](w *World, e ID, rel ID, tgt ID, v T) {
 	checkPairIsTag(w, rel)
+	checkUnionPair(w, rel)
 	pairID := MakePair(rel, tgt)
 	pairInfo := component.RegisterPairData[T](w.registry, pairID)
 	rec := w.index.Get(e)

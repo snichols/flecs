@@ -109,6 +109,10 @@ type CachedQuery struct {
 	// queries iterate sparse-sets directly at Iter() time and do not cache archetype
 	// tables (tryMatchTable is a no-op for them).
 	sparseAndOnly bool
+	// unionAndOnly is true when all TermAnd terms are union pairs. Pure-union cached
+	// queries iterate union stores directly at Iter() time and do not cache archetype
+	// tables (tryMatchTable is a no-op for them).
+	unionAndOnly bool
 	// Change detection state (Phase 9.5). Not goroutine-safe.
 	lastChangeCounts map[*table.Table]uint64 // last seen ChangeCount per table; nil before first Changed() call
 	tablesAdded      bool                    // set by tryMatchTable when a new table is appended
@@ -151,6 +155,7 @@ func NewCachedQuery(w *World, ids ...ID) *CachedQuery {
 		terms[i] = Term{ID: id, Kind: TermAnd,
 			Sparse:       isSparseTermID(w, id),
 			DontFragment: isDontFragmentTermID(w, id),
+			Union:        isUnionTermID(w, id),
 		}
 		applyInheritablePromotion(w, &terms[i])
 	}
@@ -201,21 +206,25 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		}
 	}
 
-	// Determine if all And terms are DontFragment (pure sparse-set cached query).
+	// Determine if all And terms are DontFragment or Union (pure non-archetype cached queries).
 	// Sparse-only terms still live in archetype tables, so they don't qualify.
 	dontFragmentAndCount := 0
 	archetypeAndCount := 0
+	unionAndCount := 0
 	for _, t := range terms {
 		if t.Kind != TermAnd {
 			continue
 		}
-		if t.DontFragment {
+		if t.Union {
+			unionAndCount++
+		} else if t.DontFragment {
 			dontFragmentAndCount++
 		} else {
 			archetypeAndCount++
 		}
 	}
-	sparseAndOnly := archetypeAndCount == 0 && dontFragmentAndCount > 0
+	sparseAndOnly := archetypeAndCount == 0 && dontFragmentAndCount > 0 && unionAndCount == 0
+	unionAndOnly := archetypeAndCount == 0 && dontFragmentAndCount == 0 && unionAndCount > 0
 
 	cq := &CachedQuery{
 		w:               w,
@@ -225,6 +234,7 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		tables:          make([]*table.Table, 0),
 		cascadeTermTrav: cascadeTermTrav,
 		sparseAndOnly:   sparseAndOnly,
+		unionAndOnly:    unionAndOnly,
 	}
 
 	// Initial population: check every existing table (unordered during bulk load).
@@ -361,9 +371,49 @@ func (cq *CachedQuery) Iter() *QueryIter {
 		}
 	}
 
+	if cq.unionAndOnly {
+		// Pure-Union: build a fresh union driver (union stores may have mutated).
+		var driver []unionEntry
+		zeroDriver := false
+		minLen := -1
+		for _, term := range cq.terms {
+			if term.Kind != TermAnd || !term.Union {
+				continue
+			}
+			relKey := ID(term.ID.First().Index())
+			store, ok := cq.w.unionStore[relKey]
+			if !ok || store == nil {
+				zeroDriver = true
+				break
+			}
+			if minLen < 0 || len(store.dense) < minLen {
+				minLen = len(store.dense)
+				snap := make([]unionEntry, len(store.dense))
+				copy(snap, store.dense)
+				driver = snap
+			}
+		}
+		if zeroDriver {
+			driver = nil
+		}
+		return &QueryIter{
+			world:           cq.w,
+			terms:           cq.terms,
+			orGroups:        cq.orGroups,
+			allUnion:        true,
+			hasSparseTerms:  true,
+			unionDriver:     driver,
+			unionDriverPos:  -1,
+			sparseDriverPos: -1,
+			pos:             -1,
+			wildcardTermIdx: wildcardIdx,
+			wildcardPairPos: -1,
+		}
+	}
+
 	hasSparseTerms := false
 	for _, t := range cq.terms {
-		if t.Kind == TermAnd && t.Sparse {
+		if t.Kind == TermAnd && (t.Sparse || t.Union) {
 			hasSparseTerms = true
 			break
 		}
@@ -467,19 +517,19 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	if cq.removed {
 		return
 	}
-	// Pure-sparse queries have no archetype requirements; their tables list stays
-	// empty. Iter() builds the sparse driver fresh from sparse-sets each time.
-	if cq.sparseAndOnly {
+	// Pure-sparse and pure-union queries have no archetype requirements; their tables
+	// list stays empty. Iter() builds the driver fresh from stores each time.
+	if cq.sparseAndOnly || cq.unionAndOnly {
 		return
 	}
 	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).
-	// DontFragment terms are skipped: they do not live in archetype tables.
+	// DontFragment and Union terms are skipped: they do not live in archetype tables.
 	// Sparse-only terms DO live in archetype tables, so they are checked here.
 	for _, term := range cq.terms {
 		switch term.Kind {
 		case TermAnd:
-			if term.DontFragment {
-				break // DontFragment term: skip archetype check; verified per-entity at iteration time
+			if term.DontFragment || term.Union {
+				break // not in archetype; skip archetype check (verified per-entity at iteration time)
 			}
 			if term.Traverse == TraverseSelf && !t.HasComponent(term.ID) {
 				// Wildcard/Any pair matching: sentinel IDs never appear in table
@@ -513,8 +563,8 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 				}
 			}
 		case TermNot:
-			if term.DontFragment {
-				break // DontFragment not-terms checked per-entity; skip archetype check
+			if term.DontFragment || term.Union {
+				break // not in archetype; skip archetype check (checked per-entity at iteration time)
 			}
 			if t.HasComponent(term.ID) {
 				return

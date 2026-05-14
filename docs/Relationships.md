@@ -17,6 +17,16 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction, [EntitiesCompon
   - [ChildOf](#the-childof-relationship)
 - [Relationship traversal](#relationship-traversal)
 - [Relationship traits](#relationship-traits)
+  - [Exclusive](#exclusive)
+  - [Union](#union)
+  - [Symmetric](#symmetric)
+  - [Transitive](#transitive)
+  - [Reflexive](#reflexive)
+  - [Acyclic](#acyclic)
+  - [OneOf](#oneof)
+  - [Traversable](#traversable)
+  - [Cleanup policies](#cleanup-policies)
+  - [PairIsTag](#pairstag)
 - [Relationship performance](#relationship-performance)
 
 ---
@@ -546,6 +556,57 @@ w.Write(func(fw *flecs.Writer) {
 Query `flecs.IsExclusive(w, relID)` to check whether a relationship is exclusive.
 
 The following built-in relationships are exclusive by default: **`ChildOf`**, **`OnDelete`**, **`OnDeleteTarget`**, **`OnInstantiate`**. `IsA` is intentionally NOT exclusive — multiple prefab bases per entity are allowed.
+
+### Union
+
+**Shipped in v0.54.0.** `Union` is like `Exclusive` — at most one target per entity — but pairs are stored in a **per-relationship side map** instead of the archetype table. Adding or changing the target never triggers an archetype transition, eliminating the table fragmentation that appears when many entities cycle through many targets.
+
+```go
+w := flecs.New()
+var Movement, Walking, Running flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    Movement = fw.NewEntity()
+    Walking  = fw.NewEntity()
+    Running  = fw.NewEntity()
+})
+
+flecs.SetUnion(w, Movement) // store in union side map, not archetype
+
+var e flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    e = fw.NewEntity()
+    fw.AddID(e, flecs.MakePair(Movement, Walking))
+})
+w.Write(func(fw *flecs.Writer) {
+    fw.AddID(e, flecs.MakePair(Movement, Running)) // replaces Walking, no archetype transition
+})
+
+w.Read(func(fr *flecs.Reader) {
+    flecs.HasID(fr, e, flecs.MakePair(Movement, Running))      // true
+    flecs.HasID(fr, e, flecs.MakePair(Movement, Walking))      // false
+    flecs.HasID(fr, e, flecs.MakePair(Movement, w.Wildcard())) // true — any target held
+})
+```
+
+**Union vs Exclusive — when to use which:**
+
+| | Exclusive | Union |
+|---|---|---|
+| At-most-one target | ✅ | ✅ |
+| Archetype transition on change | ✅ (entity moves tables) | ❌ (no transition) |
+| Data-bearing pairs | ✅ | ❌ (tag-only) |
+| Table fragmentation | High when many targets exist | None |
+| Query: `(R, T)` filter | Archetype scan | Side-map lookup |
+
+Choose **Exclusive** when pairs carry typed data (`SetPair[T]`) or when target changes are rare. Choose **Union** when many entities cycle through many tag-only targets and table proliferation becomes a concern.
+
+**Remove semantics:** `fw.RemoveID(e, MakePair(R, T))` removes the pair only when T is the currently active target; mismatched removes are a no-op. `fw.RemoveID(e, MakePair(R, w.Wildcard()))` removes the pair unconditionally.
+
+**Conflict with Exclusive:** `SetUnion` panics if the relationship was already registered with `SetExclusive` (and vice versa). Start with `SetUnion` if you want union semantics.
+
+**Hooks:** `OnRemove` fires with the old target before `OnAdd` fires with the new one, matching `Exclusive` behavior.
+
+**Introspection:** `flecs.EachUnion(scope, relID, fn)` iterates all active (entity, target) pairs for a union relationship in insertion order.
 
 ### Symmetric
 
