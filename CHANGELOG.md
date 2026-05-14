@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.74.0 — 2026-05-14 — Phase 16.19: Entity scoping (push/pop)
+
+Ports upstream C flecs `ecs_set_scope` / `ecs_get_scope` (`src/entity_name.c:785-808`) as a Go-idiomatic closure-based API. When a scope is active, `NewEntity` and `RangeNew` automatically add `(ChildOf, scope)` to each new entity without an explicit `AddID` call.
+
+### Added
+
+- **`WithinScope(fw *Writer, parent ID, fn func(*Writer))`** — primary API. Pushes `parent` onto the Writer's scope stack, calls `fn` with the same Writer, pops on return (defer-based; survives panics in `fn`). Scopes nest: the inner-most scope wins.
+- **`PushScope(fw *Writer, parent ID) ID`** — pushes `parent`, returns the previous top (zero if stack was empty). For callers who need to cross function boundaries where a closure is awkward. The returned value must be passed to `PopScope`.
+- **`PopScope(fw *Writer, prev ID)`** — pops one frame. Panics with a clear message if `prev` does not match the value `PushScope` returned (programming error).
+- **`GetScope(s scope) ID`** — returns the current scope (topmost stack entry) or 0 if none. Returns 0 on a `*Reader` (read blocks have no entity-scope semantics).
+- **`(*Writer).NewEntity`** — now checks `scopeStack` after `newEntityInternal`; if non-empty, routes through `AddID` so all ChildOf trait machinery (Exclusive swap, OrderedChildren insertion, cycle detect, cleanup-policy wiring) runs unchanged.
+- **`RangeNew`** — applies the active scope (fresh allocation, range-constrained); mirrors `NewEntity` hook. Scope add is routed through `AddID` for the same trait guarantees.
+- **`MakeAlive`** — explicitly does NOT apply the scope (explicit ID claim bypasses scope, mirroring the Phase 16.16 "MakeAlive bypasses range" precedent).
+
+### Design
+
+- **Per-Writer, not per-stage**: scope lives on `*Writer` (the user-facing capability), not on the internal `*stage`. Worker stages in parallel-dispatch never create scope-bound hierarchies; moving to `*stage` can be done in a follow-up if a use case arises.
+- **Stack reset on top-level Write entry**: `w.Write(fn)` resets `scopeStack` to empty before calling `fn` when `deferDepth` transitions from 0→1. Nested `w.Write` calls (same goroutine, `deferDepth > 1`) preserve the stack, matching the existing deferred-command semantics.
+- **No internal stack in upstream C**: upstream uses a save+restore idiom (`prev := ecs_set_scope(w, X); ...; ecs_set_scope(w, prev)`). Go-flecs maintains an explicit `[]ID` stack on the Writer so `WithinScope` can use a clean defer-based pop without burdening callers.
+
+### Closed gap entries
+
+- `docs/README.md` line 87: "Entity scoping (`ecs_set_scope` / push-pop) — not ported" → shipped.
+- `docs/HierarchiesManual.md` line 228: "Not yet ported" callout updated to link to new § Entity scoping.
+- `docs/HierarchiesManual.md` line 334: Entity scoping removed from "Not yet ported" list.
+
 ## v0.73.0 — 2026-05-14 — Phase 16.18: Fixed per-term source
 
 Ports the upstream C flecs fixed-source query mechanism (`compiler.c:833-882`,

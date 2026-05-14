@@ -83,5 +83,8 @@ func RangeNew(fw *Writer, min, max ID) ID {
 	rec := fw.world.index.Get(e)
 	rec.Table = fw.world.empty
 	rec.Row = uint32(fw.world.empty.Append(e))
+	if len(fw.scopeStack) > 0 {
+		AddID(fw, e, MakePair(fw.world.childOfID, fw.scopeStack[len(fw.scopeStack)-1]))
+	}
 	return e
 }

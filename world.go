@@ -1706,6 +1706,7 @@ func (w *World) Write(fn func(*Writer)) {
 	}
 	w.mu.Lock()
 	w.ExclusiveAccessBegin("Write")
+	w.writeCapability.scopeStack = w.writeCapability.scopeStack[:0]
 	s0.deferDepth++
 	defer func() {
 		s0.deferDepth--
