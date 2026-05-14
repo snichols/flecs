@@ -93,10 +93,10 @@ func TestRangeSetMinZeroPanics(t *testing.T) {
 func TestRangeNewNoRangeStateChange(t *testing.T) {
 	w := flecs.New()
 	fw := flecs.WriterForTest(w)
-	e := flecs.RangeNew(fw, 50, 60)
-	// Verify the ID is in [50, 60).
-	if idx := e.Index(); idx < 50 || idx >= 60 {
-		t.Errorf("RangeNew ID index %d not in [50, 60)", idx)
+	e := flecs.RangeNew(fw, 100, 110)
+	// Verify the ID is in [100, 110).
+	if idx := e.Index(); idx < 100 || idx >= 110 {
+		t.Errorf("RangeNew ID index %d not in [100, 110)", idx)
 	}
 	// Verify world has no active range (RangeNew must not set rangeSet).
 	_, _, set := flecs.RangeGet(fw)

@@ -42,6 +42,28 @@ type jsonWorld struct {
 	// Alerts holds registered alert definitions. Instances are not stored; they
 	// are recomputed from the query via WithYieldExisting during UnmarshalJSON.
 	Alerts []jsonAlertDef `json:"alerts,omitempty"`
+	// Units holds user-registered unit definitions. Built-in units (indices 48–62)
+	// are not stored; they are re-created by New() at fixed indices.
+	Units []jsonUnitDef `json:"units,omitempty"`
+	// CompUnits maps component names to their unit (built-in or user).
+	CompUnits []jsonCompUnit `json:"comp_units,omitempty"`
+}
+
+// jsonUnitDef is the serialised form of one user-registered unit entity.
+type jsonUnitDef struct {
+	EntitySerial   int     `json:"entity_serial"`
+	Symbol         string  `json:"symbol"`
+	Name           string  `json:"name"`
+	BaseSerial     int     `json:"base_serial,omitempty"`      // user-unit base entity serial
+	BaseBuiltinIdx uint32  `json:"base_builtin_idx,omitempty"` // built-in unit base raw index (48–62)
+	Factor         float64 `json:"factor"`
+}
+
+// jsonCompUnit maps one component to its unit.
+type jsonCompUnit struct {
+	CompName       string `json:"comp_name"`
+	UnitSerial     int    `json:"unit_serial,omitempty"`      // user unit entity serial
+	UnitBuiltinIdx uint32 `json:"unit_builtin_idx,omitempty"` // built-in unit raw index (48–62)
 }
 
 // jsonAlertDef is the serialised form of one registered alert.
@@ -192,6 +214,22 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.DependsOn():          {},
 		w.EventMonitor():       {},
 		w.SlotOf():             {},
+		// Built-in unit entities (indices 48–62).
+		w.Meter():       {},
+		w.KiloMeter():   {},
+		w.MilliMeter():  {},
+		w.Second():      {},
+		w.MilliSecond(): {},
+		w.Minute():      {},
+		w.Hour():        {},
+		w.Gram():        {},
+		w.KiloGram():    {},
+		w.MegaGram():    {},
+		w.Newton():      {},
+		w.Joule():       {},
+		w.Hertz():       {},
+		w.Radian():      {},
+		w.Degree():      {},
 	}
 
 	var result []byte
@@ -508,6 +546,51 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			})
 		}
 
+		// Serialize user-registered unit definitions. Built-in units (indices 48–62)
+		// are excluded; they are re-created by New() at fixed indices on unmarshal.
+		var unitDefs []jsonUnitDef
+		for unitID, u := range w.unitDefs {
+			if isBuiltinUnit(unitID) {
+				continue
+			}
+			serial, ok := m.idToSerial[unitID]
+			if !ok {
+				continue
+			}
+			def := jsonUnitDef{
+				EntitySerial: serial,
+				Symbol:       u.Symbol,
+				Name:         u.Name,
+				Factor:       u.Factor,
+			}
+			if u.Base != 0 {
+				if isBuiltinUnit(u.Base) {
+					def.BaseBuiltinIdx = u.Base.Index()
+				} else if baseSerial, ok := m.idToSerial[u.Base]; ok {
+					def.BaseSerial = baseSerial
+				}
+			}
+			unitDefs = append(unitDefs, def)
+		}
+
+		// Serialize component→unit mappings.
+		var compUnits []jsonCompUnit
+		for compID, unitID := range w.componentUnits {
+			info, ok := fr.ComponentInfo(compID)
+			if !ok {
+				continue
+			}
+			cu := jsonCompUnit{CompName: info.Name}
+			if isBuiltinUnit(unitID) {
+				cu.UnitBuiltinIdx = unitID.Index()
+			} else if unitSerial, ok := m.idToSerial[unitID]; ok {
+				cu.UnitSerial = unitSerial
+			} else {
+				continue
+			}
+			compUnits = append(compUnits, cu)
+		}
+
 		rangeMin, rangeMax, rangeIsSet := w.index.GetRange()
 		jw := jsonWorld{
 			Version:                  1,
@@ -521,6 +604,8 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			EntityRangeMax:           rangeMax,
 			EntityRangeSet:           rangeIsSet,
 			Alerts:                   alertDefs,
+			Units:                    unitDefs,
+			CompUnits:                compUnits,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -805,6 +890,59 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				desc.Name = name
 			}
 			registerAlertInternal(fw, alertID, desc)
+		}
+
+		// Phase 5: restore user-registered unit definitions. Built-in units are
+		// already live (created by New()); only user units need restoration here.
+		for _, ju := range jw.Units {
+			unitID, ok := serialToID[ju.EntitySerial]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit entity serial %d not found", ju.EntitySerial)
+				return
+			}
+			var base ID
+			switch {
+			case ju.BaseSerial != 0:
+				base, ok = serialToID[ju.BaseSerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit base serial %d not found", ju.BaseSerial)
+					return
+				}
+			case ju.BaseBuiltinIdx != 0:
+				base = w.builtinUnitByIndex(ju.BaseBuiltinIdx)
+				if base == 0 {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit base builtin index %d is not a built-in unit", ju.BaseBuiltinIdx)
+					return
+				}
+			}
+			w.unitDefs[unitID] = Unit{Symbol: ju.Symbol, Name: ju.Name, Base: base, Factor: ju.Factor}
+		}
+
+		// Phase 6: restore component→unit mappings.
+		for _, cu := range jw.CompUnits {
+			info, ok := compByName[cu.CompName]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: comp_unit component %q is not registered", cu.CompName)
+				return
+			}
+			var unitID ID
+			switch {
+			case cu.UnitSerial != 0:
+				unitID, ok = serialToID[cu.UnitSerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: comp_unit unit serial %d not found", cu.UnitSerial)
+					return
+				}
+			case cu.UnitBuiltinIdx != 0:
+				unitID = w.builtinUnitByIndex(cu.UnitBuiltinIdx)
+				if unitID == 0 {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: comp_unit builtin index %d is not a built-in unit", cu.UnitBuiltinIdx)
+					return
+				}
+			default:
+				continue
+			}
+			w.componentUnits[info.ID] = unitID
 		}
 
 		if w.logger != nil {

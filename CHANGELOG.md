@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.85.0 — 2026-05-14 — Phase 16.30: Units addon
+
+Ports the upstream flecs Units addon to Go. Components can be tagged with typed unit semantics so debug overlays, serializers, and conversion helpers can render values as `5.2 m` instead of raw floats. Coverage ≥ 100% on `units.go`.
+
+### API additions
+
+- **`Unit`** — descriptor struct: `Symbol string`, `Name string`, `Base ID` (parent unit; 0 for root/SI), `Factor float64` (multiplier to convert to base; 1000 for KiloMeter → Meter).
+- **`RegisterUnit(w *Writer, name, symbol string, base ID, factor float64) ID`** — register a user unit entity. Sets the entity name. Panics if `factor == 0`.
+- **`(*World).UnitFor(componentID ID) (ID, bool)`** — return the unit attached to a component, if any.
+- **`(*Writer).SetUnit(componentID ID, unitID ID)`** — tag a component with its unit. Applied directly (no deferral).
+- **`Convert(w *World, value float64, fromUnit, toUnit ID) (float64, bool)`** — convert between compatible units by walking `Base` chains to a common root. `ok=false` for incompatible units or unknown IDs. `fromUnit == toUnit` short-circuits.
+- **`(*Reader).Unit(unitID ID) (Unit, bool)`** — look up the Unit descriptor for a unit entity.
+- **15 built-in unit accessors** — `w.Meter()`, `w.KiloMeter()`, `w.MilliMeter()`, `w.Second()`, `w.MilliSecond()`, `w.Minute()`, `w.Hour()`, `w.Gram()`, `w.KiloGram()`, `w.MegaGram()`, `w.Newton()`, `w.Joule()`, `w.Hertz()`, `w.Radian()`, `w.Degree()`.
+
+### Semantics
+
+- **Built-in units** — 15 entities at fixed indices 48–62, bootstrapped by `New()`. Length: Meter (base), KiloMeter (×1000), MilliMeter (×0.001). Duration: Second (base), MilliSecond (×0.001), Minute (×60), Hour (×3600). Mass: Gram (base), KiloGram (×1000), MegaGram (×1 000 000). Force: Newton (opaque root). Energy: Joule (opaque root). Frequency: Hertz (opaque root). Angle: Radian (base), Degree (×π/180).
+- **Conversion** — walks each unit's Base chain accumulating factors. Multi-hop example: Day (Base=Hour, Factor=24) → Second = factor 86400. Incompatible units (different roots) return `ok=false`.
+- **Marshal round-trip** — user-registered units and component→unit mappings are serialized in `MarshalJSON` and restored in `UnmarshalJSON`. Built-in units are not stored (re-created at fixed indices by `New()`).
+- **User entity threshold** — bumped from 48 to 63 due to the 15 new built-in unit entities.
+
+### Divergence from C
+
+- Single `Factor float64` instead of C's `{factor int32, power int32}` — idiomatic Go, lossless for the standard set.
+- No `EcsUnitPrefix` entity tree; built-in factors are inlined. Prefix entities deferred to Phase 16.30.1.
+- No compound units (`over` for `m/s`, `kg·m²/s²`) — deferred to Phase 16.30.1. Opaque units with literal symbols are the v1 pattern.
+- No `EcsQuantity` parent scoping; root-base chain implicitly groups compatible units.
+
+### Decision lock-ins
+
+1. Single float64 factor — idiomatic Go, lossless for the small standard set.
+2. Compound units — deferred to Phase 16.30.1.
+3. Symbol normalization — user-supplied verbatim.
+
 ## v0.84.0 — 2026-05-14 — Phase 16.29: Stats addon
 
 Ports the upstream FlecsMonitor/FlecsStats addon to Go as the **Stats addon** (renamed from Monitor to avoid collision with Phase 16.10 monitor observers in `monitor_observer.go`). Exposes a goroutine-safe `PipelineStats` snapshot via `(*World).StatsSnapshot()`, collecting per-system execution times, per-phase timings, and world-level counters. Coverage ≥ 95.0%.
