@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.88.0 — 2026-05-14 — Phase 16.33: REST entity mutation endpoints
+
+Adds `PUT /entity` and `DELETE /entity/{path...}` to the REST handler, enabling entity
+creation, ID-claim, and deletion over HTTP. Deliberately diverges from the C upstream
+`flecs_rest_put_entity` / `flecs_rest_delete_entity` (C embeds the path in the URL and
+uses `/` as separator; Go uses a JSON body and `.` separator to match the Go flecs
+`world.Lookup` convention).
+
+### API additions
+
+- **`PUT /entity`** — creates or claims an entity. JSON body: `{ "id"?: uint64,
+  "name"?: string, "parent"?: string }`. Returns `{ "id": uint64, "name": string }`.
+  - Empty body (`{}`): allocates a new entity via `Writer.NewEntity`.
+  - `id` field: claims the specific ID via `MakeAlive` (bypasses active ID range).
+    Returns `409 Conflict` on generation mismatch.
+  - `name` field: calls `Writer.SetName` after creation.
+  - `parent` field: dot-separated path resolved via `Reader.Lookup`. Adds
+    `(ChildOf, parent)` to the new entity. Returns `404 Not Found` if unresolvable.
+- **`DELETE /entity/{path...}`** — resolves a dot-separated path via `Reader.Lookup`
+  and calls `Writer.Delete`. Returns `200 OK` with empty body on success; `400` on
+  empty path; `404` if the path does not resolve.
+
+### Semantics
+
+- **Path separator**: `.` (Go flecs default), not `/` as in C upstream — deliberate v1
+  divergence.
+- **Claim-conflict status**: `409 Conflict` (generation mismatch from `MakeAlive`).
+- **Parent must exist**: yes; `404` if `parent` does not resolve at request time.
+- **Delete success status**: `200 OK` with empty body (not `204`).
+- **Panic recovery**: both handlers wrap `w.Write` in a `recover()`; `MakeAlive`
+  generation-conflict panics map to `409`; unexpected panics map to `503`.
+- **Concurrency**: a shared `sync.Mutex` serialises concurrent `w.Write` calls from
+  multiple HTTP goroutines (guards against the pre-existing `inMerge` read-before-lock
+  in `world.go`).
+
+### Test coverage
+
+14 test functions in `rest_entity_test.go` cover: empty body, name, ID-claim,
+generation conflict (409), resolvable parent, unresolvable parent (404), malformed JSON
+(400), delete by name, delete nonexistent (404), delete empty path (400), concurrent
+PUT + DELETE under `-race`, Content-Type header, and 503 panic-recovery paths for both
+handlers. Per-function coverage: `restPutEntity` 100%, `restDeleteEntity` 100%;
+overall package coverage ≥ 95%.
+
+---
+
 ## v0.87.0 — 2026-05-14 — Phase 16.32: REST type-info endpoint
 
 Adds `GET /type_info/{path}` to the read-only REST handler, returning the reflection

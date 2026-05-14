@@ -98,6 +98,8 @@ the world API.
 | GET | `/snapshot` | Full world snapshot (JSON) |
 | PUT | `/snapshot` | Load a world snapshot |
 | GET | `/type_info/{path}` | Reflection schema for a named component; `Cache-Control: max-age=300` |
+| PUT | `/entity` | Create or claim an entity (JSON body); returns `{ id, name }` |
+| DELETE | `/entity/{path...}` | Delete an entity by dot-separated path |
 
 All other C flecs REST endpoints are **not yet ported** — see the [unimplemented endpoints](#unimplemented-c-flecs-rest-endpoints) table below.
 
@@ -716,6 +718,118 @@ For a dynamic component registered via `RegisterDynamicComponent(fw, "DynComp", 
 
 ---
 
+## PUT /entity
+
+Creates or claims an entity. The request body is JSON. All fields are optional.
+
+```json
+{ "id": 12345678, "name": "myEntity", "parent": "parentName" }
+```
+
+> **JSON-body divergence from C upstream.** C flecs uses `PUT /entity/<path>` with a
+> name embedded in the URL. Go flecs uses a JSON body so that ID-claim and parent can be
+> expressed in one call without URL encoding. Path separator for `parent` is `.`
+> (Go flecs default), not `/` as in C upstream.
+
+```
+PUT /entity
+→ 200 OK              application/json  { "id": <uint64>, "name": "<string>" }
+→ 400 Bad Request     malformed JSON body
+→ 404 Not Found       parent path does not resolve to a live entity
+→ 409 Conflict        id field is alive at a different generation
+→ 503 Service Unavailable  world unavailable (unexpected internal panic)
+```
+
+### Fields
+
+- `id` _(optional uint64)_ — claim a specific entity ID via `MakeAlive`. The ID encodes
+  both the slot index (lower 32 bits) and generation (upper 32 bits); construct one with
+  `flecs.MakeEntity(index, generation)`. Bypasses any active entity-ID range. Returns
+  `409 Conflict` if the slot is already alive at a different generation.
+- `name` _(optional string)_ — name the entity via `Writer.SetName`. Names must not
+  contain `.` (the path separator).
+- `parent` _(optional string)_ — dot-separated path resolved via `Reader.Lookup`. If
+  found, adds `(ChildOf, parent)` to the new entity. Returns `404 Not Found` if the
+  path does not resolve.
+
+### Curl
+
+```
+# Create an anonymous entity
+curl -X PUT http://localhost:8080/entity -d '{}'
+
+# Create a named entity
+curl -X PUT http://localhost:8080/entity -d '{"name":"hero"}'
+
+# Create a named child of an existing entity
+curl -X PUT http://localhost:8080/entity -d '{"name":"sword","parent":"hero"}'
+
+# Claim a specific ID (MakeAlive)
+curl -X PUT http://localhost:8080/entity -d '{"id":5000}'
+```
+
+### Go client
+
+```go
+resp, err := http.NewRequest(http.MethodPut, "http://localhost:8080/entity",
+    strings.NewReader(`{"name":"hero"}`))
+if err != nil {
+    log.Fatal(err)
+}
+resp.Header.Set("Content-Type", "application/json")
+res, err := http.DefaultClient.Do(resp)
+if err != nil {
+    log.Fatal(err)
+}
+defer res.Body.Close()
+
+var result struct {
+    ID   uint64 `json:"id"`
+    Name string `json:"name"`
+}
+json.NewDecoder(res.Body).Decode(&result)
+fmt.Println(result.ID, result.Name)
+```
+
+---
+
+## DELETE /entity/{path...}
+
+Deletes an entity identified by a dot-separated path. The path is resolved via
+`Reader.Lookup`; if it resolves, `Writer.Delete` is called.
+
+> **Path separator divergence from C upstream.** C flecs uses `/` as the path separator
+> in `DELETE /entity/<path>`. Go flecs uses `.` (the `world.Lookup` default). Send
+> `DELETE /entity/parent.child`, not `DELETE /entity/parent/child`.
+
+```
+DELETE /entity/{path...}
+→ 200 OK              empty body
+→ 400 Bad Request     empty path
+→ 404 Not Found       path does not resolve to a live entity
+→ 503 Service Unavailable  world unavailable (unexpected internal panic)
+```
+
+### Curl
+
+```
+curl -X DELETE http://localhost:8080/entity/hero
+curl -X DELETE http://localhost:8080/entity/parent.child
+```
+
+### Go client
+
+```go
+req, _ := http.NewRequest(http.MethodDelete, "http://localhost:8080/entity/hero", nil)
+res, err := http.DefaultClient.Do(req)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(res.StatusCode) // 200
+```
+
+---
+
 ## Error responses
 
 All error responses use JSON with an `"error"` field:
@@ -739,14 +853,14 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Entity mutation endpoints
 
-> **Not yet ported in Go flecs.** C flecs exposes `PUT /entity/<path>` (create by
-> name/path), `DELETE /entity/<path>` (delete by path), and a richer `GET
-> /entity/<path>` that returns reflection data, inherited components, doc strings, and
-> alert status. These require path-based entity lookup and a reflection / meta-cursor
-> API (`ecs_meta_cursor`) that is not yet ported.
+> **Partially ported in Go flecs (v0.88.0).** `PUT /entity` (create or claim) and
+> `DELETE /entity/{path...}` (delete by dot-separated path) are now implemented — see
+> [`## PUT /entity`](#put-entity) and [`## DELETE /entity/{path...}`](#delete-entitypath)
+> above. The Go form uses a JSON request body instead of a URL-embedded path, and `.` as
+> the path separator instead of `/` (deliberate C divergence).
 >
-> Go workaround: use `world.Write(func(*flecs.Writer) { ... })` for mutation, and
-> `world.Lookup(name)` for path-based lookup.
+> Not yet ported: the richer C `GET /entity/<path>` that returns reflection data,
+> inherited components, doc strings, and alert status (requires `ecs_meta_cursor`).
 
 ### Component mutation endpoints
 
@@ -835,7 +949,8 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 ## Feature gaps discovered in Phase 14.9 (FlecsRemoteApi port)
 
 - **Query execution endpoint** (`GET /query?expr=`) — requires FlecsQueryLanguage DSL; not ported to Go flecs.
-- **Entity / component mutation endpoints** (`PUT /entity`, `DELETE /entity`, `PUT /component`, `DELETE /component`) — require reflection/meta module; not ported.
+- **Entity mutation endpoints** (`PUT /entity`, `DELETE /entity/{path...}`) — ✅ shipped in v0.88.0. See [`## PUT /entity`](#put-entity) and [`## DELETE /entity/{path...}`](#delete-entitypath).
+- **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — require reflection/meta module; not ported.
 - **Toggle endpoint** (`PUT /toggle`) — requires entity disabling (`Disabled` tag) and `CanToggle` trait; not ported.
 - **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
 - **Type-info / reflection endpoint** (`GET /type_info/{path}`) — depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, and full meta-cursor parity not yet ported.
