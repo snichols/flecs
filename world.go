@@ -82,8 +82,9 @@ type World struct {
 	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
 	withID               ID                              // built-in With trait entity (index 32)
 	orderedChildrenID    ID                              // built-in OrderedChildren trait entity (index 33)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 35; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 36; _; first user entity at index 37)
+	dontFragmentID       ID                              // built-in DontFragment trait entity (index 35)
+	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 36; *)
+	anyID                ID                              // built-in Any query-term sentinel (index 37; _); user entities start at index 38
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -107,8 +108,9 @@ type World struct {
 	orderedChildren      map[ID]*orderedChildList        // keyed by parent entity index; non-nil entry means ordered
 	sparseID             ID                              // built-in Sparse trait entity (index 34)
 	sparsePolicies       map[ID]bool                     // component entity index → sparse flag
-	sparseStorage        map[ID]*sparseSet               // per-component sparse-set keyed by entity index
-	sparseHeld           map[uint32][]ID                 // entity raw-index → sparse component IDs held (for O(k) delete cleanup)
+	sparseStorage        map[ID]*sparseSet               // per-component sparse-set; backs both Sparse and DontFragment components
+	sparseHeld           map[uint32][]ID                 // entity raw-index → sparse/DontFragment component IDs held (for O(k) delete cleanup)
+	dontFragmentPolicies map[ID]bool                     // component entity index → dontFragment flag
 	exclusiveAccess      atomic.Uint64                   //nolint:unused // 0=unclaimed, goroutineID=owned, ^0=write-locked; see exclusive_access.go
 	exclusiveThread      string                          //nolint:unused // human-readable label for the owner goroutine; set by ExclusiveAccessBegin
 	stages               []*stage                        // stages[0] = main stage; stages[1..N] = worker stages
@@ -162,9 +164,10 @@ type World struct {
 //   - Index 32: With built-in relationship trait entity
 //   - Index 33: OrderedChildren built-in trait entity
 //   - Index 34: Sparse built-in trait entity
-//   - Index 35: Wildcard built-in query-term sentinel (*)
-//   - Index 36: Any built-in query-term sentinel (_)
-//   - Index 37+: user entities (NewEntity)
+//   - Index 35: DontFragment built-in trait entity
+//   - Index 36: Wildcard built-in query-term sentinel (*)
+//   - Index 37: Any built-in query-term sentinel (_)
+//   - Index 38+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -378,13 +381,19 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(sparse))
 	w.sparseID = sparse
-	// Allocate the built-in Wildcard query-term sentinel (gets index 35).
+	// Allocate the built-in DontFragment trait entity (gets index 35).
+	dontFragment := w.index.Alloc()
+	rec = w.index.Get(dontFragment)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(dontFragment))
+	w.dontFragmentID = dontFragment
+	// Allocate the built-in Wildcard query-term sentinel (gets index 36).
 	wildcard := w.index.Alloc()
 	rec = w.index.Get(wildcard)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(wildcard))
 	w.wildcardID = wildcard
-	// Allocate the built-in Any query-term sentinel (gets index 36).
+	// Allocate the built-in Any query-term sentinel (gets index 37).
 	any_ := w.index.Alloc()
 	rec = w.index.Get(any_)
 	rec.Table = w.empty
@@ -636,6 +645,11 @@ func (w *World) deleteOne(e ID) bool {
 	row := int(rec.Row)
 	if t != nil {
 		for _, id := range t.Type() {
+			// Sparse-only components: data is in sparse-set; sparseHeld path below will
+			// fire OnRemove with the correct sparse-set pointer. Skip here to avoid double-fire.
+			if !id.IsPair() && w.sparsePolicies[ID(id.Index())] && !w.dontFragmentPolicies[ID(id.Index())] {
+				continue
+			}
 			info, _ := w.registry.LookupByID(id)
 			w.fireOnRemove(info, id, e, t.Get(row, id))
 		}
@@ -890,8 +904,9 @@ func getOnWorld[T any](w *World, e ID) (T, bool) {
 	if !ok || info.Component == 0 {
 		return zero, false
 	}
-	// Sparse: fetch from per-component sparse-set instead of archetype table.
-	if w.sparsePolicies[ID(info.Component.Index())] {
+	// Sparse or DontFragment: fetch from per-component sparse-set.
+	cIdx := ID(info.Component.Index())
+	if w.sparsePolicies[cIdx] || w.dontFragmentPolicies[cIdx] {
 		ptr := sparseSetGet(w, e, info.Component)
 		if ptr == nil {
 			return zero, false
@@ -917,16 +932,18 @@ func getOnWorld[T any](w *World, e ID) (T, bool) {
 // Internal helper; does not check exclusive access.
 func hasOnWorld[T any](w *World, e ID) bool {
 	cid := RegisterComponent[T](w)
-	// Sparse: consult sparse-set index; the entity's archetype type does NOT contain
-	// Sparse components.
-	if w.sparsePolicies[ID(cid.Index())] {
-		ss, ok := w.sparseStorage[ID(cid.Index())]
+	cIdx := ID(cid.Index())
+	// DontFragment: component is not in the archetype type; check sparse-set index.
+	// This also covers Sparse+DontFragment (the canonical combined pattern).
+	if w.dontFragmentPolicies[cIdx] {
+		ss, ok := w.sparseStorage[cIdx]
 		if !ok {
 			return false
 		}
 		_, has := ss.index[e.Index()]
 		return has
 	}
+	// Sparse-only (no DontFragment): component IS in the archetype type; check table.
 	rec := w.index.Get(e)
 	if rec == nil {
 		return false
@@ -958,9 +975,23 @@ func removeOnWorld[T any](w *World, e ID) bool {
 		if !ok || info.Component == 0 {
 			return false
 		}
-		// Sparse: check sparse-set; entity's archetype does not contain sparse components.
-		if w.sparsePolicies[ID(info.Component.Index())] {
-			ss, ok := w.sparseStorage[ID(info.Component.Index())]
+		cIdx := ID(info.Component.Index())
+		// DontFragment (or Sparse+DontFragment): consult sparse-set; component not in archetype.
+		if w.dontFragmentPolicies[cIdx] {
+			ss, ok := w.sparseStorage[cIdx]
+			if !ok {
+				return false
+			}
+			if _, has := ss.index[e.Index()]; !has {
+				return false
+			}
+			s0.queue.append(cmd{kind: cmdRemoveID, entity: e, id: info.Component})
+			return true
+		}
+		// Sparse-only (no DontFragment): component IS in archetype; check via sparse-set
+		// (canonical presence) and queue archetype removal.
+		if w.sparsePolicies[cIdx] {
+			ss, ok := w.sparseStorage[cIdx]
 			if !ok {
 				return false
 			}
@@ -986,14 +1017,32 @@ func removeImmediate[T any](w *World, e ID) bool {
 		return false
 	}
 	cid := info.Component
-	// Sparse: remove from per-component sparse-set; do NOT cause an archetype transition.
-	if w.sparsePolicies[ID(cid.Index())] {
+	cIdx := ID(cid.Index())
+	// DontFragment (alone or with Sparse): remove from sparse-set; do NOT cause an
+	// archetype transition (component was never in the archetype type).
+	if w.dontFragmentPolicies[cIdx] {
 		ptr := sparseSetGet(w, e, cid)
 		if ptr == nil {
 			return false
 		}
 		w.fireOnRemove(info, cid, e, ptr)
 		sparseSetRemove(w, e, cid)
+		return true
+	}
+	// Sparse-only (no DontFragment): remove from sparse-set AND cause an archetype
+	// transition (component IS in the archetype type, so removing it changes the type).
+	if w.sparsePolicies[cIdx] {
+		ptr := sparseSetGet(w, e, cid)
+		if ptr == nil {
+			return false
+		}
+		w.fireOnRemove(info, cid, e, ptr)
+		sparseSetRemove(w, e, cid)
+		// Remove from archetype type without re-firing OnRemove.
+		rec := w.index.Get(e)
+		if rec != nil && rec.Table != nil && rec.Table.HasComponent(cid) {
+			w.migrateArchetypeOnly(e, 0, cid)
+		}
 		return true
 	}
 	rec := w.index.Get(e)
@@ -1156,6 +1205,82 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	}
 
 	// Update the migrating entity's record to point at the new location.
+	rec.Table = newTable
+	rec.Row = uint32(newRow)
+}
+
+// migrateArchetypeOnly moves entity e's archetype record by adding or removing
+// one component from the type vector WITHOUT firing any OnAdd/OnRemove hooks.
+// Used for Sparse-only components where hooks are fired externally (with the
+// sparse-set pointer) before this function is called.
+// Exactly one of addID/removeID must be non-zero.
+func (w *World) migrateArchetypeOnly(e ID, addID, removeID ID) {
+	rec := w.index.Get(e)
+	oldTable := rec.Table
+	oldRow := int(rec.Row)
+	var oldSig []ID
+	if oldTable != nil {
+		oldSig = oldTable.Type()
+	}
+	newSig := make([]ID, 0, len(oldSig)+1)
+	for _, id := range oldSig {
+		if id == removeID {
+			continue
+		}
+		newSig = append(newSig, id)
+	}
+	if addID != 0 {
+		pos := sort.Search(len(newSig), func(i int) bool { return newSig[i] >= addID })
+		newSig = append(newSig, 0)
+		copy(newSig[pos+1:], newSig[pos:])
+		newSig[pos] = addID
+	}
+	key := sigKey(newSig)
+	newTable, exists := w.tables[key]
+	if !exists {
+		types := make([]*component.TypeInfo, len(newSig))
+		for i, id := range newSig {
+			info, ok := w.registry.LookupByID(id)
+			if !ok {
+				panic("flecs: migrateArchetypeOnly: component ID not registered")
+			}
+			types[i] = info
+		}
+		newTable = table.New(newSig, types)
+		w.tables[key] = newTable
+		for _, id := range newTable.Type() {
+			w.compIndex.Register(id, newTable)
+		}
+		w.notifyTableCreated(newTable)
+	}
+	newRow := newTable.Append(e)
+	if oldTable != nil {
+		for _, id := range oldSig {
+			if id == removeID || id == addID {
+				continue
+			}
+			if !newTable.HasComponent(id) {
+				continue
+			}
+			ptr := oldTable.Get(oldRow, id)
+			if ptr != nil {
+				newTable.Set(newRow, id, ptr)
+			}
+		}
+		for _, id := range oldSig {
+			if id == removeID || !newTable.HasComponent(id) {
+				continue
+			}
+			if !oldTable.IsRowEnabled(id, oldRow) {
+				newTable.DisableRow(id, newRow)
+			}
+		}
+		moved, ok := oldTable.RemoveSwap(oldRow)
+		if ok {
+			movedRec := w.index.Get(moved)
+			movedRec.Row = uint32(oldRow)
+		}
+	}
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
 }

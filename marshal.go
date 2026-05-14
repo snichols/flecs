@@ -14,8 +14,14 @@ type jsonWorld struct {
 	Entities []jsonEntity `json:"entities"`
 	// SparseComponents is the list of component names that have the Sparse trait.
 	// Restored BEFORE entities so that the sparse routing is live during entity replay.
+	// In v0.53.0+, Sparse-only component data is in the entity body (archetype-stored);
+	// DontFragment component data is separately stored in SparseData.
 	SparseComponents []string `json:"sparse_components,omitempty"`
+	// DontFragmentComponents is the list of component names that have the DontFragment trait.
+	// Restored BEFORE entities so that DontFragment routing is live during entity replay.
+	DontFragmentComponents []string `json:"dont_fragment_components,omitempty"`
 	// SparseData is component name → entity serial → JSON-encoded component value.
+	// In v0.53.0+, contains data for DontFragment components only (data not in entity body).
 	// Restored AFTER entities so that entity IDs exist when the sparse-set is populated.
 	SparseData map[string]map[int]json.RawMessage `json:"sparse_data,omitempty"`
 }
@@ -140,6 +146,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.With():            {},
 		w.OrderedChildren(): {},
 		w.Sparse():          {},
+		w.DontFragment():    {},
 		w.Wildcard():        {},
 		w.Any():             {},
 	}
@@ -295,20 +302,29 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			entities = append(entities, je)
 		}
 
-		// Serialize sparse policies (component names with Sparse trait).
+		// Serialize Sparse trait component names (policy must be restored before entity replay).
 		var sparseComponents []string
-		var sparseData map[string]map[int]json.RawMessage
 		if w.sparsePolicies != nil {
 			for key := range w.sparsePolicies {
-				cid := key // key is already ID(componentID.Index()), raw index as ID
-				// Find the actual component ID in the registry that matches this index.
-				// We stored the policy keyed by ID(componentID.Index()), so we need to
-				// look up the info by the raw index to get the name.
-				if ss, ok := w.sparseStorage[cid]; ok {
+				if ss, ok := w.sparseStorage[key]; ok {
+					if ss.typeInfo != nil && ss.typeInfo.Name != "" {
+						sparseComponents = append(sparseComponents, ss.typeInfo.Name)
+					}
+				}
+			}
+		}
+
+		// Serialize DontFragment trait component names AND their data (data not in entity body).
+		// For Sparse+DontFragment components, the name appears in BOTH lists.
+		var dontFragmentComponents []string
+		var sparseData map[string]map[int]json.RawMessage
+		if w.dontFragmentPolicies != nil {
+			for key := range w.dontFragmentPolicies {
+				if ss, ok := w.sparseStorage[key]; ok {
 					info := ss.typeInfo
 					if info != nil && info.Name != "" {
-						sparseComponents = append(sparseComponents, info.Name)
-						// Serialize each entity's sparse data.
+						dontFragmentComponents = append(dontFragmentComponents, info.Name)
+						// Serialize each entity's data (DontFragment data is NOT in entity body).
 						for _, entry := range ss.dense {
 							if serial, ok := m.idToSerial[entry.entity]; ok {
 								raw, err := json.Marshal(reflect.NewAt(info.Type, entry.data).Elem().Interface())
@@ -331,10 +347,11 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		}
 
 		jw := jsonWorld{
-			Version:          1,
-			Entities:         entities,
-			SparseComponents: sparseComponents,
-			SparseData:       sparseData,
+			Version:                1,
+			Entities:               entities,
+			SparseComponents:       sparseComponents,
+			DontFragmentComponents: dontFragmentComponents,
+			SparseData:             sparseData,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -401,9 +418,9 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			}
 		}
 
-		// Phase 0: restore sparse policies BEFORE entity allocation so that the
-		// sparse routing (w.sparsePolicies check in setImmediateByPtr) is live
-		// during entity replay. Components must be pre-registered before UnmarshalJSON.
+		// Phase 0: restore Sparse and DontFragment policies BEFORE entity allocation so
+		// that the storage routing is live during entity replay.
+		// Components must be pre-registered before UnmarshalJSON.
 		for _, compName := range jw.SparseComponents {
 			info, ok := compByName[compName]
 			if !ok {
@@ -411,6 +428,14 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				return
 			}
 			applySparsePolicy(w, info.ID)
+		}
+		for _, compName := range jw.DontFragmentComponents {
+			info, ok := compByName[compName]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: dont_fragment component %q is not registered in the world", compName)
+				return
+			}
+			applyDontFragmentPolicy(w, info.ID)
 		}
 
 		// Phase 1: allocate all entities so future phases can resolve serial→ID.

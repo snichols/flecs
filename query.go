@@ -104,10 +104,17 @@ type Term struct {
 	Trav     ID            // traversal relationship (non-zero for Up/SelfUp/Cascade terms)
 	Traverse TraverseFlags // traversal mode; default TraverseSelf (0) = local-only match
 	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
-	// component is stored in a sparse-set (IsSparse returned true). Sparse terms
-	// are matched per-entity via sparseSetGet rather than per-table via archetype
-	// column presence. Not set for pair IDs — pairs use archetype storage in v0.52.0.
+	// component stores its data in a sparse-set (IsSparse or IsDontFragment returned
+	// true). Sparse is a VALUE-FETCH routing hint: Field[T] reads via sparseSetGet
+	// rather than the archetype column. Not set for pair IDs.
 	Sparse bool
+	// DontFragment is set to true when the term's component has the DontFragment trait,
+	// meaning the component does NOT appear in the entity's archetype type. This drives
+	// ITERATION MODE SELECTION: DontFragment terms cannot seed archetype-table iteration
+	// and are checked per-entity via sparseSetGet in matchesSparseTerms.
+	// A Sparse-only term (Sparse=true, DontFragment=false) IS in the archetype and
+	// can seed iteration; its value is still fetched from sparse-set via Field[T].
+	DontFragment bool
 }
 
 // With returns a TermAnd term: matched tables must contain id.
@@ -228,7 +235,10 @@ func NewQuery(w *World, ids ...ID) *Query {
 	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
 	terms := make([]Term, len(cp))
 	for i, id := range cp {
-		terms[i] = Term{ID: id, Kind: TermAnd, Sparse: isSparseTermID(w, id)}
+		terms[i] = Term{ID: id, Kind: TermAnd,
+			Sparse:       isSparseTermID(w, id),
+			DontFragment: isDontFragmentTermID(w, id),
+		}
 		applyInheritablePromotion(w, &terms[i])
 	}
 	return &Query{w: w, terms: terms, andIDs: cp}
@@ -331,31 +341,43 @@ func findUpSource(w *World, t *table.Table, termID ID, rel ID) (ID, bool) {
 func (q *Query) Iter() *QueryIter {
 	q.w.checkExclusiveAccessRead()
 
-	// Classify And terms as sparse or archetype.
+	// Classify And terms.
+	// dontFragmentAndCount: terms not in archetype (drives iteration MODE).
+	// sparseAndCount: terms with sparse-set data (drives Field routing + mixed mode).
+	// archetypeAndCount: terms with both archetype presence AND no DontFragment.
+	dontFragmentAndCount := 0
 	sparseAndCount := 0
 	archetypeAndCount := 0
 	for _, t := range q.terms {
 		if t.Kind != TermAnd {
 			continue
 		}
-		if t.Sparse {
-			sparseAndCount++
+		if t.DontFragment {
+			dontFragmentAndCount++
+			sparseAndCount++ // DontFragment data is also in sparse-set
+		} else if t.Sparse {
+			sparseAndCount++ // Sparse-only: data in sparse-set, component IS in archetype
+			archetypeAndCount++
 		} else {
 			archetypeAndCount++
 		}
 	}
-	allSparse := archetypeAndCount == 0 && sparseAndCount > 0
+	// allDontFragment: all And terms are DontFragment → pure sparse-set iteration.
+	allDontFragment := archetypeAndCount == 0 && dontFragmentAndCount > 0
+	// hasSparseTerms: at least one And term has sparse-set data → mixed entity-at-a-time.
 	hasSparseTerms := sparseAndCount > 0
+	_ = dontFragmentAndCount // used indirectly via allDontFragment
 
 	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
 
-	if allSparse {
-		// Pure-sparse mode: find the smallest sparse-set as driver.
+	if allDontFragment {
+		// Pure-DontFragment mode: find the smallest sparse-set as driver.
+		// All And terms are DontFragment (not in any archetype table).
 		var driver []sparseEntry
 		zeroDriver := false
 		minLen := -1
 		for _, term := range q.terms {
-			if term.Kind != TermAnd || !term.Sparse {
+			if term.Kind != TermAnd || !term.DontFragment {
 				continue
 			}
 			key := ID(term.ID.Index())
@@ -379,7 +401,7 @@ func (q *Query) Iter() *QueryIter {
 			world:           q.w,
 			terms:           q.terms,
 			orGroups:        q.orGroups,
-			allSparse:       true,
+			allSparse:       true, // kept for Table() panic message compatibility
 			hasSparseTerms:  true,
 			sparseDriver:    driver,
 			sparseDriverPos: -1,
@@ -390,16 +412,17 @@ func (q *Query) Iter() *QueryIter {
 	}
 
 	// Archetype seed selection — used for both all-archetype and mixed modes.
-	// Skip sparse terms (they cannot seed archetype-table selection), transitive/
-	// reflexive pairs, and wildcard terms.
+	// Skip DontFragment terms (not in archetype tables), transitive/reflexive pairs,
+	// and wildcard terms. Sparse-only terms (Sparse=true, DontFragment=false) ARE
+	// in archetype tables and can seed.
 	seedIdx := -1
 	minCount := 0
 	for i, term := range q.terms {
 		if term.Kind != TermAnd || term.Traverse != TraverseSelf {
 			continue
 		}
-		if term.Sparse {
-			continue // sparse terms don't live in archetype tables
+		if term.DontFragment {
+			continue // DontFragment terms don't live in archetype tables
 		}
 		if term.ID.IsPair() && q.w.transitivePolicies[ID(term.ID.First().Index())] {
 			continue
@@ -643,12 +666,14 @@ func (it *QueryIter) nextMixed() bool {
 	}
 }
 
-// matchesSparseTerms returns true if entity e satisfies all sparse terms in the
-// query. TermAnd requires presence; TermNot requires absence. TermOptional and
-// TermOr do not affect matching (they are checked separately for Field access).
+// matchesSparseTerms returns true if entity e satisfies all DontFragment terms
+// in the query. TermAnd requires presence in the sparse-set; TermNot requires
+// absence. Sparse-only terms (DontFragment=false) are handled by the archetype
+// check in matchesTable and are skipped here. TermOptional and TermOr do not
+// affect matching (they are checked separately for Field access).
 func (it *QueryIter) matchesSparseTerms(e ID) bool {
 	for _, term := range it.terms {
-		if !term.Sparse {
+		if !term.DontFragment {
 			continue
 		}
 		ptr := sparseSetGet(it.world, e, term.ID)
@@ -666,8 +691,8 @@ func (it *QueryIter) matchesSparseTerms(e ID) bool {
 	return true
 }
 
-// updateOptionalPresenceSparse updates optionalPresent for pure-sparse queries.
-// Only sparse optional/or terms are evaluated (there is no current table).
+// updateOptionalPresenceSparse updates optionalPresent for pure-DontFragment queries.
+// All optional terms have sparse-set data (no current archetype table exists).
 func (it *QueryIter) updateOptionalPresenceSparse(e ID) {
 	for k := range it.optionalPresent {
 		delete(it.optionalPresent, k)
@@ -679,15 +704,15 @@ func (it *QueryIter) updateOptionalPresenceSparse(e ID) {
 		if it.optionalPresent == nil {
 			it.optionalPresent = make(map[ID]bool)
 		}
-		if term.Sparse {
+		if term.Sparse { // all terms in pure-DontFragment mode have sparse-set data
 			it.optionalPresent[term.ID] = sparseSetGet(it.world, e, term.ID) != nil
 		}
 	}
 }
 
 // updateOptionalPresenceMixed updates optionalPresent for mixed-mode queries.
-// Archetype optional/or terms are evaluated against the current table; sparse
-// optional/or terms are evaluated via the sparse-set for entity e.
+// DontFragment optional terms are checked via sparse-set; Sparse-only and archetype
+// optional terms are checked via the current archetype table.
 func (it *QueryIter) updateOptionalPresenceMixed(t *table.Table, e ID) {
 	for k := range it.optionalPresent {
 		delete(it.optionalPresent, k)
@@ -699,9 +724,11 @@ func (it *QueryIter) updateOptionalPresenceMixed(t *table.Table, e ID) {
 		if it.optionalPresent == nil {
 			it.optionalPresent = make(map[ID]bool)
 		}
-		if term.Sparse {
+		if term.DontFragment {
+			// DontFragment: component not in archetype; check sparse-set.
 			it.optionalPresent[term.ID] = sparseSetGet(it.world, e, term.ID) != nil
 		} else {
+			// Archetype or Sparse-only: presence is determined by table signature.
 			it.optionalPresent[term.ID] = t.HasComponent(term.ID)
 		}
 	}
@@ -722,8 +749,8 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 	for _, term := range it.terms {
 		switch term.Kind {
 		case TermAnd:
-			if term.Sparse {
-				break // sparse terms checked per-entity; skip archetype check
+			if term.DontFragment {
+				break // DontFragment terms not in archetype; skip archetype check
 			}
 			switch term.Traverse {
 			case TraverseSelf, TraverseExplicitSelf:
@@ -782,8 +809,8 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 				}
 			}
 		case TermNot:
-			if term.Sparse {
-				break // sparse not terms checked per-entity; skip archetype check
+			if term.DontFragment {
+				break // DontFragment not in archetype; skip archetype check
 			}
 			if t.HasComponent(term.ID) {
 				return false
@@ -1219,9 +1246,10 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		applyInheritablePromotion(w, &cp[i])
 	}
 
-	// Mark sparse terms. This must happen after sorting so that cp is final.
+	// Mark sparse/DontFragment terms. Must happen after sorting so that cp is final.
 	for i := range cp {
 		cp[i].Sparse = isSparseTermID(w, cp[i].ID)
+		cp[i].DontFragment = isDontFragmentTermID(w, cp[i].ID)
 	}
 
 	// Traversable enforcement: any term whose Trav is non-zero requires the

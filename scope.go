@@ -381,15 +381,19 @@ func GetPairRef[T any](s scope, e ID, rel ID, tgt ID) *T {
 // locally or via an IsA chain.
 func HasID(s scope, e ID, id ID) bool {
 	w := s.scopeWorld()
-	// Sparse: consult sparse-set index; the entity's archetype type does NOT contain
-	// Sparse components.
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		ss, ok := w.sparseStorage[ID(id.Index())]
-		if !ok {
-			return false
+	// Sparse or DontFragment: consult sparse-set index; DontFragment components are NOT
+	// in the entity's archetype type. Sparse-only components are in the archetype but
+	// the sparse-set index is always authoritative for presence.
+	if !id.IsPair() {
+		key := ID(id.Index())
+		if w.sparsePolicies[key] || w.dontFragmentPolicies[key] {
+			ss, ok := w.sparseStorage[key]
+			if !ok {
+				return false
+			}
+			_, has := ss.index[e.Index()]
+			return has
 		}
-		_, has := ss.index[e.Index()]
-		return has
 	}
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -412,13 +416,16 @@ func HasID(s scope, e ID, id ID) bool {
 // OwnsID reports whether entity e locally owns the component or tag identified by id.
 func OwnsID(s scope, e ID, id ID) bool {
 	w := s.scopeWorld()
-	if !id.IsPair() && w.sparsePolicies[ID(id.Index())] {
-		ss, ok := w.sparseStorage[ID(id.Index())]
-		if !ok {
-			return false
+	if !id.IsPair() {
+		key := ID(id.Index())
+		if w.sparsePolicies[key] || w.dontFragmentPolicies[key] {
+			ss, ok := w.sparseStorage[key]
+			if !ok {
+				return false
+			}
+			_, has := ss.index[e.Index()]
+			return has
 		}
-		_, has := ss.index[e.Index()]
-		return has
 	}
 	rec := w.index.Get(e)
 	if rec == nil {
@@ -489,9 +496,10 @@ func Remove[T any](fw *Writer, e ID) bool {
 	if !ok || info.Component == 0 {
 		return false
 	}
-	// Check sparse storage first, then archetype.
-	if fw.world.sparsePolicies[ID(info.Component.Index())] {
-		ss, ok := fw.world.sparseStorage[ID(info.Component.Index())]
+	// Check sparse storage first (Sparse or DontFragment), then archetype.
+	key := ID(info.Component.Index())
+	if fw.world.sparsePolicies[key] || fw.world.dontFragmentPolicies[key] {
+		ss, ok := fw.world.sparseStorage[key]
 		if !ok {
 			return false
 		}
