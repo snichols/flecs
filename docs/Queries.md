@@ -1480,9 +1480,20 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Query scopes** — ✅ **shipped in v0.75.0** via [`WithoutScope`](../query.go) / `*ScopeBuilder`. See [§ Query scopes](#query-scopes) above.
 
-**Access modifiers** — `In` / `InOut` / `Out` / `None` annotations on terms (used by the C scheduler for pipeline sync-point inference). Go flecs governs mutation via `Read`/`Write` scopes at the world level; per-term access annotations are not ported.
-
 **Member value queries** — match on the runtime value of a component field (requires reflection/meta addon). Not yet ported in Go flecs.
+
+---
+
+## Access modifiers — N/A by design
+
+Upstream C flecs provides per-term access modifiers (`In`, `InOut`, `Out`, `None`) so the scheduler can infer pipeline sync points: which systems read which components, which write them, and where memory barriers are needed.
+
+Go-flecs does not port these annotations because the problem they solve is handled at a higher level:
+
+- **Mutation is governed by `w.Read(fn)` / `w.Write(fn)` scopes.** Every Write block is implicitly read-write for everything inside it; there is no per-term distinction to annotate.
+- **Parallelism is by-stage** (Phase 12.1 pipeline phases) **and by-explicit-worker** (Phase 16.27 `RunSystemWorker`). Sync points are structural, not inferred from per-term hints.
+
+Per-term access annotations would therefore be redundant with the existing scoping invariants. This is a **final design divergence**, not a deferred port.
 
 ---
 
