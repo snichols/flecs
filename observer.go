@@ -53,6 +53,21 @@ type observerKey struct {
 	eventEntity ID
 }
 
+// observerBucket holds all observers for a single (component, event) pair.
+//
+// anyEntity holds observers that fire for every entity — the common case.
+// fixedSource maps a specific source entity to observers that fire only when
+// the event lands on that entity. fixedSource is nil until the first fixed-source
+// observer is registered for this bucket, so any-entity-only dispatch pays zero
+// overhead for the fixed-source path.
+//
+// Dispatch order: anyEntity observers fire before fixedSource observers for the
+// same (component, event) key. Within each list, registration order is preserved.
+type observerBucket struct {
+	anyEntity   []*observerNode
+	fixedSource map[ID][]*observerNode
+}
+
 // eventKindToEntity maps the convenience EventKind enum to the corresponding
 // built-in event entity ID. Returns 0 for unknown kinds.
 func eventKindToEntity(w *World, ev EventKind) ID {
@@ -146,7 +161,7 @@ func Observe[T any](w *World, event EventKind, fn func(fw *Writer, e ID, v T)) *
 		fn(fw, e, v)
 	}
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(id, eventKindToEntity(w, event), callback)
+	node := w.addObserverNode(id, eventKindToEntity(w, event), 0, callback)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 	if w.logger != nil {
@@ -167,7 +182,7 @@ func Observe[T any](w *World, event EventKind, fn func(fw *Writer, e ID, v T)) *
 func ObserveID(w *World, id ID, event EventKind, fn func(fw *Writer, e ID, ptr unsafe.Pointer)) *Observer {
 	w.checkExclusiveAccessWrite()
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(id, eventKindToEntity(w, event), fn)
+	node := w.addObserverNode(id, eventKindToEntity(w, event), 0, fn)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 	if w.logger != nil {
@@ -197,7 +212,7 @@ func Observe2[T any](w *World, events []EventKind, fn func(fw *Writer, event Eve
 			}
 			fn(fw, ev, e, v)
 		}
-		node := w.addObserverNode(id, eventKindToEntity(w, ev), callback)
+		node := w.addObserverNode(id, eventKindToEntity(w, ev), 0, callback)
 		node.observer = obs
 		obs.nodes = append(obs.nodes, node)
 		if w.logger != nil {
@@ -209,43 +224,192 @@ func Observe2[T any](w *World, events []EventKind, fn func(fw *Writer, event Eve
 	return obs
 }
 
+// ObserveIDWithOptions registers fn as a raw-ID observer for id on the given events,
+// with additional options. This is the options-bearing variant of ObserveID; it
+// supports WithSource(e) to restrict the observer to a specific source entity and
+// WithYieldExisting() to retroactively fire for entities already carrying id.
+//
+// Panics if opts.source is set and any event in events is EventOnTableCreate
+// (tables have no source entity semantics).
+//
+// Fixed-source observers registered here fire only when the event's entity
+// matches the source. Any-entity observers (source == 0) preserve today's
+// behaviour: every entity's event fires the callback.
+func ObserveIDWithOptions(w *World, id ID, opts ObserverOptions, events []EventKind, fn func(fw *Writer, e ID, ptr unsafe.Pointer)) *Observer {
+	w.checkExclusiveAccessWrite()
+
+	if opts.source != 0 {
+		for _, ev := range events {
+			if ev == EventOnTableCreate {
+				panic("flecs: ObserveIDWithOptions: WithSource is not compatible with EventOnTableCreate; tables have no source entity semantics")
+			}
+		}
+	}
+
+	if opts.yieldExisting {
+		onlyRemove := true
+		for _, ev := range events {
+			if ev != EventOnRemove {
+				onlyRemove = false
+				break
+			}
+		}
+		if onlyRemove {
+			panic("flecs: ObserveIDWithOptions: yieldExisting requires at least one OnAdd or OnSet event; OnRemove-only observers cannot yield existing entities at registration time")
+		}
+	}
+
+	obs := &Observer{w: w, enabled: true}
+
+	type sweepEntry struct {
+		ev       EventKind
+		callback func(fw *Writer, e ID, ptr unsafe.Pointer)
+	}
+	var sweepCallbacks []sweepEntry
+
+	for _, ev := range events {
+		ev := ev
+		node := w.addObserverNode(id, eventKindToEntity(w, ev), opts.source, fn)
+		node.observer = obs
+		obs.nodes = append(obs.nodes, node)
+		if opts.yieldExisting && (ev == EventOnAdd || ev == EventOnSet) {
+			sweepCallbacks = append(sweepCallbacks, sweepEntry{ev: ev, callback: fn})
+		}
+		if w.logger != nil {
+			w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer registered",
+				slog.Uint64("id", uint64(id)),
+				slog.String("event", ev.String()))
+		}
+	}
+
+	if opts.yieldExisting && obs.enabled && len(sweepCallbacks) > 0 {
+		if opts.source != 0 {
+			ptr, has, skip := entityRawPtrForYield(w, opts.source, id)
+			if has && !skip {
+				for _, sc := range sweepCallbacks {
+					sc.callback(&w.writeCapability, opts.source, ptr)
+				}
+			}
+		} else {
+			tables := w.compIndex.TablesFor(id)
+			for _, sc := range sweepCallbacks {
+				for _, t := range tables {
+					if t.HasComponent(w.disabledID) || t.HasComponent(w.prefabID) {
+						continue
+					}
+					entities := t.Entities()
+					for i, e := range entities {
+						ptr := t.Get(i, id)
+						sc.callback(&w.writeCapability, e, ptr)
+					}
+				}
+			}
+		}
+	}
+
+	return obs
+}
+
+// entityRawPtrForYield looks up component id on entity e and returns
+// (ptr, has, skipDisabledPrefab). has is false when the entity is absent or does
+// not own id. skipDisabledPrefab is true when the entity's archetype table carries
+// the Disabled or Prefab tag — callers should not fire the yield callback in that
+// case. ptr may be nil for zero-size / tag components even when has is true.
+func entityRawPtrForYield(w *World, e ID, id ID) (ptr unsafe.Pointer, has, skip bool) {
+	if !id.IsPair() {
+		iIdx := ID(id.Index())
+		if w.sparsePolicies[iIdx] || w.dontFragmentPolicies[iIdx] {
+			p := sparseSetGet(w, e, id)
+			if p == nil {
+				return nil, false, false
+			}
+			// Sparse component found; check disabled/prefab via the archetype table.
+			rec := w.index.Get(e)
+			if rec != nil && rec.Table != nil {
+				skip = rec.Table.HasComponent(w.disabledID) || rec.Table.HasComponent(w.prefabID)
+			}
+			return p, true, skip
+		}
+	}
+	rec := w.index.Get(e)
+	if rec == nil || rec.Table == nil {
+		return nil, false, false
+	}
+	if !rec.Table.HasComponent(id) {
+		return nil, false, false
+	}
+	skip = rec.Table.HasComponent(w.disabledID) || rec.Table.HasComponent(w.prefabID)
+	return rec.Table.Get(int(rec.Row), id), true, skip
+}
+
 // addObserverNode creates an observerNode for (id, eventEntity) and appends it to
 // the world's observer map, compacting removed entries lazily before insertion.
-func (w *World) addObserverNode(id ID, eventEntity ID, callback func(fw *Writer, e ID, ptr unsafe.Pointer)) *observerNode {
+// source == 0 registers an any-entity observer (fires for every entity);
+// source != 0 registers a fixed-source observer (fires only when the event's
+// entity matches source).
+func (w *World) addObserverNode(id ID, eventEntity ID, source ID, callback func(fw *Writer, e ID, ptr unsafe.Pointer)) *observerNode {
 	if w.observers == nil {
-		w.observers = make(map[observerKey][]*observerNode)
+		w.observers = make(map[observerKey]*observerBucket)
 	}
 	key := observerKey{id: id, eventEntity: eventEntity}
-	// Compact removed nodes lazily on each new registration for this key.
-	if existing := w.observers[key]; len(existing) > 0 {
+	bucket := w.observers[key]
+	if bucket == nil {
+		bucket = &observerBucket{}
+		w.observers[key] = bucket
+	}
+	node := &observerNode{key: key, callback: callback}
+	if source == 0 {
+		// Any-entity: compact removed nodes lazily, then append.
+		live := bucket.anyEntity[:0]
+		for _, n := range bucket.anyEntity {
+			if !n.removed {
+				live = append(live, n)
+			}
+		}
+		bucket.anyEntity = append(live, node)
+	} else {
+		// Fixed-source: allocate the per-source map on first use.
+		if bucket.fixedSource == nil {
+			bucket.fixedSource = make(map[ID][]*observerNode)
+		}
+		existing := bucket.fixedSource[source]
 		live := existing[:0]
 		for _, n := range existing {
 			if !n.removed {
 				live = append(live, n)
 			}
 		}
-		w.observers[key] = live
+		bucket.fixedSource[source] = append(live, node)
 	}
-	node := &observerNode{key: key, callback: callback}
-	w.observers[key] = append(w.observers[key], node)
 	return node
 }
 
-// dispatchObservers fires all active observers for (id, eventEntity) in registration
-// order. Observers with removed=true are skipped. An observer that calls
-// Unsubscribe during its callback takes effect immediately: not-yet-visited
-// observers in the same dispatch are skipped; already-fired observers are
-// unaffected.
+// dispatchObservers fires all active observers for (id, eventEntity, e) in
+// registration order. Any-entity observers fire first, then fixed-source
+// observers for entity e (if any are registered). Observers with removed=true
+// or disabled are skipped. An observer that calls Unsubscribe during its
+// callback takes effect immediately for not-yet-visited observers.
 func (w *World) dispatchObservers(id ID, eventEntity ID, e ID, ptr unsafe.Pointer) {
 	if w.observers == nil {
 		return
 	}
 	key := observerKey{id: id, eventEntity: eventEntity}
-	nodes := w.observers[key]
-	for _, n := range nodes {
+	bucket := w.observers[key]
+	if bucket == nil {
+		return
+	}
+	for _, n := range bucket.anyEntity {
 		if n.removed || (n.observer != nil && !n.observer.enabled) {
 			continue
 		}
 		n.callback(&w.writeCapability, e, ptr)
+	}
+	if bucket.fixedSource != nil {
+		for _, n := range bucket.fixedSource[e] {
+			if n.removed || (n.observer != nil && !n.observer.enabled) {
+				continue
+			}
+			n.callback(&w.writeCapability, e, ptr)
+		}
 	}
 }

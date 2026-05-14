@@ -84,7 +84,7 @@ func ObserveEvent(w *World, eventID ID, fn func(fw *Writer, e ID, payload interf
 		fn(fw, e, payload)
 	}
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(eventID, eventID, callback)
+	node := w.addObserverNode(eventID, eventID, 0, callback)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 	if w.logger != nil {
@@ -107,4 +107,33 @@ func ObserveEventTyped[T any](w *World, eventID ID, fn func(fw *Writer, e ID, pa
 		}
 		fn(fw, e, v)
 	})
+}
+
+// ObserveEventWithOptions subscribes fn to custom event eventID with additional
+// options. Supports [WithSource] to restrict the observer to a specific entity.
+//
+// If opts carries [WithYieldExisting], it is silently ignored for custom events
+// (there is no "currently matching" concept for an arbitrary event). If opts
+// carries [WithSource], the observer fires only when Emit is called with an entity
+// matching the source.
+//
+// Returns an *Observer handle; call Unsubscribe to stop receiving events.
+func ObserveEventWithOptions(w *World, eventID ID, opts ObserverOptions, fn func(fw *Writer, e ID, payload interface{})) *Observer {
+	w.checkExclusiveAccessWrite()
+	callback := func(fw *Writer, e ID, ptr unsafe.Pointer) {
+		var payload interface{}
+		if ptr != nil {
+			payload = *(*interface{})(ptr)
+		}
+		fn(fw, e, payload)
+	}
+	obs := &Observer{w: w, enabled: true}
+	node := w.addObserverNode(eventID, eventID, opts.source, callback)
+	node.observer = obs
+	obs.nodes = append(obs.nodes, node)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "custom event observer registered",
+			slog.Uint64("eventID", uint64(eventID)))
+	}
+	return obs
 }

@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.67.0 — 2026-05-14 — Phase 16.12: Fixed-source observer terms
+
+Ports fixed-source observer terms from upstream C flecs. An observer registered with `WithSource(e)` fires only when the event lands on the named entity, moving the per-entity filter from application code into the dispatch layer. Closes the fixed-source observer gap in `docs/README.md`.
+
+### Added
+
+- **`WithSource(e ID) ObserverOptions`** — option that constrains `ObserveWithOptions[T]`, `ObserveIDWithOptions`, and `ObserveEventWithOptions` to fire only when the event entity matches `e`. Panics if `e == 0`. Stale (deleted) entity IDs register successfully and silently never fire.
+- **`(ObserverOptions).AndSource(e ID) ObserverOptions`** — chaining helper for combining `WithSource` with `WithYieldExisting`: `WithYieldExisting().AndSource(playerID)`. Panics if `e == 0`.
+- **`ObserveIDWithOptions(w, id, opts, events, fn)`** — options-bearing variant of `ObserveID`; the raw-ID entry point for fixed-source observers (e.g. pair IDs). Supports `WithSource` and `WithYieldExisting`.
+- **`ObserveEventWithOptions(w, eventID, opts, fn)`** — options-bearing variant of `ObserveEvent`; restricts custom-event observers to a named source entity via `WithSource`.
+- **`observerBucket`** internal storage type (`anyEntity []*observerNode`, `fixedSource map[ID][]*observerNode`) — replaces the plain `[]*observerNode` slice in the observer dispatch table. `fixedSource` is lazily allocated on first fixed-source registration; any-entity observer dispatch pays zero additional overhead.
+
+### Implementation notes
+
+1. **Storage**: `w.observers` changed from `map[observerKey][]*observerNode` to `map[observerKey]*observerBucket`. The `fixedSource` map within a bucket is nil until the first fixed-source registration for that `(component, event)` key.
+2. **Dispatch order**: Any-entity observers in `bucket.anyEntity` fire before fixed-source observers in `bucket.fixedSource[e]`. Registration order is preserved within each list.
+3. **yield_existing + WithSource**: O(1) — `entityRawPtrForYield` checks only the named source entity (table or sparse-set); no table walk. Fires once iff the source holds the component and its archetype table does not carry `Disabled` or `Prefab`.
+4. **Disabled / Prefab**: Mirrors upstream C behavior — the check is on the **event entity's table** (which, for fixed-source observers, is the source entity's table). Disabled or Prefab sources are skipped in `yield_existing`.
+5. **`OnTableCreate + WithSource` panics**: Tables are not entities; this combination is rejected at registration time with a clear message.
+6. **No new file**: All new types land in `observer.go`, `observer_options.go`, and `observer_custom.go` per the placement recommendation in the issue.
+
+### Explicit non-goals (v0.67.0)
+
+- No multi-term observers with mixed `$this` / fixed-source terms.
+- No fixed-source for monitor observers.
+- No automatic cleanup when the named source is deleted.
+- No traversal modifiers (e.g. `Up(ChildOf)`) on the fixed source.
+- No observer propagation along IsA edges.
+
+---
+
 ## v0.66.0 — 2026-05-14 — Phase 16.11: Query groups (group_by_callback port)
 
 Ports `group_by_callback` from upstream C flecs. Closes the query-groups gap in `docs/README.md`.

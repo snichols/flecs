@@ -45,7 +45,7 @@ func OnTableCreateWithOptions(w *World, opts ObserverOptions, fn func(fw *Writer
 	}
 
 	obs := &Observer{w: w, enabled: true}
-	node := w.addObserverNode(tableCreateSentinelID, w.eventOnTableCreateID, callback)
+	node := w.addObserverNode(tableCreateSentinelID, w.eventOnTableCreateID, 0, callback)
 	node.observer = obs
 	obs.nodes = append(obs.nodes, node)
 
