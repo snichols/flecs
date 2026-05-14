@@ -34,6 +34,11 @@ type jsonWorld struct {
 	// Format: relSerial → {entitySerial → targetSerial}.
 	// Restored AFTER entities so that all entity IDs exist before union pairs are applied.
 	UnionRelationships map[int]map[int]int `json:"union_relationships,omitempty"`
+	// EntityRangeMin/Max/Set serialise the active ID-range constraint so that
+	// RangeSet state survives marshal/unmarshal round-trips.
+	EntityRangeMin uint32 `json:"entity_range_min,omitempty"`
+	EntityRangeMax uint32 `json:"entity_range_max,omitempty"`
+	EntityRangeSet bool   `json:"entity_range_set,omitempty"`
 }
 
 // jsonEntity is the JSON representation of a single entity.
@@ -452,6 +457,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			}
 		}
 
+		rangeMin, rangeMax, rangeIsSet := w.index.GetRange()
 		jw := jsonWorld{
 			Version:                  1,
 			Entities:                 entities,
@@ -460,6 +466,9 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			SparseData:               sparseData,
 			UnionRelationshipSerials: unionRelSerials,
 			UnionRelationships:       unionRelationships,
+			EntityRangeMin:           rangeMin,
+			EntityRangeMax:           rangeMax,
+			EntityRangeSet:           rangeIsSet,
 		}
 		if jw.Entities == nil {
 			jw.Entities = []jsonEntity{}
@@ -710,6 +719,12 @@ func (w *World) UnmarshalJSON(data []byte) error {
 				}
 				fw.SetByID(e, info.ID, ptr.Elem().Interface())
 			}
+		}
+
+		// Restore range constraint after all entities are allocated so entity
+		// allocation during the phases above is unconstrained.
+		if jw.EntityRangeSet {
+			w.index.SetRange(jw.EntityRangeMin, jw.EntityRangeMax)
 		}
 
 		if w.logger != nil {

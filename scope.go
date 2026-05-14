@@ -388,6 +388,15 @@ func (fw *Writer) MakeAlive(id ID) ID { return MakeAlive(fw, id) }
 // SetVersion overrides the generation counter on an alive entity. See [SetVersion].
 func (fw *Writer) SetVersion(versionedID ID) { SetVersion(fw, versionedID) }
 
+// RangeSet constrains the allocator to issue IDs in [min, max). See [RangeSet].
+func (fw *Writer) RangeSet(min, max ID) { RangeSet(fw, min, max) }
+
+// RangeClear removes the active range constraint. See [RangeClear].
+func (fw *Writer) RangeClear() { RangeClear(fw) }
+
+// RangeNew issues a single entity ID within [min, max). See [RangeNew].
+func (fw *Writer) RangeNew(min, max ID) ID { return RangeNew(fw, min, max) }
+
 // SetName sets the Name component on entity e.
 func (fw *Writer) SetName(e ID, name string) {
 	Set[Name](fw, e, Name{Value: name})

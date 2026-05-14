@@ -145,7 +145,45 @@ The requested generation must be ≥ the current generation. A decrease panics; 
 
 ### Entity Ranges
 
-> **Not yet ported in Go flecs** — entity ranges constrain which IDs `NewEntity` issues, enabling simple ownership partitioning across clients or servers. See the [feature-gap list](README.md).
+Entity ID ranges constrain which IDs `NewEntity` issues, enabling ownership partitioning across servers and clients without per-allocation coordination.
+
+```go
+// Networked game: server reserves 1–65535; each client gets a contiguous slice.
+// Client 1 setup:
+w.Write(func(fw *flecs.Writer) {
+    // ... register components, etc.
+})
+
+fw := flecs.WriterForTest(w) // or any *Writer with deferDepth == 0
+flecs.RangeSet(fw, 65536, 131072)  // client 1 owns [65536, 131072)
+e := fw.NewEntity()                 // returns an ID in [65536, 131072)
+
+// Inspect the active range:
+w.Read(func(r *flecs.Reader) {
+    min, max, set := flecs.RangeGet(r)
+    _ = min; _ = max; _ = set
+})
+
+// Clear the range when done partitioning:
+flecs.RangeClear(fw)
+
+// One-shot allocation at a specific ID without changing world range state:
+specific := flecs.RangeNew(fw, 1000, 1001) // returns exactly ID 1000
+_ = specific
+```
+
+**API summary:**
+
+- `RangeSet(fw, min, max)` — constrain `fw`'s allocator to `[min, max)`. Subsequent `NewEntity` calls return IDs in that range. Panics if `min < 1`, `max <= min`, or in a deferred scope.
+- `RangeClear(fw)` — remove the constraint. `NewEntity` resumes from the current `maxID`; skipped IDs are not rewound.
+- `RangeGet(scope)` — inspect the active range; returns `(min, max, set)`.
+- `RangeNew(fw, min, max)` — one-shot allocation in `[min, max)` without modifying the world's active range. Advances `maxID` to `min` if needed.
+
+**`MakeAlive` bypass:** `MakeAlive` does not consult the active range (matching upstream behaviour). If `MakeAlive` advances `maxID` past `rangeMax`, the next `NewEntity` will panic range-exhausted.
+
+**Out-of-range recycled IDs:** when a range is active, deleted entities whose indices fall outside the range are skipped in the recycle queue (not lost — they become eligible again after `RangeClear` or a range change).
+
+`RangeSet`, `RangeClear`, and `RangeNew` panic when called inside a deferred scope (`w.Write`). Use a `*Writer` with `deferDepth == 0` (e.g. via `WriterForTest` in tests, or by calling these functions before entering a Write scope). Mirrors C `ecs_entity_range_set` / `ecs_entity_range_get` with the Go simplification of no persistent range objects and no per-range recycle pools.
 
 ### Names
 
