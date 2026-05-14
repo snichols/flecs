@@ -38,6 +38,10 @@ type System struct {
 	multiThreaded bool            // opt-in within-system row-range split; default false
 	writeSetFixed bool            // true after SetWriteSet called
 	writeSet      map[ID]struct{} // nil = derive from query terms; non-nil (incl. empty) = explicit
+	interval      time.Duration   // 0 = no interval gate (every tick)
+	intervalAccum time.Duration   // accumulated time since last interval fire
+	rate          int32           // 0 or 1 = no rate gate (every tick)
+	rateCounter   int32           // increments each pipeline visit; fires when counter%rate==0
 }
 
 // NewSystem registers a new system on w in the OnUpdate phase that runs q's
@@ -146,6 +150,52 @@ func (s *System) SetEnabled(v bool) { s.enabled = v }
 
 // IsEnabled reports whether this system is enabled for pipeline dispatch.
 func (s *System) IsEnabled() bool { return s.enabled }
+
+// SetInterval configures a wall-clock interval gate. The system runs only when
+// at least d of accumulated dt has elapsed since its last run. d == 0 disables
+// interval gating (system runs every tick). Panics on negative d.
+//
+// The accumulator uses subtract-with-cap semantics (matching upstream timer.c):
+// each fire subtracts d from the accumulator, preserving carry-over for
+// back-to-back fast ticks; a single tick whose dt vastly exceeds d clamps the
+// remainder to 0 to prevent runaway catch-up.
+//
+// interval and rate gates compose with AND semantics: both must pass in the same
+// tick for the system to run. This diverges from upstream C flecs, which rejects
+// systems with both fields set; Go-flecs allows the combination because there is
+// no tick_source abstraction and the two filters compose cleanly per-system.
+//
+// Modify only between ticks, not from inside a system callback during dispatch.
+func (s *System) SetInterval(d time.Duration) {
+	if d < 0 {
+		panic("flecs: SetInterval: interval must be >= 0")
+	}
+	s.interval = d
+	s.intervalAccum = 0
+}
+
+// GetInterval returns the current interval gate value (0 = disabled).
+func (s *System) GetInterval() time.Duration { return s.interval }
+
+// SetRate configures a tick-count rate gate. The system runs every nth pipeline
+// visit where n%rate == 0. n == 0 or n == 1 disables rate gating. Panics on
+// negative n.
+//
+// The rate counter increments on every pipeline visit while the system is
+// enabled; it does NOT advance during disabled periods. Re-enabling resumes
+// from the pre-disable counter value — no catch-up occurs.
+//
+// Modify only between ticks, not from inside a system callback during dispatch.
+func (s *System) SetRate(n int32) {
+	if n < 0 {
+		panic("flecs: SetRate: rate must be >= 0")
+	}
+	s.rate = n
+	s.rateCounter = 0
+}
+
+// GetRate returns the current rate gate value (0 or 1 = disabled).
+func (s *System) GetRate() int32 { return s.rate }
 
 // SetParallel sets whether this system is eligible for parallel dispatch.
 // Default is false (serial). When true and the world's WorkerCount is > 0,
@@ -280,9 +330,26 @@ func (w *World) Progress(dt float32) {
 		w.deferScope(func() {
 			active := make([]*System, 0, len(w.systems))
 			for _, s := range w.systems {
-				if !s.removed && s.enabled && s.phase == p {
-					active = append(active, s)
+				if s.removed || !s.enabled || s.phase != p {
+					continue
 				}
+				if s.interval > 0 {
+					s.intervalAccum += time.Duration(float64(phaseDT) * float64(time.Second))
+					if s.intervalAccum < s.interval {
+						continue
+					}
+					s.intervalAccum -= s.interval
+					if s.intervalAccum > s.interval {
+						s.intervalAccum = 0
+					}
+				}
+				if s.rate > 1 {
+					s.rateCounter++
+					if s.rateCounter%s.rate != 0 {
+						continue
+					}
+				}
+				active = append(active, s)
 			}
 			if w.workerCount == 0 {
 				// Serial dispatch: single-threaded behavior unchanged.

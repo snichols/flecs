@@ -195,6 +195,36 @@ Unlike `Close`, `SetEnabled(false)` is **reversible**. Use it to implement pause
 
 ---
 
+## Rate Filters
+
+Two independent gates let a system run less often than every `Progress` tick, without restructuring the pipeline or adding new phases.
+
+**`SetInterval(d time.Duration)`** — run at most once per accumulated wall-clock duration `d`. The accumulator grows by `dt` on every tick; when it reaches `d` the system fires and `d` is subtracted (not reset), preserving carry-over for future ticks. If a single frame's `dt` vastly exceeds `d`, the remainder is clamped to `0` to prevent runaway catch-up — matching upstream C `timer.c:33–35`.
+
+**`SetRate(n int32)`** — run every Nth pipeline visit. `n == 0` or `n == 1` disables rate gating (runs every tick). The counter only advances while the system is enabled.
+
+```go
+// Run the save system at most once every 5 seconds of accumulated dt.
+saveSys.SetInterval(5 * time.Second)
+
+// Run the AI update system every 4th pipeline tick.
+aiSys.SetRate(4)
+
+// Check current settings.
+d := saveSys.GetInterval()  // 5s
+n := aiSys.GetRate()        // 4
+```
+
+**Gates compose (AND semantics).** A system with both `interval` and `rate` set fires only on ticks where both gates pass simultaneously. This diverges from upstream C flecs, which rejects systems with both fields set; Go-flecs allows the combination because there is no `tick_source` abstraction and the two filters compose cleanly per-system.
+
+**Interaction with `SetEnabled`.** While a system is disabled, neither the rate counter nor the interval accumulator advance. Re-enabling resumes from the pre-disable state — no catch-up storm occurs.
+
+**`RunSystem` bypasses both gates.** Explicit out-of-pipeline invocation ignores interval and rate, matching its behaviour with the `enabled` flag.
+
+**Thread safety.** `SetInterval` and `SetRate` use plain field writes (no atomics), matching the `SetEnabled` precedent. Modify only from the goroutine that drives `Progress`, between ticks — not from inside a system callback during dispatch.
+
+---
+
 ## Single-system Run (out-of-pipeline)
 
 `RunSystem(s, dt)` invokes one system synchronously, outside the normal pipeline. Phase ordering, parallel batching, multi-threaded splitting, and the `enabled` flag are all bypassed.

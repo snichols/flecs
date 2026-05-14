@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.60.0)
+## Shipped (through v0.61.0)
 
 The following features are available in the current release:
 
@@ -62,6 +62,7 @@ The following features are available in the current release:
 - **System lifecycle bundle** _(v0.58.0, Phase 16.3)_ — `(*System).SetEnabled(bool)` / `(*System).IsEnabled() bool` — pause/resume without removing. `RunSystem(s, dt)` — synchronous out-of-pipeline invocation; bypasses phase ordering and the enabled flag. `(*Reader).Phases() []ID`, `(*Reader).SystemsInPhase(phase) []*System`, `(*Reader).EachSystem(phase, fn)` — pipeline introspection in registration order (includes disabled systems). Option A design: bool field on `*System`; no entity allocation per system.
 - **Sorted cached queries** _(v0.59.0, Phase 16.4)_ — `NewCachedQueryFromTermsWithOptions` + `WithOrderBy(compID, cmp)`. `OrderBy[T]` typed wrapper; `OrderByFunc` raw form. Cached; lazily rebuilt on table `ChangeCount` changes or new matching tables. Single `sort.SliceStable` over all matched entities (vs upstream two-step quicksort + k-way merge — future optimization). Closes `docs/README.md` gap line 110.
 - **Observer lifecycle bundle** _(v0.60.0, Phase 16.5)_ — `ObserveWithOptions[T]` + `WithYieldExisting()` + `(*Observer).SetEnabled(bool)` / `(*Observer).IsEnabled() bool`. `yield_existing` retroactively fires the newly-registered observer for all existing matching entities (OnAdd/OnSet only; synchronous sweep; skips Disabled/Prefab tables). Observer disabling pauses dispatch without unsubscribing, mirroring `(*System).SetEnabled` from Phase 16.3. Closes `docs/README.md` gap lines 156 and 159.
+- **Rate filters** _(v0.61.0, Phase 16.6)_ — `(*System).SetInterval(d time.Duration)` / `(*System).GetInterval()` + `(*System).SetRate(n int32)` / `(*System).GetRate()`. Interval gate uses subtract-with-cap accumulator (matches upstream `timer.c:33–35`); rate gate uses modulo counter. Both gates compose with AND semantics — diverges from upstream which forbids the combination. Counters freeze while system is disabled; re-enable resumes from pre-disable state. Closes `docs/README.md` gap line 144.
 
 ## Documentation
 

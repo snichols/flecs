@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.61.0 — 2026-05-14 — Phase 16.6: Rate filters (SetInterval / SetRate)
+
+Ports per-system rate-filter controls that let a system run less often than every pipeline tick. Closes `docs/README.md` gap line 144.
+
+**C upstream references verified:**
+- `ecs_ftime_t interval` / `int32_t rate` desc fields: `include/flecs/addons/system.h:87–91`.
+- `ecs_set_interval` / `ecs_set_rate` APIs: `include/flecs/addons/timer.h:111–115` and `:203–208`.
+- Interval accumulator (subtract-with-cap): `src/addons/timer.c:28–47` (`ProgressTimers`).
+- Rate counter (modulo): `src/addons/timer.c:75–83` (`ProgressRateFilters`).
+- Per-system gate: `src/addons/system/system.c:41–58` (`flecs_run_intern`).
+
+### Added
+
+- **`(*System).SetInterval(d time.Duration)`** — install a wall-clock interval gate; the system fires when accumulated `dt` reaches `d`. `d == 0` disables interval gating. Resets the accumulator to 0 on call. Panics on negative `d`. Uses subtract-with-cap accumulator: each fire subtracts `d` preserving carry; a single tick whose `dt` vastly exceeds `d` clamps the remainder to `0` (mirrors upstream `timer.c:33–35`).
+- **`(*System).GetInterval() time.Duration`** — returns the current interval gate value (`0` = disabled).
+- **`(*System).SetRate(n int32)`** — install a tick-count rate gate; the system fires when `rateCounter % n == 0`. `n == 0` or `n == 1` disables rate gating. Resets the counter to 0 on call. Panics on negative `n`.
+- **`(*System).GetRate() int32`** — returns the current rate gate value (`0` or `1` = disabled).
+
+### Changed
+
+- **`System` struct** — extended with `interval time.Duration`, `intervalAccum time.Duration`, `rate int32`, `rateCounter int32` fields.
+- **`runPhase` closure** — per-system gate in `Progress` extended: interval check (accumulate + subtract-with-cap) and rate check (modulo) compose with the existing `enabled` check. Neither counter advances while a system is disabled.
+
+### Design decisions recorded
+
+1. **AND composition for combined interval + rate** — upstream C flecs rejects systems with both `interval` and `rate` set (`system.c:230–235`). Go-flecs allows both simultaneously because there is no `tick_source` chaining abstraction; the two filters compose cleanly per-system. Documented in `docs/Systems.md § Rate Filters`.
+2. **Disabled-system counters do not advance** — re-enabling resumes from pre-disable state; no catch-up storm. Matches the "re-enable doesn't back-fill" design of `SetEnabled`.
+3. **`time.Duration` for interval** — Go-idiomatic vs. upstream `ecs_ftime_t` (double seconds). Conversion `time.Duration(float64(phaseDT) * float64(time.Second))` is explicit at the gate boundary.
+4. **`int32` for rate** — matches upstream `int32_t`; avoids surprises on 32-bit targets.
+5. **Plain field access, no atomics** — matches Phase 16.3 `(*System).SetEnabled` precedent; callers must modify between ticks only.
+
 ## v0.60.0 — 2026-05-14 — Phase 16.5: Observer lifecycle bundle (yield_existing + observer disabling)
 
 Ports two upstream C flecs observer features that both live on the observer-registration and observer-fire plumbing in `observer.go`. Closes `docs/README.md` gap lines 156 (yield_existing) and 159 (observer disabling).
