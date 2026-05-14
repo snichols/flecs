@@ -131,10 +131,11 @@ type CachedQuery struct {
 	// source entity had no inheritable components. Iter returns a zero-result iterator
 	// immediately without consulting the table cache.
 	alwaysFalse bool
-	// varSlots and driverVar mirror Query.varSlots/driverVar for variable queries.
+	// varSlots, driverVar, and varOrder mirror Query fields for variable queries.
 	// Iter() re-executes buildVarRows on each call when varSlots != nil.
 	varSlots  map[string]int
 	driverVar string
+	varOrder  []string
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID
 	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
@@ -222,6 +223,7 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewCachedQueryFromTerms", terms)
+	varOrder := buildVarTopoOrder("flecs: NewCachedQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
 	if alwaysFalse {
 		// OrFrom with empty source: zero results guaranteed; skip table-cache setup.
@@ -230,6 +232,7 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	cq := newCachedQueryInternal(w, cp, andIDs, orGroups)
 	cq.varSlots = varSlots
 	cq.driverVar = driverVar
+	cq.varOrder = varOrder
 	return cq
 }
 
@@ -428,6 +431,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			skipPrefab:   cq.skipPrefab,
 			varSlots:     cq.varSlots,
 			driverVar:    cq.driverVar,
+			varOrder:     cq.varOrder,
 		}
 		rows := proxy.buildVarRows()
 		return &QueryIter{

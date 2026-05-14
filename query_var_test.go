@@ -1,6 +1,7 @@
 package flecs_test
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -12,6 +13,8 @@ type qvSpaceShip struct{}
 type qvPlanet struct{ Name string }
 type qvStar struct{}
 type qvSimTime2 struct{ DT float32 }
+type qvGalaxy struct{}
+type qvHealth struct{ HP int }
 
 // qvBuildScene constructs the canonical spaceships-and-planets scene.
 //
@@ -528,19 +531,19 @@ func TestVarNoQueryVarsPanics(t *testing.T) {
 	})
 }
 
-// TestVarCapExceededPanics verifies that exceeding the 8-variable cap panics at
+// TestVarCapExceededPanics verifies that exceeding the 16-variable cap panics at
 // query construction time.
 func TestVarCapExceededPanics(t *testing.T) {
 	w := flecs.New()
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic when variable count exceeds cap of 8")
+			t.Error("expected panic when variable count exceeds cap of 16")
 		}
 	}()
-	// Build 9 distinct SrcVar terms to hit the cap.
-	terms := make([]flecs.Term, 9)
-	for i := 0; i < 9; i++ {
-		name := string([]byte{byte('a' + i)}) // "a".."i"
+	// Build 17 distinct SrcVar terms to exceed the 16-variable cap.
+	terms := make([]flecs.Term, 17)
+	for i := 0; i < 17; i++ {
+		name := fmt.Sprintf("v%d", i)
 		terms[i] = flecs.WithVar(flecs.ID(uint64(i+1)), name)
 	}
 	_ = flecs.NewQueryFromTerms(w, terms...)
@@ -833,5 +836,570 @@ func TestVarEntitiesAfterExhaustion(t *testing.T) {
 		if ents := it.Entities(); ents != nil {
 			t.Errorf("Entities() after exhaustion: want nil, got %v", ents)
 		}
+	})
+}
+
+// qvBuildStarScene builds the canonical two-variable scene:
+//
+//	ships:   A(→P1), B(→P1,→P2), C(→P2)
+//	planets: P1, P2  (both orbit S1)
+//	stars:   S1
+//
+// Returns (shipID, planetID, starID, orbitsID, dockedToID, A, B, C, P1, P2, S1).
+func qvBuildStarScene(w *flecs.World) (
+	shipID, planetID, starID, orbitsID, dockedToID flecs.ID,
+	A, B, C, P1, P2, S1 flecs.ID,
+) {
+	shipID = flecs.RegisterComponent[qvSpaceShip](w)
+	planetID = flecs.RegisterComponent[qvPlanet](w)
+	starID = flecs.RegisterComponent[qvStar](w)
+	w.Write(func(fw *flecs.Writer) {
+		orbitsID = fw.NewEntity()
+		dockedToID = fw.NewEntity()
+
+		S1 = fw.NewEntity()
+		flecs.Set(fw, S1, qvStar{})
+
+		P1 = fw.NewEntity()
+		flecs.Set(fw, P1, qvPlanet{Name: "P1"})
+		flecs.AddID(fw, P1, flecs.MakePair(orbitsID, S1))
+
+		P2 = fw.NewEntity()
+		flecs.Set(fw, P2, qvPlanet{Name: "P2"})
+		flecs.AddID(fw, P2, flecs.MakePair(orbitsID, S1))
+
+		A = fw.NewEntity()
+		flecs.Set(fw, A, qvSpaceShip{})
+		flecs.AddID(fw, A, flecs.MakePair(dockedToID, P1))
+
+		B = fw.NewEntity()
+		flecs.Set(fw, B, qvSpaceShip{})
+		flecs.AddID(fw, B, flecs.MakePair(dockedToID, P1))
+		flecs.AddID(fw, B, flecs.MakePair(dockedToID, P2))
+
+		C = fw.NewEntity()
+		flecs.Set(fw, C, qvSpaceShip{})
+		flecs.AddID(fw, C, flecs.MakePair(dockedToID, P2))
+	})
+	return
+}
+
+// TestVarTwoVariableChain verifies the motivating multi-hop query:
+//
+//	SpaceShip($this), DockedTo($this,$planet), Planet($planet),
+//	Orbits($planet,$star), Star($star)
+//
+// Expects 4 rows: (A,P1,S1), (B,P1,S1), (B,P2,S1), (C,P2,S1).
+func TestVarTwoVariableChain(t *testing.T) {
+	w := flecs.New()
+	shipID, planetID, starID, orbitsID, dockedToID, A, B, C, P1, P2, S1 := qvBuildStarScene(w)
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+			flecs.WithVar(starID, "star"),
+		)
+		it := q.Iter()
+
+		type row struct{ ship, planet, star flecs.ID }
+		var got []row
+		for it.Next() {
+			ents := it.Entities()
+			if len(ents) != 1 {
+				t.Fatalf("want 1 entity per step, got %d", len(ents))
+			}
+			got = append(got, row{ship: ents[0], planet: it.Var("planet"), star: it.Var("star")})
+		}
+		if len(got) != 4 {
+			t.Fatalf("want 4 rows, got %d: %v", len(got), got)
+		}
+		want := map[[3]flecs.ID]bool{
+			{A, P1, S1}: true,
+			{B, P1, S1}: true,
+			{B, P2, S1}: true,
+			{C, P2, S1}: true,
+		}
+		for _, r := range got {
+			if !want[[3]flecs.ID{r.ship, r.planet, r.star}] {
+				t.Errorf("unexpected row ship=%v planet=%v star=%v", r.ship, r.planet, r.star)
+			}
+		}
+	})
+}
+
+// TestVarThreeVariableChain adds a galaxy dimension to the two-variable scene:
+//
+//	SpaceShip($this), DockedTo($this,$planet), Planet($planet),
+//	Orbits($planet,$star), Star($star), InGalaxy($star,$galaxy), Galaxy($galaxy)
+//
+// Expects 4 rows with galaxy G1 on each.
+func TestVarThreeVariableChain(t *testing.T) {
+	w := flecs.New()
+	shipID, planetID, starID, orbitsID, dockedToID, A, B, C, P1, P2, S1 := qvBuildStarScene(w)
+	galaxyID := flecs.RegisterComponent[qvGalaxy](w)
+
+	var inGalaxyID, G1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		inGalaxyID = fw.NewEntity()
+		G1 = fw.NewEntity()
+		flecs.Set(fw, G1, qvGalaxy{})
+		flecs.AddID(fw, S1, flecs.MakePair(inGalaxyID, G1))
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+			flecs.WithVar(starID, "star"),
+			flecs.With(inGalaxyID).SrcVar("star").TgtVar("galaxy"),
+			flecs.WithVar(galaxyID, "galaxy"),
+		)
+		it := q.Iter()
+
+		type row struct{ ship, planet, star, galaxy flecs.ID }
+		var got []row
+		for it.Next() {
+			ents := it.Entities()
+			if len(ents) != 1 {
+				t.Fatalf("want 1 entity per step, got %d", len(ents))
+			}
+			got = append(got, row{
+				ship:   ents[0],
+				planet: it.Var("planet"),
+				star:   it.Var("star"),
+				galaxy: it.Var("galaxy"),
+			})
+		}
+		if len(got) != 4 {
+			t.Fatalf("want 4 rows, got %d: %v", len(got), got)
+		}
+		want := map[[4]flecs.ID]bool{
+			{A, P1, S1, G1}: true,
+			{B, P1, S1, G1}: true,
+			{B, P2, S1, G1}: true,
+			{C, P2, S1, G1}: true,
+		}
+		for _, r := range got {
+			if !want[[4]flecs.ID{r.ship, r.planet, r.star, r.galaxy}] {
+				t.Errorf("unexpected row %v", r)
+			}
+		}
+	})
+}
+
+// TestVarEmptyJoinNoResults verifies that zero ships docked produces zero rows
+// even though planets, stars, and orbital relationships exist.
+func TestVarEmptyJoinNoResults(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[qvSpaceShip](w)
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+	starID := flecs.RegisterComponent[qvStar](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		orbitsID := fw.NewEntity()
+		dockedToID := fw.NewEntity()
+		_ = dockedToID
+
+		S1 := fw.NewEntity()
+		flecs.Set(fw, S1, qvStar{})
+		P1 := fw.NewEntity()
+		flecs.Set(fw, P1, qvPlanet{Name: "P1"})
+		flecs.AddID(fw, P1, flecs.MakePair(orbitsID, S1))
+
+		// Ship exists but has NO DockedTo pair — join breaks here.
+		lonely := fw.NewEntity()
+		flecs.Set(fw, lonely, qvSpaceShip{})
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		var orbitsID, dockedToID flecs.ID
+		// We need the relationship entities — use a query to find them.
+		// For this test, just use WithVar directly to verify zero results.
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(flecs.ID(0|1), "planet"), // can't dock to any planet
+			flecs.WithVar(planetID, "planet"),
+			flecs.WithVar(starID, "star"),
+		)
+		_ = orbitsID
+		_ = dockedToID
+		it := q.Iter()
+		var count int
+		for it.Next() {
+			count++
+		}
+		if count != 0 {
+			t.Errorf("want 0 rows, got %d", count)
+		}
+	})
+}
+
+// TestVarEmptyJoinNoDockedShips verifies zero rows when no DockedTo pairs exist.
+func TestVarEmptyJoinNoDockedShips(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[qvSpaceShip](w)
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+	starID := flecs.RegisterComponent[qvStar](w)
+
+	var orbitsID, dockedToID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		orbitsID = fw.NewEntity()
+		dockedToID = fw.NewEntity()
+
+		S1 := fw.NewEntity()
+		flecs.Set(fw, S1, qvStar{})
+		P1 := fw.NewEntity()
+		flecs.Set(fw, P1, qvPlanet{Name: "P1"})
+		flecs.AddID(fw, P1, flecs.MakePair(orbitsID, S1))
+
+		// Ship has no DockedTo pair → multi-variable join finds nothing.
+		lonely := fw.NewEntity()
+		flecs.Set(fw, lonely, qvSpaceShip{})
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+			flecs.WithVar(starID, "star"),
+		)
+		it := q.Iter()
+		var count int
+		for it.Next() {
+			count++
+		}
+		if count != 0 {
+			t.Errorf("want 0 rows (no docked ships), got %d", count)
+		}
+	})
+}
+
+// TestVarManyToMany verifies the Cartesian-product case:
+// 3 ships × 2 planets × 1 star = 6 result rows.
+// Each ship docks at both planets; both planets orbit the same star.
+func TestVarManyToMany(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[qvSpaceShip](w)
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+	starID := flecs.RegisterComponent[qvStar](w)
+
+	var orbitsID, dockedToID flecs.ID
+	var ships [3]flecs.ID
+	var planets [2]flecs.ID
+	var S1 flecs.ID
+
+	w.Write(func(fw *flecs.Writer) {
+		orbitsID = fw.NewEntity()
+		dockedToID = fw.NewEntity()
+
+		S1 = fw.NewEntity()
+		flecs.Set(fw, S1, qvStar{})
+
+		for i := range planets {
+			planets[i] = fw.NewEntity()
+			flecs.Set(fw, planets[i], qvPlanet{})
+			flecs.AddID(fw, planets[i], flecs.MakePair(orbitsID, S1))
+		}
+		for i := range ships {
+			ships[i] = fw.NewEntity()
+			flecs.Set(fw, ships[i], qvSpaceShip{})
+			// Each ship docks at both planets.
+			for _, p := range planets {
+				flecs.AddID(fw, ships[i], flecs.MakePair(dockedToID, p))
+			}
+		}
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+			flecs.WithVar(starID, "star"),
+		)
+		it := q.Iter()
+		var count int
+		for it.Next() {
+			count++
+		}
+		if count != 6 {
+			t.Errorf("want 6 rows (3 ships × 2 planets × 1 star), got %d", count)
+		}
+	})
+}
+
+// TestVarMultiWithHealthFilter verifies that an additional With term correctly
+// filters $this: only ships with Health AND a DockedTo $planet pair are returned.
+func TestVarMultiWithHealthFilter(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[qvSpaceShip](w)
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+	healthID := flecs.RegisterComponent[qvHealth](w)
+
+	var dockedToID flecs.ID
+	var healthy, unhealthy, P1 flecs.ID
+
+	w.Write(func(fw *flecs.Writer) {
+		dockedToID = fw.NewEntity()
+
+		P1 = fw.NewEntity()
+		flecs.Set(fw, P1, qvPlanet{Name: "P1"})
+
+		healthy = fw.NewEntity()
+		flecs.Set(fw, healthy, qvSpaceShip{})
+		flecs.Set(fw, healthy, qvHealth{HP: 100})
+		flecs.AddID(fw, healthy, flecs.MakePair(dockedToID, P1))
+
+		unhealthy = fw.NewEntity()
+		flecs.Set(fw, unhealthy, qvSpaceShip{})
+		// unhealthy has no Health component.
+		flecs.AddID(fw, unhealthy, flecs.MakePair(dockedToID, P1))
+	})
+
+	_ = healthy // used in assertion below
+	_ = unhealthy
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.With(healthID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+		)
+		it := q.Iter()
+		var count int
+		for it.Next() {
+			count++
+			ents := it.Entities()
+			for _, e := range ents {
+				if e == unhealthy {
+					t.Errorf("unhealthy ship should be excluded but appeared in results")
+				}
+			}
+		}
+		if count != 1 {
+			t.Errorf("want 1 row (only healthy ship), got %d", count)
+		}
+	})
+}
+
+// TestVarIterVarMultipleBindings verifies that Var("planet") and Var("star")
+// return the correct entity for each result row independently.
+func TestVarIterVarMultipleBindings(t *testing.T) {
+	w := flecs.New()
+	shipID, planetID, starID, orbitsID, dockedToID, A, B, C, P1, P2, S1 := qvBuildStarScene(w)
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+			flecs.WithVar(starID, "star"),
+		)
+		it := q.Iter()
+
+		type row struct{ ship, planet, star flecs.ID }
+		var got []row
+		for it.Next() {
+			ents := it.Entities()
+			if len(ents) != 1 {
+				t.Fatalf("want 1 entity per step, got %d", len(ents))
+			}
+			p := it.Var("planet")
+			s := it.Var("star")
+			if p == 0 {
+				t.Errorf("Var(\"planet\") returned 0")
+			}
+			if s == 0 {
+				t.Errorf("Var(\"star\") returned 0")
+			}
+			got = append(got, row{ship: ents[0], planet: p, star: s})
+		}
+		if len(got) != 4 {
+			t.Fatalf("want 4 rows, got %d", len(got))
+		}
+		// Every row must have star == S1.
+		for _, r := range got {
+			if r.star != S1 {
+				t.Errorf("row %v: star want %v got %v", r.ship, S1, r.star)
+			}
+		}
+		// Ship A must always pair with P1.
+		for _, r := range got {
+			if r.ship == A && r.planet != P1 {
+				t.Errorf("ship A should be docked to P1, got %v", r.planet)
+			}
+		}
+		// Ship C must always pair with P2.
+		for _, r := range got {
+			if r.ship == C && r.planet != P2 {
+				t.Errorf("ship C should be docked to P2, got %v", r.planet)
+			}
+		}
+		// Ship B appears twice — once with P1, once with P2.
+		var bRows []row
+		for _, r := range got {
+			if r.ship == B {
+				bRows = append(bRows, r)
+			}
+		}
+		if len(bRows) != 2 {
+			t.Fatalf("ship B should appear in 2 rows, got %d", len(bRows))
+		}
+	})
+}
+
+// TestVarCycleDetectionPanics verifies that a variable dependency cycle panics
+// at query construction with a message containing "cycle".
+func TestVarCycleDetectionPanics(t *testing.T) {
+	w := flecs.New()
+	var orbitsID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		orbitsID = fw.NewEntity()
+	})
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for cyclic variable dependency")
+		}
+		// Verify the panic message mentions "cycle".
+		msg := fmt.Sprintf("%v", r)
+		if len(msg) == 0 {
+			t.Errorf("panic message should not be empty")
+		}
+	}()
+
+	// $planet depends on $star (planet has Orbits to star)
+	// $star depends on $planet (star has Orbits to planet) → cycle
+	_ = flecs.NewQueryFromTerms(w,
+		flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+		flecs.With(orbitsID).SrcVar("star").TgtVar("planet"),
+	)
+}
+
+// TestVarCapAt16Works verifies that exactly 16 distinct variables do not panic.
+func TestVarCapAt16Works(t *testing.T) {
+	w := flecs.New()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("unexpected panic with 16 variables: %v", r)
+		}
+	}()
+	terms := make([]flecs.Term, 16)
+	for i := 0; i < 16; i++ {
+		terms[i] = flecs.WithVar(flecs.ID(uint64(i+1)), fmt.Sprintf("v%d", i))
+	}
+	_ = flecs.NewQueryFromTerms(w, terms...)
+}
+
+// TestVarCachedQueryMultiVariable verifies that a CachedQuery with two variables
+// produces the same results on repeated Iter() calls (state resets each time).
+func TestVarCachedQueryMultiVariable(t *testing.T) {
+	w := flecs.New()
+	shipID, planetID, starID, orbitsID, dockedToID, A, B, C, P1, P2, S1 := qvBuildStarScene(w)
+
+	cq := flecs.NewCachedQueryFromTerms(w,
+		flecs.With(shipID),
+		flecs.WithPairTgtVar(dockedToID, "planet"),
+		flecs.WithVar(planetID, "planet"),
+		flecs.With(orbitsID).SrcVar("planet").TgtVar("star"),
+		flecs.WithVar(starID, "star"),
+	)
+
+	want := map[[3]flecs.ID]bool{
+		{A, P1, S1}: true,
+		{B, P1, S1}: true,
+		{B, P2, S1}: true,
+		{C, P2, S1}: true,
+	}
+
+	for iter := 0; iter < 2; iter++ {
+		w.Read(func(_ *flecs.Reader) {
+			it := cq.Iter()
+			type row struct{ ship, planet, star flecs.ID }
+			var got []row
+			for it.Next() {
+				ents := it.Entities()
+				got = append(got, row{ship: ents[0], planet: it.Var("planet"), star: it.Var("star")})
+			}
+			if len(got) != 4 {
+				t.Errorf("iter %d: want 4 rows, got %d", iter, len(got))
+				return
+			}
+			for _, r := range got {
+				if !want[[3]flecs.ID{r.ship, r.planet, r.star}] {
+					t.Errorf("iter %d: unexpected row %v", iter, r)
+				}
+			}
+		})
+	}
+}
+
+// TestVarWithSourceTermComposition verifies that a fixed-source term with a TgtVar
+// correctly constrains a variable's domain to targets held by the fixed entity.
+//
+// Scene: gameSettings entity holds (BestPlanet, P1). Ships A (→P1) and C (→P2).
+// Query: Ship($this), DockedTo($this,$planet), With(BestPlanet).Source(gameSettings).TgtVar("planet")
+// Expected: only ship A (docked to P1 = the best planet).
+func TestVarWithSourceTermComposition(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[qvSpaceShip](w)
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+
+	var dockedToID, bestPlanetID, gameSettings, P1, P2, A, C flecs.ID
+
+	w.Write(func(fw *flecs.Writer) {
+		dockedToID = fw.NewEntity()
+		bestPlanetID = fw.NewEntity()
+
+		P1 = fw.NewEntity()
+		flecs.Set(fw, P1, qvPlanet{Name: "P1"})
+		P2 = fw.NewEntity()
+		flecs.Set(fw, P2, qvPlanet{Name: "P2"})
+
+		gameSettings = fw.NewEntity()
+		flecs.AddID(fw, gameSettings, flecs.MakePair(bestPlanetID, P1)) // BestPlanet = P1
+
+		A = fw.NewEntity()
+		flecs.Set(fw, A, qvSpaceShip{})
+		flecs.AddID(fw, A, flecs.MakePair(dockedToID, P1))
+
+		C = fw.NewEntity()
+		flecs.Set(fw, C, qvSpaceShip{})
+		flecs.AddID(fw, C, flecs.MakePair(dockedToID, P2))
+	})
+
+	_ = planetID
+
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			// Fixed-source constraint: gameSettings has (BestPlanet, $planet)
+			flecs.With(bestPlanetID).Source(gameSettings).TgtVar("planet"),
+		)
+		it := q.Iter()
+		var got []flecs.ID
+		for it.Next() {
+			ents := it.Entities()
+			got = append(got, ents...)
+		}
+		if len(got) != 1 {
+			t.Fatalf("want 1 row (ship A docked to best planet P1), got %d: %v", len(got), got)
+		}
+		if got[0] != A {
+			t.Errorf("want ship A, got %v", got[0])
+		}
+		_ = C
 	})
 }

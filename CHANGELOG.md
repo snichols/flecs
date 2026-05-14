@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.81.0 — 2026-05-14 — Phase 16.26: Multi-variable query support
+
+Extends the Phase 16.25 single-variable engine to support **N named variables** in a single query, enabling multi-hop relational joins such as "spaceships docked to a planet that orbits a star." Closes the multi-variable carve-out that was deferred from v0.80.0.
+
+### Added
+
+- **Multi-variable nested-join iteration** — `buildVarRows` now performs an N-level nested loop driven by a topo-sorted variable dependency order. For each combination of outer-variable bindings the inner variable's domain is re-materialized using the outer bindings.
+- **Variable dependency analysis and topo-sort** — new `buildVarTopoOrder` computes a topo-sorted enumeration order from the dependency graph (variable B depends on A when a term has `srcVar=A, tgtVar=B`). First-defined variable is always placed outermost among roots.
+- **Cycle detection** — a cyclic variable dependency panics at construction time with a clear cycle-path message, e.g.: `variable dependency cycle detected: planet → star → planet`.
+- **Variable cap bumped 8 → 16** — `buildVarSlotsFromTerms` now allows up to 16 distinct variable names per query. Upstream `EcsQueryMaxVarCount = 64` allows further increases.
+- **`(Term).SrcVar(name).TgtVar(name)` combined form** — a term with both `srcVar` and `tgtVar` set expresses "$srcVar has (rel, $tgtVar)", enabling cross-variable pair constraints.
+- **Fixed-source + TgtVar composition** — a term with `Src != 0` and `tgtVar != ""` constrains a variable's domain to pair targets held by the fixed entity (e.g., `With(rel).Source(config).TgtVar("planet")`). `buildFixedSourcePtrs` now skips these terms; `collectVarDomainFor` handles them.
+- **`varOrder []string` field on `Query` and `CachedQuery`** — topo-sorted variable enumeration order stored at construction; passed to the `buildVarRows` recursive helper.
+
+### Changed
+
+- **`collectVarDomain` replaced by `collectVarDomainFor(varName, bindings)`** — generalised to accept any variable name and a partial bindings slice, enabling re-materialization for inner-loop variables.
+- **`varCheckTable` updated** — terms with `srcVar != ""` or `Src != 0` are now skipped (they are variable-to-variable or fixed-source constraints consumed during domain collection, not `$this` archetype constraints).
+- **`WithVar` doc comment** — removed the "v1 limitation" note about multi-variable being deferred.
+
+### Performance note
+
+Multi-variable runtime is O(d₁ × d₂ × … × dN) where dN is each variable's domain size. Structure queries so that inner variables are heavily constrained by outer bindings. Join-order optimization (Phase 16.27 candidate) will automate this.
+
+### Documentation
+
+- **`docs/Queries.md`** — § "Query variables (single-variable v1)" renamed to § "Query variables"; multi-variable worked example added (spaceship-planet-star); performance caveat added; v1 single-variable and join-order limitations removed (replaced by Phase 16.27 forward reference); variable count cap updated to 16; cycle-detection section added.
+- **`docs/README.md`** — query variables gap entry updated to reflect v0.81.0 multi-variable support.
+- **`README.md`** — feature table and compatibility matrix updated to multi-variable, 16-variable cap.
+- **`ROADMAP.md`** — heading bumped to "through v0.81.0"; Phase 16.26 entry added; "Multi-variable join optimization" future-work entry replaced by "Join-order optimization (Phase 16.27 candidate)".
+
 ## v0.80.0 — 2026-05-14 — Phase 16.25: Query variables ($Var, single-variable v1)
 
 Adds named query variables (`$Var`) so terms can express relational joins across related entities. Single-variable v1: one named variable plus the implicit `$this`. Multi-variable join optimization is deferred to Phase 16.25.x. Closes the `docs/README.md` gap entry for query variables.
