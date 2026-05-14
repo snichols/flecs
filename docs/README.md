@@ -71,7 +71,7 @@ Features described in the C docs that the Go port does not currently implement:
 - **Entity hooks beyond OnAdd/OnSet/OnRemove** — C has `OnDelete`, `OnTableEmpty`, `OnTableFill`.
 - **Cleanup policies** (`OnDeleteTarget`, `OnDelete`) — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`.
 - **Reflection / meta cursor** (`ecs_meta_cursor`, `ecs_meta_type_op`) — not ported.
-- **Sparse storage** (`EcsSparse` component trait opt-in) — **partially shipped in v0.51.0** — storage and manual write/read/remove only (Phase 15.19); query side pending in Phase 15.20. See [ComponentTraits.md § Sparse](ComponentTraits.md#sparse).
+- **Sparse storage** (`EcsSparse` component trait opt-in) — **fully shipped in v0.52.0** — storage, write/read/remove API, and query integration (all-sparse, mixed, and all-archetype iterator modes; `Field[T]`/`FieldMaybe[T]` sparse branches; `Not`/`Optional` on sparse terms; `CachedQuery.Changed()` via version counter). See [ComponentTraits.md § Sparse](ComponentTraits.md#sparse) and [Queries.md § Sparse-aware queries](Queries.md#sparse-aware-queries).
 - **World-level pre/post merge hooks** — not ported.
 - **Alerts addon** — not ported.
 - **Monitor addon** — not ported.

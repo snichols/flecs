@@ -656,9 +656,97 @@ if cq.IsClosed() {
 
 ---
 
+## Sparse-aware queries
+
+When a component has the `Sparse` trait (`flecs.SetSparse(w, compID)`), its data lives in a per-component sparse-set rather than archetype columns. As of v0.52.0, query terms naming Sparse components are fully integrated with `NewQuery`, `NewQueryFromTerms`, `NewCachedQuery`, and `NewCachedQueryFromTerms`.
+
+### All-sparse queries
+
+If every required `With` term is sparse, the query uses the smallest sparse-set as the iteration driver and cross-checks each candidate against remaining sparse terms. Yields one entity at a time (per `Next()` call, `Count()` returns 1 and `Entities()` returns a single-element slice).
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+velID := flecs.RegisterComponent[Velocity](w)
+flecs.SetSparse(w, posID)
+flecs.SetSparse(w, velID)
+
+q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(velID))
+it := q.Iter()
+for it.Next() {
+    e := it.Entities()[0]
+    pos := flecs.Field[Position](it, 0) // 1-element slice into sparse-set
+    vel := flecs.Field[Velocity](it, 1)
+    pos[0].X += vel[0].DX
+}
+```
+
+### Mixed queries (sparse + archetype)
+
+When a query has both sparse and archetype terms, the iterator first narrows to matching archetype tables (via the archetype terms), then filters each entity in those tables against the sparse terms. Every `Next()` call still yields one entity.
+
+```go
+// Tag is an archetype component; Position is sparse.
+q := flecs.NewQueryFromTerms(w, flecs.With(tagID), flecs.With(posID))
+it := q.Iter()
+for it.Next() {
+    pos := flecs.Field[Position](it, 1) // 1-element slice
+    _ = pos[0].X
+}
+```
+
+### Not and Optional on sparse terms
+
+`TermNot` on a sparse term filters to entities that **do not** hold that sparse component. `TermMaybe` populates the optional slot but does not filter.
+
+```go
+// Entities with Position but NOT Velocity (both sparse):
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.Without(velID),
+)
+
+// Position required, Velocity optional (both sparse):
+q2 := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.Maybe(velID),
+)
+it2 := q2.Iter()
+for it2.Next() {
+    e := it2.Entities()[0]
+    vel, ok := flecs.FieldMaybe[Velocity](it2, 1)
+    if ok {
+        _ = vel[0].DX // entity has Velocity
+    }
+    _ = e
+}
+```
+
+### Cached queries with sparse terms
+
+`NewCachedQuery` and `NewCachedQueryFromTerms` work with sparse terms. For purely-sparse cached queries (`sparseAndOnly`), `Iter()` builds the driver fresh from the sparse-sets each call — no stale archetype-table cache is needed. Mixed cached queries cache the archetype table list normally and check sparse terms per-entity.
+
+`Changed()` returns `true` when any matching sparse-set has been structurally modified (entry inserted or removed) since the last call:
+
+```go
+cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID))
+// First call always true (no previous baseline).
+if cq.Changed() { /* rebuild derived state */ }
+// After a Set/Remove on a Sparse component:
+w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, Position{X: 9}) })
+if cq.Changed() { /* true — sparse-set was modified */ }
+```
+
+### Limitations
+
+- Pair IDs are always archetype-stored in v0.52.0; pair terms are never considered sparse even if the relationship entity also holds the Sparse trait on itself as a scalar component.
+- Wildcard/Any query terms cannot be mixed with sparse terms in the same query.
+- `Field[T]` and `FieldMaybe[T]` for sparse terms return a 1-element slice (not a table-column-length slice). Do not range over the result expecting multiple elements per `Next()` call.
+
+---
+
 ## Performance Notes
 
-- **Uncached query iteration** is O(smallest-matching-set × terms) per `Iter()` call. The seed term is the TermAnd component with the fewest matching tables. For sparse queries this is very fast; for dense queries the inner-loop cost dominates.
+- **Uncached query iteration** is O(smallest-matching-set × terms) per `Iter()` call. The seed term is the TermAnd component with the fewest matching tables. For all-sparse queries the driver is the smallest sparse-set, so iteration is proportional to that set size. For dense queries the inner-loop cost dominates.
 
 - **Cached query iteration** is O(matching-tables) per `Iter()` after construction. No allocation on `Iter()` — the candidate list is pre-built. Construction is O(all-tables × terms) once; new-table notifications are O(terms) each.
 
