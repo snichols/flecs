@@ -3,6 +3,7 @@ package docs_test
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snichols/flecs"
 )
@@ -624,4 +625,60 @@ func TestSystems_PipelineIntrospection(t *testing.T) {
 			t.Errorf("EachSystem halted after %d calls, want 1", seen)
 		}
 	})
+}
+
+// TestSystems_RateFilters verifies the code examples in the "Rate Filters"
+// section of Systems.md: SetInterval and SetRate reduce system run frequency.
+func TestSystems_RateFilters(t *testing.T) {
+	type Tag struct{}
+
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, Tag{})
+	})
+
+	q := flecs.NewCachedQuery(w, tagID)
+
+	// SetRate(4): system fires every 4th tick.
+	rateRuns := 0
+	rateSys := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			rateRuns++
+		}
+	})
+	rateSys.SetRate(4)
+	if rateSys.GetRate() != 4 {
+		t.Errorf("GetRate() = %d, want 4", rateSys.GetRate())
+	}
+
+	for i := 0; i < 8; i++ {
+		w.Progress(1.0 / 60.0)
+	}
+	if rateRuns != 2 {
+		t.Errorf("rate=4 system ran %d times in 8 ticks, want 2", rateRuns)
+	}
+
+	// SetInterval(200ms) with dt=100ms: fires every 2nd tick.
+	rateSys.SetEnabled(false) // park the rate system
+
+	intervalRuns := 0
+	intSys := flecs.NewSystem(w, q, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			intervalRuns++
+		}
+	})
+	intSys.SetInterval(200 * time.Millisecond)
+	if intSys.GetInterval() != 200*time.Millisecond {
+		t.Errorf("GetInterval() = %v, want 200ms", intSys.GetInterval())
+	}
+
+	for i := 0; i < 6; i++ {
+		w.Progress(0.100) // 100ms each tick
+	}
+	// fires at accumulated 200ms, 400ms, 600ms → 3 fires
+	if intervalRuns != 3 {
+		t.Errorf("interval=200ms system ran %d times in 6×100ms ticks, want 3", intervalRuns)
+	}
 }

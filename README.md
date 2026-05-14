@@ -229,6 +229,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Inheritable components | `SetInheritable[T](w)` / `w.SetInheritable(cid)` — auto-promotes query terms to `Self\|Up(IsA)` so inheritor entities are matched without explicit traversal |
 | Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
 | System disabling _(v0.58.0)_ | `sys.SetEnabled(false)` / `sys.IsEnabled()` — pause/resume without removing; `RunSystem` ignores the flag |
+| Rate filters _(v0.61.0)_ | `sys.SetInterval(d)` / `sys.SetRate(n)` — run a system every N ticks or at most once per wall-clock duration; gates compose with AND semantics; counters freeze while disabled |
 | Single-system Run _(v0.58.0)_ | `RunSystem(s, dt)` — invoke one system synchronously, outside the pipeline; mutations flushed before return |
 | Pipeline introspection _(v0.58.0)_ | `r.Phases()`, `r.SystemsInPhase(phase)`, `r.EachSystem(phase, fn)` — inspect registered systems in execution order |
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
