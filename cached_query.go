@@ -120,6 +120,11 @@ type CachedQuery struct {
 	// a sparse term, for Changed() detection. Keyed by component entity index (same
 	// as sparseStorage key). Nil until first Changed() call.
 	sparseVersions map[ID]uint64
+	// skipDisabled and skipPrefab: same implicit-skip semantics as Query. Tables
+	// containing these tags are filtered out at cache-build time in tryMatchTable,
+	// so they never appear in cq.tables. This is cheaper than per-iter filtering.
+	skipDisabled bool
+	skipPrefab   bool
 }
 
 // NewCachedQuery constructs a CachedQuery over w for the given component IDs
@@ -226,6 +231,7 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 	sparseAndOnly := archetypeAndCount == 0 && dontFragmentAndCount > 0 && unionAndCount == 0
 	unionAndOnly := archetypeAndCount == 0 && dontFragmentAndCount == 0 && unionAndCount > 0
 
+	skipDisabled, skipPrefab := computeQuerySkipFlags(w, terms)
 	cq := &CachedQuery{
 		w:               w,
 		terms:           terms,
@@ -235,6 +241,8 @@ func newCachedQueryInternal(w *World, terms []Term, andIDs []ID, orGroups [][]ID
 		cascadeTermTrav: cascadeTermTrav,
 		sparseAndOnly:   sparseAndOnly,
 		unionAndOnly:    unionAndOnly,
+		skipDisabled:    skipDisabled,
+		skipPrefab:      skipPrefab,
 	}
 
 	// Initial population: check every existing table (unordered during bulk load).
@@ -520,6 +528,15 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 	// Pure-sparse and pure-union queries have no archetype requirements; their tables
 	// list stays empty. Iter() builds the driver fresh from stores each time.
 	if cq.sparseAndOnly || cq.unionAndOnly {
+		return
+	}
+	// Implicit skip: exclude tables containing Disabled or Prefab unless the
+	// query explicitly mentioned the tag in any term kind. Filtered at cache-build
+	// time so disabled/prefab tables never enter cq.tables.
+	if cq.skipDisabled && t.HasComponent(cq.w.disabledID) {
+		return
+	}
+	if cq.skipPrefab && t.HasComponent(cq.w.prefabID) {
 		return
 	}
 	// Phase 1: Check TraverseSelf And terms and Not terms (fast path, no allocation).

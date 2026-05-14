@@ -203,7 +203,22 @@ w.SetName(e, "NewName")
 
 ### Disabling
 
-> **Not yet ported in Go flecs** — entity disabling (`Enable` / `Disable`) prevents an entity from being matched by queries without deleting it. The underlying mechanism adds a `Disabled` tag. See the [feature-gap list](README.md).
+**Shipped in v0.57.0** — `DisableEntity` / `EnableEntity` / `IsDisabled` pause an entity without deleting it. Adding the `Disabled` tag causes an archetype migration; all ordinary queries silently exclude tables that contain it. The exclusion is O(1) per table (a single bit test), so a table full of disabled entities is skipped with no per-entity cost.
+
+```go
+flecs.DisableEntity(fw, e)       // adds Disabled tag; entity moves to Disabled archetype
+flecs.IsDisabled(r, e)           // → true
+flecs.EnableEntity(fw, e)        // removes Disabled tag; entity moves back
+
+// Opt-in to see disabled entities — mention Disabled in any term kind:
+q := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.With(w.Disabled()))
+// or exclude them explicitly:
+q2 := flecs.NewQueryFromTerms(w, flecs.With(posID), flecs.Without(w.Disabled()))
+```
+
+**Use case: pause without delete** — disable an enemy AI entity when it enters a dormant state. No data is lost, no handles are invalidated. Re-enable to resume normal query participation.
+
+Note: `DisableEntity` / `EnableEntity` operate on the entity's archetype-level `Disabled` tag. They are distinct from the per-component `CanToggle` `Enable[T]` / `Disable[T]` API, which flips individual toggle bits inside a table row.
 
 ---
 

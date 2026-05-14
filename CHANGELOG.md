@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.57.0 — 2026-05-14 — Phase 16.2: Disabled and Prefab built-in tags
+
+Ships the `Disabled` and `Prefab` built-in tags as a bundle, closing two entries
+from the docs/README.md feature-gap list (Phase 14.1 entity-disabling gap and
+Phase 14.5 Prefab-tag gap).
+
+### Added
+
+- **`World.Disabled() ID`** — built-in `Disabled` tag entity (index 36). Entities
+  carrying this tag are excluded from ordinary queries. Built-in entity count raised
+  to 39; user entities now start at index 40.
+- **`DisableEntity(fw *Writer, e ID)`** — adds the `Disabled` tag; idempotent.
+  Causes an archetype migration (same as any tag add); the resulting table is excluded
+  at the per-table level — O(1), no per-entity cost. Named `DisableEntity` to avoid
+  shadowing the CanToggle generic `Disable[T]`.
+- **`EnableEntity(fw *Writer, e ID)`** — removes the `Disabled` tag; no-op when not
+  disabled. Named `EnableEntity` symmetrically with `DisableEntity`.
+- **`IsDisabled(s scope, e ID) bool`** — predicate; accepts `scope` interface (works
+  in both `Read` and `Write` blocks per Phase 15.8 convention).
+- **`World.Prefab() ID`** — built-in `Prefab` tag entity (index 37). Entities carrying
+  this tag are excluded from ordinary queries. The tag is bootstrapped with `DontInherit`
+  (mirrors C `bootstrap.c:1308`) so IsA instances do not acquire it.
+- **`MarkPrefab(fw *Writer, e ID)`** — adds the `Prefab` tag; idempotent.
+- **`IsPrefab(s scope, e ID) bool`** — predicate; accepts `scope`.
+- **Query implicit skip** — `NewQuery`, `NewQueryFromTerms`, `NewCachedQuery`,
+  `NewCachedQueryFromTerms` all detect whether `Disabled` / `Prefab` are mentioned in
+  any term kind (`With`, `Without`, `Maybe`, `Or`). When not mentioned, `matchesTable`
+  / `tryMatchTable` short-circuit with a single `HasComponent` test per flag per table.
+  No synthetic Not terms are injected; the original term list is preserved for
+  `Terms()` / `TermsFull()` introspection.
+
+### Changed
+
+- **`meta_test.go`** `builtinEntityCount` updated 37 → 39.
+- **`ordered_children_test.go`** / **`with_test.go`** — Wildcard/Any index assertions
+  updated (36→38, 37→39).
+- **`isa_test.go`** — `TestIsAWorldCountBaseline` updated 37 → 39.
+- **`marshal.go`** / **`marshal_test.go`** — `Disabled` and `Prefab` added to skip-sets.
+
+### Changed (docs)
+
+- `docs/EntitiesComponents.md` § Disabling: replaced "Not yet ported" stub with
+  `DisableEntity` / `EnableEntity` / `IsDisabled` API and use-case description.
+- `docs/PrefabsManual.md` § Prefab tag: new section with `MarkPrefab` / `IsPrefab`
+  pattern and DontInherit semantics. § Not yet ported: removed Prefab-tag entry.
+- `docs/Queries.md`: new "Disabled and Prefab entities" section with opt-in examples
+  and O(1) complexity note.
+- `docs/README.md` lines 100 and 135: flipped to shipped (v0.57.0).
+- `README.md`: feature table row added.
+- `ROADMAP.md`: Shipped heading bumped to "through v0.57.0"; Phase 16.2 entry added;
+  OnTableEmpty/OnTableFill renumbered to Phase 16.3.
+
 ## v0.56.0 — 2026-05-14 — Phase 16.1: Clear, MakeAlive, SetVersion
 
 Drains three more entries from the docs/README.md feature-gap list identified

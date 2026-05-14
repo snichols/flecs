@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.56.0)
+## Shipped (through v0.57.0)
 
 The following features are available in the current release:
 
@@ -58,6 +58,7 @@ The following features are available in the current release:
 - **Union relationship trait** _(v0.54.0, Phase 15.22)_ — `SetUnion(w, relID)` / `IsUnion(scope, relID)` / `EachUnion(scope, relID, fn)`. At-most-one-target per relationship per entity, stored in a per-relationship side map (`unionStore` — dense slice + index map). Union pairs never trigger archetype transitions. Implies Exclusive. Tag-only: data-bearing `SetPair[T]` panics. `OnAdd`/`OnRemove` fire on target set, replace, and entity delete. Pure-union query iteration via `nextUnionOnly`. `CachedQuery.unionAndOnly` skips archetype tracking for all-union queries. Marshal round-trip via `union_relationship_serials` + `union_relationships` fields. Built-in entity count: 37 (unchanged); no new built-in entity; `SetUnion` registers policies at runtime.
 - **OnReplace hook** _(v0.55.0, Phase 16.0)_ — `OnReplace[T](w, fn)` / `OnReplaceID(w, id, fn)`. Fires when `Set[T]` overwrites an existing component value; receives both the previous (`old`) and incoming (`new`) value before the slot is written. Does not fire on first Set. Dispatch order on overwrite: OnReplace → column write → OnSet. Wired into archetype, sparse-only, DontFragment, pair, and deferred (`cmdModified`) paths. Deferred coalescing fires OnReplace once per surviving `cmdModified`; first write to a just-migrated slot is not a replace. Mirrors C flecs `ti->hooks.on_replace`. No `EventOnReplace` observer event.
 - **Clear / MakeAlive / SetVersion** _(v0.56.0, Phase 16.1)_ — `Clear(fw, e)` removes all components from an entity, leaving it alive; deferred coalescer support; fires `OnRemove` per component. `MakeAlive(fw, id)` claims a specific entity ID for networked ID synchronisation; panics on generation conflict or in deferred scope. `SetVersion(fw, versionedID)` overrides the generation counter (monotonic; panics on decrease or in deferred scope). Mirrors C `ecs_clear`, `ecs_make_alive`, `ecs_set_version`.
+- **Disabled + Prefab built-in tags** _(v0.57.0, Phase 16.2)_ — `DisableEntity(fw, e)` / `EnableEntity(fw, e)` / `IsDisabled(scope, e)` and `MarkPrefab(fw, e)` / `IsPrefab(scope, e)` / `w.Disabled()` / `w.Prefab()`. Ordinary queries silently exclude tables containing either tag (O(1) per-table test); opt in by mentioning the tag in any term kind. `Prefab` bootstrapped with `DontInherit` so IsA instances do not inherit it. Mirrors C `EcsDisabled` / `EcsPrefab` / `EcsTableIsDisabled` / `EcsTableIsPrefab`. Built-in entity count: 39; user entities start at index 40.
 
 ## Documentation
 
@@ -92,8 +93,8 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 Remaining observer/hook and entity gaps from the docs/README.md feature-gap list:
 
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.1 candidate.)
-- **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.2 candidate.)
-- **Custom events** — `EventOnReplace` or arbitrary user-defined event entities emitted via `ecs_emit`. (Phase 16.3 candidate.)
+- **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.3 candidate.)
+- **Custom events** — `EventOnReplace` or arbitrary user-defined event entities emitted via `ecs_emit`. (Phase 16.4 candidate.)
 - **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.4 candidate.)
 - **Yield-on-create** — observer fires for entities that already match when the observer is registered. (Phase 16.5 candidate.)
 - **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.6 candidate.)
