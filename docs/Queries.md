@@ -319,6 +319,80 @@ for it.Next() {
 }
 ```
 
+### AndFrom / OrFrom / NotFrom
+
+These operators read a *source entity's* component list **once at query construction** (snapshot) and expand it into a set of inner terms. Changes to the source entity after construction are ignored — reconstruct the query to pick them up. This deliberately diverges from upstream C flecs, which re-reads the type at every iteration (`eval.c:462`).
+
+Components marked `DontInherit` (e.g. the built-in `Prefab` and `Disabled` tags) are excluded from the expansion, matching upstream `EcsIdOnInstantiateDontInherit` filtering.
+
+| Operator | Expands to | Semantics |
+|---|---|---|
+| `AndFrom(src)` | N `With` terms | entity must have **all** of src's components |
+| `OrFrom(src)` | one OR-group of N | entity must have **at least one** of src's components |
+| `NotFrom(src)` | N `Without` terms | entity must have **none** of src's components |
+
+**Canonical use case — prefab type-lists:**
+
+```go
+type Health struct{ HP  int }
+type Speed  struct{ Val float32 }
+type AI     struct{ Behavior int }
+
+w := flecs.New()
+healthID := flecs.RegisterComponent[Health](w)
+speedID  := flecs.RegisterComponent[Speed](w)
+aiID     := flecs.RegisterComponent[AI](w)
+
+// Build a prefab template.
+var enemyTemplate flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    enemyTemplate = fw.NewEntity()
+    flecs.MarkPrefab(fw, enemyTemplate)
+    flecs.Set(fw, enemyTemplate, Health{})
+    flecs.Set(fw, enemyTemplate, Speed{})
+    flecs.Set(fw, enemyTemplate, AI{})
+})
+
+// Match everything that "looks like an enemy" (has Health+Speed+AI).
+qAnd := flecs.NewQueryFromTerms(w, flecs.AndFrom(enemyTemplate))
+
+// Match everything with at least one enemy component.
+qOr := flecs.NewQueryFromTerms(w, flecs.OrFrom(enemyTemplate))
+
+// Match everything with none of the enemy components.
+qNot := flecs.NewQueryFromTerms(w, flecs.NotFrom(enemyTemplate))
+_ = qAnd
+_ = qOr
+_ = qNot
+```
+
+**Composition with regular terms:**
+
+```go
+// Position AND all enemy components.
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.AndFrom(enemyTemplate),
+)
+_ = q
+```
+
+**Snapshot semantics note:**
+
+Unlike upstream C flecs — which re-reads `source.type` on every iteration — Go flecs snapshots the source's component list at construction. Re-construct the query after mutating the source to pick up the new expansion.
+
+**Empty source type:**
+
+| Operator | Behaviour |
+|---|---|
+| `AndFrom(empty)` | vacuous truth — no requirements added |
+| `OrFrom(empty)` | zero results (empty disjunction = false) |
+| `NotFrom(empty)` | vacuous truth — no exclusions added |
+
+This diverges from upstream C, which skips the empty-type operator entirely (`compiler_term.c:1231: ctx->skipped++`). Go flecs follows set-theoretic semantics where an empty `OrFrom` is an empty disjunction and therefore false.
+
+**Pair IDs in the source's type are included** in expansion. A source entity that is a child of a parent (`(ChildOf, parent)`) will include that pair in the expansion, requiring matched entities to also be children of that parent.
+
 ---
 
 ## Iteration
@@ -1228,7 +1302,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Equality operators** — ✅ **shipped in v0.76.0** via [`IsEntity`](../query.go) / [`NotEntity`](../query.go) / [`NameMatches`](../query.go). See [§ Equality and name-match filters](#equality-and-name-match-filters) above. (`EcsPredLookup` / `$this == "name"` is a deliberate non-goal — use `World.Lookup(path)` + `IsEntity`.)
 
-**AndFrom / OrFrom / NotFrom** — operators that expand a component-list entity into implicit terms. Not yet ported in Go flecs.
+**AndFrom / OrFrom / NotFrom** — ✅ **shipped in v0.77.0** via [`AndFrom`](../query.go) / [`OrFrom`](../query.go) / [`NotFrom`](../query.go). See [§ AndFrom / OrFrom / NotFrom](#andfrom--orfrom--notfrom) above. Snapshot-at-construction semantics; diverges deliberately from upstream's live re-read (see CHANGELOG v0.77.0).
 
 **Query scopes** — ✅ **shipped in v0.75.0** via [`WithoutScope`](../query.go) / `*ScopeBuilder`. See [§ Query scopes](#query-scopes) above.
 

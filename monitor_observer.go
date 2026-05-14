@@ -58,7 +58,7 @@ func Monitor(w *World, terms []Term, fn func(fw *Writer, e ID, entered bool)) *O
 func MonitorWithOptions(w *World, terms []Term, opts ObserverOptions, fn func(fw *Writer, e ID, entered bool)) *Observer {
 	w.checkExclusiveAccessWrite()
 
-	sorted, _, orGroups := validateAndSortTerms(w, "flecs: Monitor", terms)
+	sorted, _, orGroups, _ := validateAndSortTerms(w, "flecs: Monitor", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, sorted)
 
 	// Sparse mode: any And/Not term that references a non-archetype component

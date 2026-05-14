@@ -115,7 +115,7 @@ within a table.
 
 - `Each1`/`Each2`/`Each3`/`Each4` — ergonomic lambda iteration for 1–4 components.
 - `NewQuery` + `Iter` + `Field[T]` — pull-style iteration for dynamic AND-only term lists.
-- `NewQueryFromTerms` — structured terms with `With`, `Without`, `Maybe`, `Or`, `WithoutScope`, `IsEntity`, `NotEntity`, `NameMatches` (NOT / Optional / OR / scope / equality / name-match support).
+- `NewQueryFromTerms` — structured terms with `With`, `Without`, `Maybe`, `Or`, `WithoutScope`, `IsEntity`, `NotEntity`, `NameMatches`, `AndFrom`, `OrFrom`, `NotFrom` (NOT / Optional / OR / scope / equality / name-match / type-list expansion support).
 - `NewCachedQuery` / `NewCachedQueryFromTerms` — persistent queries that incrementally track new tables.
 
 #### Cascade for parent-before-child systems

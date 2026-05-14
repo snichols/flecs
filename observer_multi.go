@@ -21,7 +21,7 @@ import (
 func ObserveQuery(w *World, event EventKind, terms []Term, fn func(fw *Writer, e ID, ptr unsafe.Pointer)) *Observer {
 	validateMultiTermTrigger("flecs: ObserveQuery", terms)
 	triggerID := terms[0].ID
-	sorted, _, orGroups := validateAndSortTerms(w, "flecs: ObserveQuery", terms)
+	sorted, _, orGroups, _ := validateAndSortTerms(w, "flecs: ObserveQuery", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, sorted)
 	return observeQueryCore(w, ObserverOptions{}, triggerID, []EventKind{event}, sorted, orGroups,
 		skipDisabled, skipPrefab,
@@ -78,7 +78,7 @@ func ObserveQueryEvents(w *World, events []EventKind, terms []Term, fn func(fw *
 func ObserveQueryWithOptions(w *World, opts ObserverOptions, events []EventKind, terms []Term, fn func(fw *Writer, event EventKind, e ID, ptr unsafe.Pointer)) *Observer {
 	validateMultiTermTrigger("flecs: ObserveQueryWithOptions", terms)
 	triggerID := terms[0].ID
-	sorted, _, orGroups := validateAndSortTerms(w, "flecs: ObserveQueryWithOptions", terms)
+	sorted, _, orGroups, _ := validateAndSortTerms(w, "flecs: ObserveQueryWithOptions", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, sorted)
 	return observeQueryCore(w, opts, triggerID, events, sorted, orGroups, skipDisabled, skipPrefab, fn)
 }
@@ -101,7 +101,7 @@ func validateMultiTermFilter(w *World, caller string, triggerID ID, filterTerms 
 	allTerms = append(allTerms, With(triggerID))
 	allTerms = append(allTerms, filterTerms...)
 	var andIDs []ID
-	sortedTerms, andIDs, orGroups = validateAndSortTerms(w, caller, allTerms)
+	sortedTerms, andIDs, orGroups, _ = validateAndSortTerms(w, caller, allTerms)
 	_ = andIDs
 	skipDisabled, skipPrefab = computeQuerySkipFlags(w, sortedTerms)
 	return
