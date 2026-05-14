@@ -159,7 +159,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 - **Observer propagation / forwarding** — events propagate along relationship edges (e.g., `OnSet(Position)` on a parent notifies children inheriting `Position`). not yet ported in Go flecs.
 - **Monitor observers** — ✅ **shipped in v0.65.0** via `Monitor(w, terms, fn)` / `MonitorWithOptions(w, terms, opts, fn)`. Fires `fn(fw, e, entered bool)` on query-match entry/exit; multi-term; yield_existing; supports DontFragment and Union terms. See [ObserversManual.md § Monitor Observers](ObserversManual.md#monitor-observers).
 - **Observer disabling** — pause an observer without removing it (analogous to system disabling). ✅ **shipped in v0.60.0** via `(*Observer).SetEnabled(bool)` / `(*Observer).IsEnabled() bool`. See [ObserversManual.md § Disabling an Observer](ObserversManual.md#disabling-an-observer).
-- **Fixed-source observer terms** — observer terms that match a component on a specific entity (not `$this`). not yet ported in Go flecs.
+- **Fixed-source observer terms** — observer terms that match a component on a specific entity (not `$this`). ✅ **shipped in v0.67.0** via `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions`. Chain with `WithYieldExisting()` using `.AndSource(e)`. See [ObserversManual.md § Fixed-Source Observer Terms](ObserversManual.md#fixed-source-observer-terms).
 
 ### Additional gaps discovered in Phase 14.8 (ComponentTraits port)
 

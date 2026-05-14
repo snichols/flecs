@@ -6,10 +6,48 @@ import (
 	"unsafe"
 )
 
-// ObserverOptions carries optional configuration for [ObserveWithOptions].
-// Construct via [WithYieldExisting] or use the zero value for no options.
+// ObserverOptions carries optional configuration for [ObserveWithOptions],
+// [ObserveIDWithOptions], and [ObserveEventWithOptions].
+// Construct via [WithYieldExisting] or [WithSource]; use the zero value for no options.
 type ObserverOptions struct {
 	yieldExisting bool
+	source        ID // 0 = any-entity (default); non-zero = fixed source
+}
+
+// WithSource returns an option that constrains an observer to fire only when
+// the event lands on the named entity. Compose with the events list passed to
+// ObserveWithOptions / ObserveIDWithOptions / ObserveEventWithOptions.
+//
+// Panics if e == 0: the zero ID is never a valid entity.
+// WithSource with a stale (deleted) entity ID registers successfully but never
+// fires — subsequent emits for the dead entity simply do not reach the observer.
+//
+// Dispatch order: fixed-source observers fire AFTER any-entity observers
+// registered for the same (component, event) key. Within each list, registration
+// order is preserved.
+//
+// To combine WithSource with WithYieldExisting, chain using AndSource:
+//
+//	WithYieldExisting().AndSource(playerID)
+func WithSource(e ID) ObserverOptions {
+	if e == 0 {
+		panic("flecs: WithSource: source entity ID must be non-zero; use a valid entity ID")
+	}
+	return ObserverOptions{source: e}
+}
+
+// AndSource returns a copy of o with the fixed-source constraint set to e.
+// Use to combine WithYieldExisting with a fixed source:
+//
+//	ObserveWithOptions[T](w, WithYieldExisting().AndSource(playerID), events, fn)
+//
+// Panics if e == 0.
+func (o ObserverOptions) AndSource(e ID) ObserverOptions {
+	if e == 0 {
+		panic("flecs: AndSource: source entity ID must be non-zero; use a valid entity ID")
+	}
+	o.source = e
+	return o
 }
 
 // WithYieldExisting returns options that retroactively fire the observer for
@@ -34,10 +72,10 @@ func WithYieldExisting() ObserverOptions {
 }
 
 // ObserveWithOptions registers fn as an observer for component T on the given
-// events, with additional options (e.g. [WithYieldExisting]). fn receives the
-// EventKind that triggered it, enabling a single callback to handle multiple
-// event kinds. Returns a single *Observer handle; Unsubscribe cancels all
-// subscriptions.
+// events, with additional options (e.g. [WithYieldExisting], [WithSource]).
+// fn receives the EventKind that triggered it, enabling a single callback to
+// handle multiple event kinds. Returns a single *Observer handle; Unsubscribe
+// cancels all subscriptions.
 //
 // If opts carries [WithYieldExisting], the sweep runs synchronously before
 // ObserveWithOptions returns: for each event in {OnAdd, OnSet} that is in the
@@ -45,9 +83,21 @@ func WithYieldExisting() ObserverOptions {
 // and Prefab) receive a callback invocation. Panics if yieldExisting is true
 // and the events list contains only OnRemove.
 //
+// If opts carries [WithSource], the observer fires only when the event lands on
+// the named entity. Panics if any event in events is EventOnTableCreate (tables
+// have no source entity semantics).
+//
 // The *Writer passed to fn is a non-nil Writer scoped to the current world.
 func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKind, fn func(fw *Writer, event EventKind, e ID, v T)) *Observer {
 	w.checkExclusiveAccessWrite()
+
+	if opts.source != 0 {
+		for _, ev := range events {
+			if ev == EventOnTableCreate {
+				panic("flecs: ObserveWithOptions: WithSource is not compatible with EventOnTableCreate; tables have no source entity semantics")
+			}
+		}
+	}
 
 	if opts.yieldExisting {
 		onlyRemove := true
@@ -81,7 +131,7 @@ func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKin
 			}
 			fn(fw, ev, e, v)
 		}
-		node := w.addObserverNode(id, eventKindToEntity(w, ev), callback)
+		node := w.addObserverNode(id, eventKindToEntity(w, ev), opts.source, callback)
 		node.observer = obs
 		obs.nodes = append(obs.nodes, node)
 
@@ -99,16 +149,26 @@ func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKin
 	// Yield existing: fire the callback directly (not via dispatchObservers)
 	// for each entity that already carries the component.
 	if opts.yieldExisting && obs.enabled && len(sweepCallbacks) > 0 {
-		tables := w.compIndex.TablesFor(id)
-		for _, sc := range sweepCallbacks {
-			for _, t := range tables {
-				if t.HasComponent(w.disabledID) || t.HasComponent(w.prefabID) {
-					continue
+		if opts.source != 0 {
+			// Fixed-source: single entity check, O(1).
+			ptr, has, skip := entityRawPtrForYield(w, opts.source, id)
+			if has && !skip {
+				for _, sc := range sweepCallbacks {
+					sc.callback(&w.writeCapability, opts.source, ptr)
 				}
-				entities := t.Entities()
-				for i, e := range entities {
-					ptr := t.Get(i, id)
-					sc.callback(&w.writeCapability, e, ptr)
+			}
+		} else {
+			tables := w.compIndex.TablesFor(id)
+			for _, sc := range sweepCallbacks {
+				for _, t := range tables {
+					if t.HasComponent(w.disabledID) || t.HasComponent(w.prefabID) {
+						continue
+					}
+					entities := t.Entities()
+					for i, e := range entities {
+						ptr := t.Get(i, id)
+						sc.callback(&w.writeCapability, e, ptr)
+					}
 				}
 			}
 		}

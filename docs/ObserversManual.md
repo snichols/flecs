@@ -880,7 +880,45 @@ C flecs propagates events along relationship edges (e.g., an `OnSet(Position)` o
 
 ### Fixed-Source Observer Terms
 
-C flecs observers can match a component on a specific entity (not `$this`). Not ported to Go flecs — all `Observe[T]` subscriptions match on any entity.
+✅ **Shipped in v0.67.0** via `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions`.
+
+A fixed-source observer fires only when the event lands on a specific named entity rather than any entity. Common use cases: watching the `Player` singleton, tracking a global `GameTime` entity, or reacting when a specific UI widget's state changes.
+
+```go
+player := ...  // entity ID obtained earlier
+
+// Register: fires only when Position is set on player, not on any other entity.
+obs := flecs.ObserveWithOptions[Position](w,
+    flecs.WithSource(player),
+    []flecs.EventKind{flecs.EventOnSet},
+    func(fw *flecs.Writer, _ flecs.EventKind, e flecs.ID, pos Position) {
+        fmt.Printf("player position changed to %+v\n", pos)
+    },
+)
+
+// Combine with yield_existing to also fire immediately if player already has Position:
+obs = flecs.ObserveWithOptions[Position](w,
+    flecs.WithYieldExisting().AndSource(player),
+    []flecs.EventKind{flecs.EventOnSet},
+    func(fw *flecs.Writer, _ flecs.EventKind, e flecs.ID, pos Position) { ... },
+)
+```
+
+#### Semantics
+
+- **Registration-time panics**: `WithSource(0)` panics (zero ID is never valid). `WithSource` combined with `EventOnTableCreate` panics (tables are not entities).
+- **Stale entity IDs**: Registering with a deleted entity ID succeeds silently and the observer simply never fires — consistent with other stale-ID semantics throughout the API.
+- **Dispatch order**: Any-entity observers fire **before** fixed-source observers for the same `(component, event)` key. Within each group, registration order is preserved.
+- **Disabled / Prefab interaction**: The check is against the named source entity's archetype table. If the source entity carries the `Disabled` or `Prefab` tag, it is skipped in `yield_existing` (mirroring upstream C behavior where the affected entity's table flags gate dispatch). Runtime dispatch is not affected — use `(*Observer).SetEnabled` to pause a fixed-source observer.
+- **yield_existing + WithSource**: O(1) — only the named entity is checked; no table walk. Fires once iff the source holds the component (and is not Disabled/Prefab) at registration time.
+- **Custom events**: `ObserveEventWithOptions(w, eventID, WithSource(player), fn)` restricts the observer to `Emit` calls that name `player` as the entity.
+
+#### Non-goals (v0.67.0)
+
+- Multi-term observers with mixed `$this` / fixed-source terms are out of scope.
+- Fixed-source for monitor observers is out of scope.
+- Automatic cleanup when the named source is deleted is out of scope.
+- Traversal modifiers on the source (e.g. `Up(ChildOf)`) are out of scope.
 
 ---
 
@@ -894,8 +932,12 @@ C flecs observers can match a component on a specific entity (not `$this`). Not 
 | `Observe[T](w, event, fn)` | Subscribe typed observer; returns `*Observer` |
 | `ObserveID(w, id, event, fn)` | Subscribe raw-ID observer; returns `*Observer` |
 | `Observe2[T](w, events, fn)` | Subscribe to multiple events; single `*Observer` handle |
-| `ObserveWithOptions[T](w, opts, events, fn)` | Subscribe with options (e.g. `WithYieldExisting()`); returns `*Observer` |
+| `ObserveWithOptions[T](w, opts, events, fn)` | Subscribe with options (e.g. `WithYieldExisting()`, `WithSource(e)`); returns `*Observer` |
+| `ObserveIDWithOptions(w, id, opts, events, fn)` | Raw-ID options variant; accepts `WithSource(e)` |
+| `ObserveEventWithOptions(w, eventID, opts, fn)` | Custom-event options variant; accepts `WithSource(e)` |
 | `WithYieldExisting()` | Option: retroactively fire for all existing matching entities at registration |
+| `WithSource(e ID)` | Option: restrict observer to fire only for the named entity |
+| `(ObserverOptions).AndSource(e ID)` | Chain source onto an existing options value (e.g. `WithYieldExisting().AndSource(player)`) |
 | `(*Observer).Unsubscribe()` | Cancel subscription (idempotent; safe from callback) |
 | `(*Observer).SetEnabled(bool)` | Enable or disable observer dispatch; default true |
 | `(*Observer).IsEnabled() bool` | Report whether observer is currently enabled |

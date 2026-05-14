@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.66.0)
+## Shipped (through v0.67.0)
 
 The following features are available in the current release:
 
@@ -68,6 +68,7 @@ The following features are available in the current release:
 - **Custom pipeline phases + DependsOn ordering** _(v0.64.0, Phase 16.9)_ — `NewPhase(w, name)`, `(*Phase).DependsOn(other *Phase)`, `(*Phase).SetEnabled(bool)`, `(*Phase).IsEnabled() bool`, `(*Phase).Name() string`. `(*System).DependsOn(other *System)` for within-phase ordering. Lazy topological sort via Kahn's algorithm. Built-in phase accessors now return `*Phase`; `NewSystemInPhase` takes `*Phase`. Built-in entity count: 46; user entities now start at index 46.
 - **Monitor observers** _(v0.65.0, Phase 16.10)_ — `Monitor(w, terms, fn)` / `MonitorWithOptions(w, terms, opts, fn)`. Fires `fn(fw, e, entered bool)` when an entity transitions into (entered=true) or out of (entered=false) a multi-term query match. Hybrid match-state tracking: table-pair check for archetype-only monitors (O(monitors×terms) per migration, no per-entity state); per-entity matched set for sparse/DontFragment/Union monitors. `WithYieldExisting()` sweeps existing entities at registration. Disabled monitor semantics: no catch-up on re-enable. Entity deletion and `Clear` fire exit events before component removal. Unsubscribe via `Observer.Unsubscribe`. Built-in `EventMonitor` entity at index 46; user entities now start at index 47. Closes `docs/README.md` monitor-observers gap entry.
 - **Query groups** _(v0.66.0, Phase 16.11)_ — `WithGroupBy(compID, groupFn)` partitions a cached query's matched tables into labelled groups; `IterGroup(id)` jumps to a group in O(1); `Groups()` returns sorted group IDs. `AndGroupBy`/`AndOrderBy` chaining methods for combining both options. Composes with `WithOrderBy`: groups outer, sort inner. Lazy re-group on ChangeCount change or new-table addition. `Cascade` retains its dedicated `sortByCascadeDepth` path; refactor deferred. Closes `docs/README.md` query-groups gap entry.
+- **Fixed-source observer terms** _(v0.67.0, Phase 16.12)_ — `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions` restricts an observer to fire only when the event lands on the named entity. Dispatch table extended from `map[observerKey][]*observerNode` to `map[observerKey]*observerBucket` with lazy `fixedSource map[ID][]*observerNode`; any-entity path unchanged. `yield_existing + WithSource` is O(1). `ObserveIDWithOptions` new for raw-ID / pair IDs; `ObserveEventWithOptions` new for custom events. Composes with `WithYieldExisting()` via `.AndSource(e)`. Closes `docs/README.md` fixed-source observer gap entry.
 
 ## Documentation
 
@@ -105,8 +106,7 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.9 candidate.)
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
 - **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.9 candidate.)
-- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.12 candidate.)
-- **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.12 candidate.)
+- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.13 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
 - **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).

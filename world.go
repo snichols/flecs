@@ -46,7 +46,7 @@ type World struct {
 	tables               map[string]*table.Table         // sigKey(sorted []ID) → table
 	empty                *table.Table                    // canonical empty-signature table for new entities
 	compIndex            *componentindex.Index           // reverse map: component ID → tables containing it
-	observers            map[observerKey][]*observerNode // lazily allocated; keyed by (id, event)
+	observers            map[observerKey]*observerBucket // lazily allocated; keyed by (id, event)
 	cachedQueries        []*CachedQuery                  // lazily allocated; notified on new table creation
 	systems              []*System                       // lazily allocated; compacted in NewSystem
 	childOfID            ID                              // built-in ChildOf relationship entity (index 1)
