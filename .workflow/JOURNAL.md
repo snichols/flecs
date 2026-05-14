@@ -14,3 +14,7 @@ Coverage requirements met. Fixed DontFragment coalescer bug in cmd_queue.go (bat
 
 Fixed 3 golangci-lint violations in coverage_boost_test.go: replaced bare recover() with _ = recover() on lines 124 and 165 (errcheck), and ran gofmt to fix formatting on line 605. All other requirements already satisfied from prior iterations.
 
+## iterate iteration 5 (2026-05-13)
+
+Fixed the only remaining verify gate gap: updated docs/README.md:165 to flip the DontFragment entry from "not yet ported in Go flecs" to shipped in v0.53.0, with API triad (SetDontFragment/IsDontFragment/w.DontFragment) and a link to ComponentTraits.md. All other acceptance criteria were already satisfied from prior iterations.
+
