@@ -87,16 +87,29 @@ func eventKindToEntity(w *World, ev EventKind) ID {
 	}
 }
 
+// multiTermFilter holds the filter-term snapshot for multi-term observer nodes.
+// nil on single-term nodes — the nil-check in dispatchObservers is the only
+// overhead paid by ordinary observers.
+type multiTermFilter struct {
+	filterTerms    []Term
+	filterOrGroups [][]ID
+	skipDisabled   bool
+	skipPrefab     bool
+	sparseMode     bool // true if any term references DontFragment/Union/Sparse storage
+}
+
 // observerNode holds the internal state of one observer subscription.
 // removed is set to true by Unsubscribe; the node is skipped on the next
 // dispatch and compacted lazily on the next registration for the same key.
 // observer is a back-pointer to the owning Observer handle; used by
 // dispatchObservers to consult the enabled flag without a separate map lookup.
+// multiFilter is non-nil for multi-term observers; nil for single-term observers.
 type observerNode struct {
-	key      observerKey
-	callback func(fw *Writer, e ID, ptr unsafe.Pointer)
-	observer *Observer
-	removed  bool
+	key         observerKey
+	callback    func(fw *Writer, e ID, ptr unsafe.Pointer)
+	observer    *Observer
+	multiFilter *multiTermFilter
+	removed     bool
 }
 
 // Observer is an opaque handle returned by Observe[T], ObserveID, Observe2[T],
@@ -402,11 +415,19 @@ func (w *World) dispatchObservers(id ID, eventEntity ID, e ID, ptr unsafe.Pointe
 		if n.removed || (n.observer != nil && !n.observer.enabled) {
 			continue
 		}
+		// Multi-term filter: evaluate filter terms before firing.
+		// e==0 is the custom-event-with-no-entity case: skip filter and fire unconditionally.
+		if n.multiFilter != nil && e != 0 && !entityMatchesTerms(w, n.multiFilter.filterTerms, n.multiFilter.filterOrGroups, e) {
+			continue
+		}
 		n.callback(&w.writeCapability, e, ptr)
 	}
 	if bucket.fixedSource != nil {
 		for _, n := range bucket.fixedSource[e] {
 			if n.removed || (n.observer != nil && !n.observer.enabled) {
+				continue
+			}
+			if n.multiFilter != nil && e != 0 && !entityMatchesTerms(w, n.multiFilter.filterTerms, n.multiFilter.filterOrGroups, e) {
 				continue
 			}
 			n.callback(&w.writeCapability, e, ptr)

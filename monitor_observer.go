@@ -223,6 +223,113 @@ func monitorMatchesTable(w *World, m *monitorObserver, t *table.Table) bool {
 	return true
 }
 
+// termsMatchTable returns true if archetype table t satisfies the given terms and OR-groups.
+// DontFragment and Union terms are skipped (they never appear in the archetype type).
+// Implicit Disabled/Prefab exclusion is applied when skipDisabled/skipPrefab is set.
+// This is a generalized form of monitorMatchesTable that operates on raw terms rather
+// than a monitorObserver struct.
+func termsMatchTable(w *World, terms []Term, orGroups [][]ID, skipDisabled, skipPrefab bool, t *table.Table) bool {
+	if t == nil {
+		return false
+	}
+	if skipDisabled && t.HasComponent(w.disabledID) {
+		return false
+	}
+	if skipPrefab && t.HasComponent(w.prefabID) {
+		return false
+	}
+	for _, term := range terms {
+		switch term.Kind {
+		case TermAnd:
+			if term.DontFragment || term.Union {
+				continue // not in archetype; skip for table-level check
+			}
+			if isWildcardTerm(w, term.ID) {
+				if !tableHasWildcardMatch(w, t, term.ID) {
+					return false
+				}
+			} else if !t.HasComponent(term.ID) {
+				return false
+			}
+		case TermNot:
+			if term.DontFragment || term.Union {
+				continue // not in archetype
+			}
+			if isWildcardTerm(w, term.ID) {
+				if tableHasWildcardMatch(w, t, term.ID) {
+					return false
+				}
+			} else if t.HasComponent(term.ID) {
+				return false
+			}
+		}
+	}
+	for _, group := range orGroups {
+		matched := false
+		for _, id := range group {
+			if t.HasComponent(id) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// entityMatchesTerms evaluates the full term set for entity e.
+// This is a generalized form of entityMatchesMonitorExcluding without the excludeID
+// complication; use it where events fire after storage changes (no in-flight removal).
+// Wildcard pair terms (e.g. With(MakePair(R, Wildcard))) are handled via
+// tableHasWildcardMatch on the entity's archetype table.
+func entityMatchesTerms(w *World, terms []Term, orGroups [][]ID, e ID) bool {
+	rec := w.index.Get(e)
+	for _, term := range terms {
+		switch term.Kind {
+		case TermAnd:
+			if isWildcardTerm(w, term.ID) {
+				if rec == nil || rec.Table == nil || !tableHasWildcardMatch(w, rec.Table, term.ID) {
+					return false
+				}
+			} else if !entityHasComponentForMonitor(w, e, term) {
+				return false
+			}
+		case TermNot:
+			if isWildcardTerm(w, term.ID) {
+				if rec != nil && rec.Table != nil && tableHasWildcardMatch(w, rec.Table, term.ID) {
+					return false
+				}
+			} else if entityHasComponentForMonitor(w, e, term) {
+				return false
+			}
+			// TermOptional: no effect on matching.
+		}
+	}
+	// OR-groups: at least one ID per group must be present.
+	for _, group := range orGroups {
+		matched := false
+		for _, id := range group {
+			if rec != nil && rec.Table != nil && rec.Table.HasComponent(id) {
+				matched = true
+				break
+			}
+			iIdx := ID(id.Index())
+			if ss, ok := w.sparseStorage[iIdx]; ok {
+				if _, has := ss.index[e.Index()]; has {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
 // entityHasComponentForMonitor reports whether entity e currently has the
 // component described by term, consulting the appropriate storage:
 //   - Union pair: union store (active target must match term's second ID)

@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.69.0)
+## Shipped (through v0.70.0)
 
 The following features are available in the current release:
 
@@ -71,6 +71,7 @@ The following features are available in the current release:
 - **Fixed-source observer terms** _(v0.67.0, Phase 16.12)_ — `WithSource(e ID)` option on `ObserveWithOptions[T]` / `ObserveIDWithOptions` / `ObserveEventWithOptions` restricts an observer to fire only when the event lands on the named entity. Dispatch table extended from `map[observerKey][]*observerNode` to `map[observerKey]*observerBucket` with lazy `fixedSource map[ID][]*observerNode`; any-entity path unchanged. `yield_existing + WithSource` is O(1). `ObserveIDWithOptions` new for raw-ID / pair IDs; `ObserveEventWithOptions` new for custom events. Composes with `WithYieldExisting()` via `.AndSource(e)`. Closes `docs/README.md` fixed-source observer gap entry.
 - **Runtime dynamic component registration** _(v0.68.0, Phase 16.13)_ — `RegisterDynamicComponent(fw, name, size, align) ID` / `RegisterDynamicComponentWithMarshaler`. Dynamic components store opaque bytes (size+alignment at registration, no Go type) and route through the same archetype / sparse / DontFragment machinery as typed components. Raw-pointer API: `GetIDPtr` / `SetIDPtr` / `EachByID`. Lifecycle hooks: `OnAddByID` / `OnSetByID` / `OnRemoveByID`. JSON: base64 by default; custom marshal/unmarshal hooks override. Internal: `TypeInfo.Type == nil` sentinel; `reflect.ArrayOf([size]byte)` synthesized backing type; deferred `SetIDPtr` routes through `cmdSetByID` arena. Closes `docs/README.md` dynamic component gap entry.
 - **Prefab hierarchies + slots** _(v0.69.0, Phase 16.14)_ — `AddID(e, MakePair(w.IsA(), prefab))` now replicates the prefab's full child subtree onto the instance (two-pass: pre-allocate all instance IDs, then copy components with same-subtree cross-reference rewriting). `SlotOf` relationship (index 47, bootstrapped Exclusive+Relationship+PairIsTag): a prefab child with `(SlotOf, prefab)` causes `(prefabChild, instanceChild)` to be added to the instance root. `GetPairTarget(scope, inst, prefabChild)` resolves the slot in O(1). `w.SlotOf()` returns the built-in entity. Nested-slot and prefab-of-prefab instantiation deferred. Closes `docs/README.md` prefab hierarchies and prefab slots gap entries.
+- **Multi-term observers** _(v0.70.0, Phase 16.15)_ — `ObserveQuery(w, event, terms, fn)` / `ObserveQueryID` / `ObserveQueryEvents` / `ObserveQueryWithOptions`. The first term is the trigger (dispatch key); remaining terms are filter terms evaluated per-entity at dispatch time via `entityMatchesTerms`. Supports TermAnd / TermNot / TermOr / wildcard pairs / DontFragment / Sparse triggers. `observerNode` extended with `*multiTermFilter` (nil for single-term observers; zero overhead on existing observers). `dispatchObservers` runs filter before callback, short-circuits on first fail. `yield_existing` sweeps tables via `termsMatchTable`, per-entity via `entityMatchesTerms` in sparseMode. `WithSource` + multi-term: O(1) fixed-source check. Critical fix: `rec.Table` / `rec.Row` updated before `fireOnAdd` in `commitBatch` and `migrate` so multi-term filters see the fully-migrated entity state at dispatch time. Closes `docs/README.md` term-set observer filters gap entry.
 
 ## Documentation
 
@@ -107,7 +108,7 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **OnTableDelete event** — fires when a table is reclaimed. Requires implementing table-reclamation infrastructure first (`delete(w.tables, ...)` is currently never called). (Phase 16.9 candidate.)
 - **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.9 candidate.)
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
-- **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.9 candidate.)
+- ~~**Multi-term observers**~~ — ✅ shipped in v0.70.0 (Phase 16.15).
 - **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.13 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)

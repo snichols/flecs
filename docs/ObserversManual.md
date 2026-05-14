@@ -834,6 +834,129 @@ Monitors use a hybrid match-state tracking strategy:
 
 ---
 
+## Multi-Term Observers {#multi-term-observers}
+
+**Shipped in v0.70.0.**
+
+A multi-term observer fires when a trigger component event fires **and** the entity passes all additional filter terms. This is the observer equivalent of a query filter: you subscribe to a component event but only react when the entity matches a broader set of conditions.
+
+### Basic Usage
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+velID := flecs.RegisterComponent[Velocity](w)
+
+// Fires when Position is set, but only if the entity also has Velocity.
+obs := flecs.ObserveQuery(w, flecs.EventOnSet,
+    []flecs.Term{
+        flecs.With(posID),   // trigger term — must be first, must be TermAnd
+        flecs.With(velID),   // filter term — entity must also have Velocity
+    },
+    func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) {
+        pos := *(*Position)(ptr)
+        fmt.Printf("entity %v moved to %+v\n", e, pos)
+    },
+)
+defer obs.Unsubscribe()
+```
+
+The **first term** is always the trigger: it determines which `(component, event)` pair dispatches the observer. The remaining terms are filters evaluated per-entity at dispatch time. Only if all filters pass does the callback fire.
+
+### Term Kinds
+
+All term kinds supported by queries work as filter terms:
+
+| Term | Meaning |
+|------|---------|
+| `flecs.With(id)` | Entity must have the component / tag |
+| `flecs.Without(id)` | Entity must **not** have the component / tag |
+| `flecs.Or(id1), flecs.Or(id2)` | Entity must have at least one of the consecutive `Or` terms |
+| `flecs.With(flecs.MakePair(R, Wildcard))` | Entity must have **any** pair with relation R |
+
+```go
+frozenID := flecs.RegisterComponent[Frozen](w)
+childOfAny := flecs.MakePair(w.ChildOf(), w.Wildcard())
+
+// Fires on Position set, entity not Frozen, and entity has some parent.
+obs := flecs.ObserveQuery(w, flecs.EventOnSet,
+    []flecs.Term{
+        flecs.With(posID),
+        flecs.Without(frozenID),
+        flecs.With(childOfAny),
+    },
+    func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) { ... },
+)
+```
+
+### Multi-Event Variant
+
+`ObserveQueryEvents` subscribes to multiple events at once. The callback receives the `EventKind` that fired:
+
+```go
+obs := flecs.ObserveQueryEvents(w,
+    []flecs.EventKind{flecs.EventOnAdd, flecs.EventOnSet, flecs.EventOnRemove},
+    []flecs.Term{flecs.With(posID), flecs.With(velID)},
+    func(fw *flecs.Writer, ev flecs.EventKind, e flecs.ID, ptr unsafe.Pointer) {
+        switch ev {
+        case flecs.EventOnAdd:    fmt.Println("added")
+        case flecs.EventOnSet:    fmt.Println("set")
+        case flecs.EventOnRemove: fmt.Println("removed")
+        }
+    },
+)
+```
+
+### Options Variant
+
+`ObserveQueryWithOptions` accepts `ObserverOptions` for additional control:
+
+```go
+// WithYieldExisting: fire for entities that already match at registration time.
+obs := flecs.ObserveQueryWithOptions(w,
+    flecs.WithYieldExisting(),
+    []flecs.EventKind{flecs.EventOnSet},
+    []flecs.Term{flecs.With(posID), flecs.With(velID)},
+    func(fw *flecs.Writer, _ flecs.EventKind, e flecs.ID, ptr unsafe.Pointer) { ... },
+)
+
+// WithSource: fire only for a specific entity, with additional filter terms.
+obs = flecs.ObserveQueryWithOptions(w,
+    flecs.WithSource(playerID),
+    []flecs.EventKind{flecs.EventOnSet},
+    []flecs.Term{flecs.With(posID), flecs.Without(frozenID)},
+    func(fw *flecs.Writer, _ flecs.EventKind, e flecs.ID, ptr unsafe.Pointer) { ... },
+)
+```
+
+### Raw-ID Trigger Variant
+
+`ObserveQueryID` separates the trigger ID from the filter terms. Use this when the trigger is a pair or raw ID that is inconvenient to express as `terms[0]`:
+
+```go
+pairID := flecs.MakePair(velocityID, someRelID)
+
+obs := flecs.ObserveQueryID(w, pairID, flecs.EventOnSet,
+    []flecs.Term{flecs.With(posID)}, // filter only; trigger is pairID
+    func(fw *flecs.Writer, e flecs.ID, ptr unsafe.Pointer) { ... },
+)
+```
+
+### DontFragment / Sparse Terms
+
+Filter terms referencing DontFragment or Sparse (Union) components are evaluated per-entity at dispatch time — the same path as DontFragment-mode queries. The trigger can also be a sparse/DontFragment component.
+
+### Semantics
+
+- **Trigger must be TermAnd**: `terms[0].Kind` must be `TermAnd`. Any other kind panics at registration time.
+- **At least one term required**: `len(terms) == 0` panics.
+- **Short-circuit evaluation**: the first failing filter term skips the callback; remaining terms are not evaluated.
+- **Dispatch order**: Multi-term observers fire in registration order, after any single-term observers for the same trigger, as part of the same `dispatchObservers` loop.
+- **Re-entry safety**: multi-term observer callbacks run in deferred mode (like all observers); structural mutations inside the callback are queued and applied after dispatch.
+- **yield_existing + OnRemove-only**: panics at registration time — there are no "existing removed" entities.
+- **yield_existing skips Disabled/Prefab**: entities in a table tagged `Disabled` or `Prefab` are not yielded.
+
+---
+
 ## Not Yet Ported in Go flecs
 
 The following features from C flecs are not yet available in the Go port. They are documented here so you know where the boundaries are.
@@ -860,7 +983,7 @@ C flecs can fire events when an archetype table transitions between empty and no
 
 ### Term-Set Observer Filters (Multi-Term Observers)
 
-C flecs observers can match a query with multiple terms (e.g., "fire when Position is set, but only if the entity also has Velocity"). Go flecs `Observe[T]` and `Observe2[T]` subscribe to a single component at a time. `ObserveID` also covers one component. There is no multi-term observer API.
+✅ **Shipped in v0.70.0.** See [Multi-Term Observers](#multi-term-observers) above for the `ObserveQuery` / `ObserveQueryID` / `ObserveQueryEvents` / `ObserveQueryWithOptions` API.
 
 ### Yield-on-Create
 
@@ -947,6 +1070,10 @@ obs = flecs.ObserveWithOptions[Position](w,
 | `Monitor(w, terms, fn)` | Register monitor observer; fires on query-match entry/exit |
 | `MonitorWithOptions(w, terms, opts, fn)` | Monitor with options (e.g. `WithYieldExisting()`) |
 | `(*World).EventMonitor()` | Built-in EventMonitor entity (index 46) |
+| `ObserveQuery(w, event, terms, fn)` | Multi-term observer: trigger from `terms[0]`, filter from `terms[1:]` |
+| `ObserveQueryID(w, triggerID, event, filterTerms, fn)` | Multi-term observer with explicit trigger ID |
+| `ObserveQueryEvents(w, events, terms, fn)` | Multi-term, multi-event observer |
+| `ObserveQueryWithOptions(w, opts, events, terms, fn)` | Multi-term observer with options (yield_existing, source) |
 
 ---
 

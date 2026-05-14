@@ -1370,6 +1370,12 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 		newTable.Set(newRow, addID, copyValue)
 	}
 
+	// Update the migrating entity's record before firing observers so that
+	// multi-term observer filter evaluation sees the fully-migrated entity state.
+	// The old table slot remains valid until RemoveSwap below.
+	rec.Table = newTable
+	rec.Row = uint32(newRow)
+
 	// Fire OnAdd for the newly-added component — destination slot is fully written.
 	if addID != 0 {
 		addInfo, _ := w.registry.LookupByID(addID)
@@ -1392,10 +1398,6 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			movedRec.Row = uint32(oldRow)
 		}
 	}
-
-	// Update the migrating entity's record to point at the new location.
-	rec.Table = newTable
-	rec.Row = uint32(newRow)
 
 	// Fire archetype monitors using the table-pair check now that the record
 	// reflects the new state. Fire sparse monitors for each component that
@@ -1598,6 +1600,12 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 		}
 	}
 
+	// Point e's record at its new location before firing OnAdd so that observers
+	// (including multi-term observers) see the fully-migrated entity state.
+	// The old table slot remains valid until RemoveSwap below.
+	rec.Table = newTable
+	rec.Row = uint32(newRow)
+
 	// Fire OnAdd for newly-added components (slot is zero-initialised here;
 	// Set payloads are written by the coalescer's pass 2 after this returns).
 	for _, id := range addedIDs {
@@ -1622,10 +1630,6 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 			movedRec.Row = uint32(oldRow)
 		}
 	}
-
-	// Point e's record at its new location.
-	rec.Table = newTable
-	rec.Row = uint32(newRow)
 
 	// Fire monitors after the record is updated so entity state is consistent.
 	if len(w.monitors) > 0 {
