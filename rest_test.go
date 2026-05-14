@@ -398,6 +398,64 @@ func TestRESTEntityWithCustomPair(t *testing.T) {
 	}
 }
 
+func TestRESTEntityWithPrefab(t *testing.T) {
+	w := flecs.New()
+	var prefab, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		e = fw.NewEntity()
+		w.SetName(e, "instance")
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	path := fmt.Sprintf("/entities/%d", uint64(e))
+	resp := restGet(t, srv, path)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: want 200, got %d; body: %s", path, resp.StatusCode, body)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatalf("GET %s: invalid JSON: %v", path, err)
+	}
+	prefabs, _ := detail["prefabs"].([]any)
+	if len(prefabs) == 0 {
+		t.Errorf("GET %s: expected non-empty 'prefabs' for IsA entity; detail: %v", path, detail)
+	}
+}
+
+func TestRESTEntityWithEntityTag(t *testing.T) {
+	w := flecs.New()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tag := fw.NewEntity()
+		e = fw.NewEntity()
+		w.SetName(e, "tagged")
+		flecs.AddID(fw, e, tag)
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	path := fmt.Sprintf("/entities/%d", uint64(e))
+	resp := restGet(t, srv, path)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: want 200, got %d; body: %s", path, resp.StatusCode, body)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatalf("GET %s: invalid JSON: %v", path, err)
+	}
+	// bare entity tag has no ComponentInfo and is not a pair — not in 'components' or 'pairs'
+	if _, ok := detail["components"]; !ok {
+		t.Errorf("GET %s: 'components' field missing from response", path)
+	}
+}
+
 func TestRESTConcurrentReads(t *testing.T) {
 	_, srv := restSetup(t)
 
