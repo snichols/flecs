@@ -1366,6 +1366,12 @@ func (w *World) notifyTableCreated(t *table.Table) {
 			}
 		}
 	}
+	// Dispatch EventOnTableCreate observers for non-empty tables.
+	// The empty root table (len == 0) is excluded intentionally, matching
+	// upstream's is_root suppression at table.c:1278.
+	if len(t.Type()) > 0 {
+		w.dispatchObservers(tableCreateSentinelID, EventOnTableCreate, 0, unsafe.Pointer(t))
+	}
 	if w.logger != nil {
 		sig := t.Type()
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "table created",

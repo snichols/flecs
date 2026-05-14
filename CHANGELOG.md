@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.62.0 — 2026-05-14 — Phase 16.7: OnTableCreate observer event
+
+Ports `EcsOnTableCreate` from upstream C flecs as a new observer event kind. Observers register via `OnTableCreate(w, fn)` and fire once per archetype table when the table is first created (first entity migrates into a previously-unseen component signature). Closes the OnTableCreate half of `docs/README.md` gap entry; `OnTableDelete` is deferred pending table-reclamation infrastructure.
+
+**Scope note**: ships `OnTableCreate` only. `OnTableDelete` requires Go-flecs to implement table reclamation (`delete(w.tables, ...)` is currently never called; tables persist for World lifetime). `OnTableEmpty` / `OnTableFill` (row-count transitions) remain a separate listed gap.
+
+**C upstream references verified:**
+- Event constants: `include/flecs.h:1944–1948` — `EcsOnTableCreate` / `EcsOnTableDelete` (observer-events category, distinct from cleanup-policy traits at lines 1950–1955).
+- Fire site: `src/storage/table.c:847–849` — `flecs_table_emit(world, table, EcsOnTableCreate)` after `flecs_table_init_overrides`, gated on `EcsTableHasOnTableCreate`.
+- Root suppression: `src/storage/table.c:1278–1281` — `is_root` check suppresses the delete side; Go port mirrors this by excluding the empty root table from dispatch.
+
+### Added
+
+- **`EventOnTableCreate EventKind = 4`** — new event kind constant in `observer.go`.
+- **`OnTableCreate(w *World, fn func(fw *Writer, t *Table)) *Observer`** — registers an observer that fires once per newly-created archetype table. Untyped (no `[T]` parameter); the handler receives the new `*Table` directly. Does not fire for the world's initial empty table.
+- **`OnTableCreateWithOptions(w *World, opts ObserverOptions, fn func(fw *Writer, t *Table)) *Observer`** — variant that accepts `WithYieldExisting()`: sweeps existing tables synchronously at registration time (excluding the empty root table) in sorted-signature order, then continues to fire for future table creations.
+- `tableCreateSentinelID ID = 0` in `observer_table.go` — internal sentinel used as the observer-map key for table-create subscriptions (ID 0 is never a valid entity or component).
+
+### Changed
+
+- **`notifyTableCreated`** (`world.go`) — extended to call `dispatchObservers(tableCreateSentinelID, EventOnTableCreate, 0, unsafe.Pointer(t))` for every non-empty table created, after the existing cached-query notification. Empty root table excluded by `len(t.Type()) > 0` guard.
+- **`EventKind.String()`** (`observer.go`) — added `"OnTableCreate"` case.
+
+### Design decisions recorded
+
+1. **Untyped-only API** — upstream `EcsOnTableCreate` is not parameterized by component; Go port follows. No `[T]` variant makes sense since the event is table-level, not component-level.
+2. **Sentinel ID 0** — valid entity/component IDs start at 1 in Go-flecs; ID 0 is safe as the observer-map key for the untyped table-create slot.
+3. **Empty root table excluded** — matches upstream's `is_root` guard; avoids observer noise during world construction (`observers` is nil at that point anyway).
+4. **Re-entry is deferred** — handler writes go through the deferred coalescer; a new archetype created by the handler fires `OnTableCreate` in the next flush iteration, not recursively.
+5. **yield_existing ordering** — sorted by signature string for deterministic output within a single run.
+
 ## v0.61.0 — 2026-05-14 — Phase 16.6: Rate filters (SetInterval / SetRate)
 
 Ports per-system rate-filter controls that let a system run less often than every pipeline tick. Closes `docs/README.md` gap line 144.
