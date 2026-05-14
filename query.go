@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/storage/table"
@@ -81,6 +82,19 @@ const (
 	// Within the sub-expression, a TermAnd immediately followed by one or more
 	// TermOr terms forms an OR-group (C flecs convention).
 	TermScope TermKind = 4
+	// TermEq matches only when the iterated entity equals the target entity (ID).
+	// Mirrors upstream EcsPredEq / EcsQueryPredEq. Construct via [IsEntity].
+	// Cannot be combined with traversal flags or a fixed source.
+	TermEq TermKind = 5
+	// TermNotEq matches every entity except the target entity (ID).
+	// Mirrors upstream EcsPredEq+EcsNot / EcsQueryPredNeq. Construct via [NotEntity].
+	// Cannot be combined with traversal flags or a fixed source.
+	TermNotEq TermKind = 6
+	// TermNameMatch matches entities whose Name.Value contains the Pattern string
+	// (case-insensitive substring). Unnamed entities never match. Empty Pattern
+	// matches every named entity. Mirrors upstream EcsPredMatch / EcsQueryPredEqMatch.
+	// Construct via [NameMatches]. Cannot be combined with traversal flags or a fixed source.
+	TermNameMatch TermKind = 7
 )
 
 // String returns a human-readable name for the TermKind.
@@ -96,6 +110,12 @@ func (k TermKind) String() string {
 		return "Or"
 	case TermScope:
 		return "Scope"
+	case TermEq:
+		return "Eq"
+	case TermNotEq:
+		return "NotEq"
+	case TermNameMatch:
+		return "NameMatch"
 	default:
 		return fmt.Sprintf("TermKind(%d)", int(k))
 	}
@@ -138,6 +158,10 @@ type Term struct {
 	// set by validateAndSortTerms. The sub-expression is evaluated per entity
 	// and the result is negated (the scope passes when Sub evaluates to false).
 	Sub []Term
+	// Pattern is the match string for a TermNameMatch term. The empty string
+	// matches every named entity (mirrors upstream flecs_query_match_substr_i:
+	// if the pattern is empty, any name satisfies it). Ignored for other kinds.
+	Pattern string
 }
 
 // With returns a TermAnd term: matched tables must contain id.
@@ -156,6 +180,32 @@ func Maybe(id ID) Term { return Term{ID: id, Kind: TermOptional} }
 // An OR-group of size 1 is degenerate but allowed (behaves like With).
 // Use FieldMaybe — not Field — to access Or-group columns per entity.
 func Or(id ID) Term { return Term{ID: id, Kind: TermOr} }
+
+// IsEntity returns a TermEq term: the query matches only entities whose ID equals e.
+// Panics if e is zero. Cannot be combined with traversal flags or a fixed source.
+// Mirrors upstream EcsPredEq semantics ($this == e).
+func IsEntity(e ID) Term {
+	if e == 0 {
+		panic("flecs: IsEntity: entity ID must not be zero")
+	}
+	return Term{ID: e, Kind: TermEq}
+}
+
+// NotEntity returns a TermNotEq term: the query matches every entity except e.
+// Panics if e is zero. Cannot be combined with traversal flags or a fixed source.
+// Mirrors upstream EcsPredEq+EcsNot semantics ($this != e).
+func NotEntity(e ID) Term {
+	if e == 0 {
+		panic("flecs: NotEntity: entity ID must not be zero")
+	}
+	return Term{ID: e, Kind: TermNotEq}
+}
+
+// NameMatches returns a TermNameMatch term: matches entities whose Name.Value
+// contains pattern (case-insensitive substring; no regex, no glob).
+// Empty pattern matches every named entity. Unnamed entities never match.
+// Mirrors upstream flecs_query_match_substr_i (eval_pred.c:8-41).
+func NameMatches(pattern string) Term { return Term{Kind: TermNameMatch, Pattern: pattern} }
 
 // ScopeBuilder accumulates the inner term list for a [WithoutScope] expression.
 // Obtain a *ScopeBuilder via the buildFn argument of [WithoutScope]; do not
@@ -188,6 +238,24 @@ func (b *ScopeBuilder) Or(id ID) *ScopeBuilder {
 // do not affect whether the scope matches.
 func (b *ScopeBuilder) Maybe(id ID) *ScopeBuilder {
 	b.terms = append(b.terms, Term{ID: id, Kind: TermOptional})
+	return b
+}
+
+// IsEntity adds a TermEq term to the scope sub-expression. Panics if e is zero.
+func (b *ScopeBuilder) IsEntity(e ID) *ScopeBuilder {
+	b.terms = append(b.terms, IsEntity(e))
+	return b
+}
+
+// NotEntity adds a TermNotEq term to the scope sub-expression. Panics if e is zero.
+func (b *ScopeBuilder) NotEntity(e ID) *ScopeBuilder {
+	b.terms = append(b.terms, NotEntity(e))
+	return b
+}
+
+// NameMatches adds a TermNameMatch term to the scope sub-expression.
+func (b *ScopeBuilder) NameMatches(pattern string) *ScopeBuilder {
+	b.terms = append(b.terms, NameMatches(pattern))
 	return b
 }
 
@@ -613,16 +681,20 @@ func (q *Query) Iter() *QueryIter {
 	// allUnion: all And terms are union pairs → pure union-store iteration.
 	allUnion := archetypeAndCount == 0 && dontFragmentAndCount == 0 && unionAndCount > 0
 	// hasComplexScope: any TermScope term requires per-entity evaluation → force mixed mode.
+	// hasEqTerms: any equality term (TermEq/TermNotEq/TermNameMatch) requires per-entity evaluation.
 	hasComplexScope := false
+	hasEqTerms := false
 	for _, t := range q.terms {
 		if t.Kind == TermScope && !isScopeTableSimple(t.Sub) {
 			hasComplexScope = true
-			break
+		}
+		if t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
+			hasEqTerms = true
 		}
 	}
 	// hasSparseTerms: at least one And term has sparse-set or union data, or there
-	// is a complex scope term → mixed entity-at-a-time evaluation needed.
-	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion) || hasComplexScope
+	// is a complex scope term, or there is an equality/name-match term → mixed entity-at-a-time evaluation needed.
+	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion) || hasComplexScope || hasEqTerms
 	_ = dontFragmentAndCount // used indirectly via allDontFragment
 
 	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
@@ -1080,9 +1152,40 @@ func (it *QueryIter) matchesSparseTerms(e ID) bool {
 			if evalScopeSubTerms(it.world, e, it.current, term.Sub) {
 				return false // NOT(sub-expression) → scope failed
 			}
+		} else if term.Kind == TermEq {
+			if e != term.ID {
+				return false
+			}
+		} else if term.Kind == TermNotEq {
+			if e == term.ID {
+				return false
+			}
+		} else if term.Kind == TermNameMatch {
+			name, ok := it.world.GetName(e)
+			if !ok {
+				return false // unnamed entities never match
+			}
+			if !substrMatchCaseInsensitive(name, term.Pattern) {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// substrMatchCaseInsensitive reports whether name contains pattern as a
+// case-insensitive substring. Mirrors upstream flecs_query_match_substr_i
+// (eval_pred.c:19-41). Empty pattern returns true (matches every named entity).
+func substrMatchCaseInsensitive(name, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	if len(pattern) > len(name) {
+		return false
+	}
+	pLower := strings.ToLower(pattern)
+	nLower := strings.ToLower(name)
+	return strings.Contains(nLower, pLower)
 }
 
 // updateOptionalPresenceSparse updates optionalPresent for pure-DontFragment queries.
@@ -1738,6 +1841,22 @@ func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
 			if evalScopeSubTerms(w, e, t, term.Sub) {
 				return false // NOT(inner)
 			}
+		case TermEq:
+			if e != term.ID {
+				return false
+			}
+		case TermNotEq:
+			if e == term.ID {
+				return false
+			}
+		case TermNameMatch:
+			name, ok := w.GetName(e)
+			if !ok {
+				return false
+			}
+			if !substrMatchCaseInsensitive(name, term.Pattern) {
+				return false
+			}
 		case TermOptional, TermOr:
 			// Optional: no effect on matching.
 			// Degenerate TermOr without a preceding TermAnd: no-op.
@@ -1766,6 +1885,20 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	}
 	if !hasAnd {
 		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional/Or terms would match an unbounded entity set")
+	}
+
+	// Validate equality terms (TermEq, TermNotEq, TermNameMatch): cannot have
+	// traversal flags or a fixed source (mirrors upstream validator.c:442-474).
+	for i, t := range terms {
+		switch t.Kind {
+		case TermEq, TermNotEq, TermNameMatch:
+			if t.Src != 0 {
+				panic(fmt.Sprintf("%s: equality term at index %d cannot have a fixed source (TermEq/TermNotEq/TermNameMatch are always $this-bound)", caller, i))
+			}
+			if t.Traverse != TraverseSelf && t.Traverse != TraverseExplicitSelf && t.Traverse != 0 {
+				panic(fmt.Sprintf("%s: equality term at index %d cannot be combined with traversal flags (Up/SelfUp/Cascade)", caller, i))
+			}
+		}
 	}
 
 	// Validate fixed-source terms (top-level and inside scope Sub).
@@ -1834,11 +1967,13 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
-	// Check for cross-kind duplicate IDs. TermScope terms are skipped (their
-	// ID is 0 and sub-terms live in a separate scope namespace).
+	// Check for cross-kind duplicate IDs. TermScope and equality terms are skipped:
+	// TermScope has ID=0 and sub-terms live in a separate namespace; equality terms
+	// (TermEq, TermNotEq, TermNameMatch) reference entity IDs / patterns, not
+	// component IDs subject to the uniqueness constraint.
 	seen := make(map[ID]struct{}, len(terms))
 	for _, t := range terms {
-		if t.Kind == TermScope {
+		if t.Kind == TermScope || t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
 			continue
 		}
 		if _, dup := seen[t.ID]; dup {
@@ -1848,12 +1983,13 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	}
 
 	// Build sorted term list: And (by ID), Not (by ID), Or-groups (group order,
-	// within-group by ID), Optional (by ID), Scope (in original order).
+	// within-group by ID), Eq/NotEq/NameMatch (in original order), Optional (by ID),
+	// Scope (in original order).
 	// Within the And-block, fixed-source TermAnd terms come first (parallels
 	// upstream's plan-order: setfixed ops precede $this-bound TermAnd ops).
-	// Scope terms are appended last (after Optional) in original order so that
+	// Scope and equality terms are appended after Or-groups in original order so that
 	// per-entity evaluation is independent of archetype sorting.
-	var fixedSrcAndTerms, normalAndTerms, notTerms, optTerms, scopeTerms []Term
+	var fixedSrcAndTerms, normalAndTerms, notTerms, eqTerms, optTerms, scopeTerms []Term
 	for _, t := range terms {
 		switch t.Kind {
 		case TermAnd:
@@ -1864,6 +2000,8 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 			}
 		case TermNot:
 			notTerms = append(notTerms, t)
+		case TermEq, TermNotEq, TermNameMatch:
+			eqTerms = append(eqTerms, t)
 		case TermOptional:
 			optTerms = append(optTerms, t)
 		case TermScope:
@@ -1891,6 +2029,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	cp = append(cp, andTerms...)
 	cp = append(cp, notTerms...)
 	cp = append(cp, orTerms...)
+	cp = append(cp, eqTerms...)
 	cp = append(cp, optTerms...)
 	cp = append(cp, scopeTerms...)
 

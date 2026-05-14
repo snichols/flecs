@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.75.0)
+## Shipped (through v0.76.0)
 
 The following features are available in the current release:
 
@@ -77,6 +77,7 @@ The following features are available in the current release:
 - **Fixed per-term source** _(v0.73.0, Phase 16.18)_ — `WithSourceTerm(componentID, sourceEntity)` / `(Term).Source(e)`. A term bound to a named entity snapshots its component once at iter start; absent required source → zero results; optional absent source → `FieldMaybe` nil/false. Closes `docs/README.md` fixed-source query gap entry.
 - **Entity scoping** _(v0.74.0, Phase 16.19)_ — `WithinScope(fw, parent, fn)` / `PushScope(fw, parent) ID` / `PopScope(fw, prev)` / `GetScope(scope) ID`. While a scope is active, `NewEntity` and `RangeNew` automatically add `(ChildOf, parent)`. Scope stack per-Writer; reset at each top-level `w.Write` entry. `MakeAlive` bypasses scope; `RangeNew` respects it. Closes `docs/README.md` entity scoping gap entry.
 - **Query scopes** _(v0.75.0, Phase 16.20)_ — `WithoutScope(buildFn func(*ScopeBuilder)) Term` / `*ScopeBuilder`. Negates an arbitrary sub-expression of terms as a single unit (`Position AND NOT (Velocity OR Speed)`). Closure-based API prevents unbalanced-scope bugs. Table-level fast path for simple all-TermAnd scopes; per-entity slow path for OR-groups, nested scopes, DontFragment, Union, Sparse, and fixed-source terms. Empty scope panics at construction. Arbitrary nesting depth. Cached queries participate in change tracking for scope-internal component IDs. Closes `docs/README.md` query-scopes gap entry.
+- **Query equality operators** _(v0.76.0, Phase 16.21)_ — `IsEntity(e ID) Term` / `NotEntity(e ID) Term` / `NameMatches(pattern string) Term`. Per-entity identity equality and case-insensitive substring name-match predicates. Mirrors upstream `EcsPredEq` / `EcsPredMatch` (`include/flecs.h:1979-1986`, `eval_pred.c:8-303`). All three terms compose inside `WithoutScope`. `CachedQuery` with `NameMatches` subscribes to `OnSet[Name]` for change detection. `EcsPredLookup` deliberately omitted. Closes `docs/README.md` equality-operators gap entry.
 
 ## Documentation
 
