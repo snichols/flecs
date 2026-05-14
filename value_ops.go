@@ -304,6 +304,10 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 				}
 				w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
 				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+				// Fire sparse monitors after sparse-set and hooks are both settled.
+				if len(w.monitors) > 0 {
+					w.fireSparseMonitors(e, id, 0)
+				}
 			} else {
 				if srcPtr != nil {
 					oldPtr := sparseSetGet(w, e, id) // capture before overwrite
@@ -346,9 +350,16 @@ func setImmediateByPtr(w *World, e ID, id ID, srcPtr unsafe.Pointer, info *compo
 				w.migrateArchetypeOnly(e, id, 0)
 				w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
 				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
+				// Fire sparse monitors after archetype and sparse-set are both updated.
+				if len(w.monitors) > 0 {
+					w.fireSparseMonitors(e, id, 0)
+				}
 			} else {
 				if !isExisting {
 					w.fireOnAdd(info, id, e, sparseSetGet(w, e, id))
+					if len(w.monitors) > 0 {
+						w.fireSparseMonitors(e, id, 0)
+					}
 				}
 				w.fireOnSet(info, id, e, sparseSetGet(w, e, id))
 			}

@@ -20,6 +20,11 @@ const (
 	// created (first entity migrates into a previously-unseen component signature).
 	// Does not fire for the world's initial empty table.
 	EventOnTableCreate EventKind = 4
+	// EventMonitor is the built-in event kind for monitor observers. It is not used
+	// for direct observer dispatch; it identifies the built-in EventMonitor entity
+	// returned by World.EventMonitor() and marks the monitor subscription kind in
+	// the EventKind enum for symmetry with other built-in event entities.
+	EventMonitor EventKind = 5
 )
 
 // String returns a human-readable name for the event kind.
@@ -33,6 +38,8 @@ func (ev EventKind) String() string {
 		return "OnRemove"
 	case EventOnTableCreate:
 		return "OnTableCreate"
+	case EventMonitor:
+		return "Monitor"
 	default:
 		return "Unknown"
 	}
@@ -58,6 +65,8 @@ func eventKindToEntity(w *World, ev EventKind) ID {
 		return w.eventOnRemoveID
 	case EventOnTableCreate:
 		return w.eventOnTableCreateID
+	case EventMonitor:
+		return w.eventMonitorID
 	default:
 		return 0
 	}

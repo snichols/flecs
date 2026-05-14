@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.65.0 — 2026-05-14 — Phase 16.10: Monitor observers
+
+Implements monitor observers: callbacks that fire once when an entity enters or exits a multi-term query match. Closes the monitor-observers gap in `docs/README.md`.
+
+**Breaking changes**: Built-in entity count increases from 46 to 47 (new `EventMonitor` entity at index 46); user entity allocation now starts at index 47. Code that hardcodes `46` as the built-in entity count must update to `47`. See MIGRATING.md § v0.65.0.
+
+### Added
+
+- **`Monitor(w *World, terms []Term, fn func(fw *Writer, e ID, entered bool)) *Observer`** — registers a monitor observer that fires `fn` with `entered=true` when `e` first matches all `terms`, and `entered=false` when it stops matching. At most one fire per entry/exit transition.
+- **`MonitorWithOptions(w *World, terms []Term, opts ObserverOptions, fn ...) *Observer`** — options-bearing variant; `WithYieldExisting()` sweeps matching entities at registration time and fires `fn(fw, e, true)` for each.
+- **`(*World).EventMonitor() ID`** — returns the built-in `EventMonitor` event entity (index 46).
+- **`EventMonitor EventKind = 5`** — new `EventKind` constant; `EventMonitor.String()` returns `"Monitor"`.
+
+### Implementation notes
+
+- **Hybrid match-state tracking**: archetype-only monitors (no DontFragment/Union/Sparse terms) use a table-pair check per `migrate()` call — O(monitors×terms), no per-entity state. Sparse-mode monitors track a per-monitor `matched` set, updated at each relevant component-change site.
+- Monitor callbacks can safely mutate the world via the provided `*Writer` (re-entrancy deferred via the command queue).
+- Disabled monitors receive no events and do not accumulate catch-up state on re-enable.
+- Entity deletion and `Clear` fire exit events before component removal so callbacks can read component state.
+
 ## v0.64.0 — 2026-05-14 — Phase 16.9: Custom pipeline phases + DependsOn ordering
 
 Ports the two remaining Phase 14.6 gaps: user-defined pipeline phases ordered via `DependsOn` edges, and `(*System).DependsOn` for ordering systems within a phase.

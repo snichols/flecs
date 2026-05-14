@@ -165,6 +165,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.EventOnTableCreate(): {},
 		w.Event():              {},
 		w.DependsOn():          {},
+		w.EventMonitor():       {},
 	}
 
 	var result []byte

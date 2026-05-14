@@ -761,6 +761,79 @@ When two observers subscribe to the same (component, event), they fire in regist
 
 ---
 
+## Monitor Observers {#monitor-observers}
+
+A **monitor observer** fires at most once when an entity *enters* a query match (all terms satisfied) and once when it *exits* (any term no longer satisfied). Unlike a regular `OnSet` observer — which fires on every write — a monitor fires only on the boolean transition.
+
+Canonical uses: state machines, tutorial triggers, alert systems, debug counters.
+
+### Basic Usage
+
+```go
+w := flecs.New()
+healthID := flecs.RegisterComponent[Health](w)
+frozenID := flecs.RegisterComponent[Frozen](w)
+
+// Fire when entity first has BOTH Health AND NOT Frozen.
+obs := flecs.Monitor(w, []flecs.Term{
+    flecs.With(healthID),
+    flecs.Without(frozenID),
+}, func(fw *flecs.Writer, e flecs.ID, entered bool) {
+    if entered {
+        fmt.Println("entity entered combat-ready state:", e)
+    } else {
+        fmt.Println("entity left combat-ready state:", e)
+    }
+})
+
+// Cancel subscription when no longer needed.
+obs.Unsubscribe()
+```
+
+### Yield-Existing
+
+`MonitorWithOptions` with `WithYieldExisting()` sweeps all entities that already satisfy the query at registration time, firing `fn(fw, e, true)` for each. The sweep is synchronous — `MonitorWithOptions` returns only after all existing matches are visited.
+
+```go
+flecs.MonitorWithOptions(w, []flecs.Term{flecs.With(healthID)},
+    flecs.WithYieldExisting(),
+    func(fw *flecs.Writer, e flecs.ID, entered bool) {
+        // fires true for all current Health-holders at registration time,
+        // and true/false for all subsequent transitions
+    },
+)
+```
+
+### Supported Term Types
+
+Monitors support the full set of query terms:
+
+| Term kind | Constructor | Notes |
+|-----------|-------------|-------|
+| Require component | `With(id)` | Entity must have this component |
+| Exclude component | `Without(id)` | Entity must NOT have this component |
+| OR group | `Or(a), Or(b)` | Entity must have at least one in the group |
+| Optional | `Maybe(id)` | No effect on matching |
+| DontFragment | `With(dfID)` | Tracked via per-entity matched set |
+| Union pair | `With(MakePair(R, T))` | Tracked via union store |
+
+### Disabled Monitor Semantics
+
+A disabled monitor (via `obs.SetEnabled(false)`) receives no events and accumulates no catch-up state. Re-enabling it does not sweep existing matches — it resumes from whatever state was current when it was disabled.
+
+### Entity Deletion and Clear
+
+When an entity that matches a monitor is deleted (`fw.Delete(e)`) or cleared (`fw.Clear(e)`), the monitor fires `fn(fw, e, false)` **before** any component removal, so the callback can still read the entity's components.
+
+### Implementation Notes
+
+Monitors use a hybrid match-state tracking strategy:
+
+- **Archetype-only monitors** (no DontFragment/Union/Sparse terms): A table-pair check is performed on every `migrate()` call — O(monitors × terms) per archetype transition, no per-entity state.
+- **Sparse-mode monitors** (any And/Not term with DontFragment, Union, or Sparse flag): A per-monitor `matched` set tracks which entities currently satisfy the query. The set is updated at each relevant component-change site.
+
+---
+
 ## Not Yet Ported in Go flecs
 
 The following features from C flecs are not yet available in the Go port. They are documented here so you know where the boundaries are.
@@ -799,7 +872,7 @@ C flecs propagates events along relationship edges (e.g., an `OnSet(Position)` o
 
 ### Monitor Observers
 
-C flecs has a `Monitor` event that fires when an entity starts or stops matching a query (once on enter, once on exit). Not ported to Go flecs.
+✅ **Shipped in v0.65.0.** See [Monitor Observers](#monitor-observers) above for the `Monitor` / `MonitorWithOptions` API.
 
 ### Observer Disabling
 
@@ -829,6 +902,9 @@ C flecs observers can match a component on a specific entity (not `$this`). Not 
 | `EventOnAdd` | Event fired on first component add |
 | `EventOnSet` | Event fired on every component set |
 | `EventOnRemove` | Event fired before component remove |
+| `Monitor(w, terms, fn)` | Register monitor observer; fires on query-match entry/exit |
+| `MonitorWithOptions(w, terms, opts, fn)` | Monitor with options (e.g. `WithYieldExisting()`) |
+| `(*World).EventMonitor()` | Built-in EventMonitor entity (index 46) |
 
 ---
 

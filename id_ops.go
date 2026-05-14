@@ -390,6 +390,10 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 			oldInfo, _ := w.registry.LookupByID(oldPairID)
 			w.fireOnRemove(oldInfo, oldPairID, e, nil)
 			unionStoreRemove(store, e)
+			// Fire sparse monitors AFTER store is updated (pair no longer active).
+			if len(w.monitors) > 0 {
+				w.fireSparseMonitors(e, oldPairID, 0)
+			}
 			return true
 		}
 	}
@@ -405,6 +409,9 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 			info, _ := w.registry.LookupByID(id)
 			w.fireOnRemove(info, id, e, ptr)
 			sparseSetRemove(w, e, id)
+			if len(w.monitors) > 0 {
+				w.fireSparseMonitors(e, id, 0)
+			}
 			return true
 		}
 		// Sparse-only (no DontFragment): remove from sparse-set AND cause an archetype
@@ -420,6 +427,9 @@ func removeIDImmediate(w *World, e ID, id ID) bool {
 			rec := w.index.Get(e)
 			if rec != nil && rec.Table != nil && rec.Table.HasComponent(id) {
 				w.migrateArchetypeOnly(e, 0, id)
+			}
+			if len(w.monitors) > 0 {
+				w.fireSparseMonitors(e, id, 0)
 			}
 			return true
 		}

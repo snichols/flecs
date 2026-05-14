@@ -1,5 +1,32 @@
 # Migrating
 
+## v0.64.0 → v0.65.0 — Built-in entity count 46 → 47
+
+### What changed
+
+A new built-in entity `EventMonitor` was added at index 46. User entity allocation now starts at index 47.
+
+No API is removed or renamed. The only breakage is code that hardcodes the built-in entity count (e.g. in tests that check `EachEntity` counts or `nonDataEntities` skip sets).
+
+### Required changes
+
+**Tests or code that hardcode the built-in entity count** must increase it by 1:
+
+```go
+// v0.64.0
+const builtinEntityCount = 46
+
+// v0.65.0
+const builtinEntityCount = 47
+```
+
+**Marshal skip sets** that enumerate all built-in entities must add `w.EventMonitor()`:
+
+```go
+// v0.65.0 — add to the skip map
+w.EventMonitor(): {},
+```
+
 ## v0.63.0 → v0.64.0 — BREAKING: Phase accessors return `*Phase`; `NewSystemInPhase` takes `*Phase`
 
 ### What changed
