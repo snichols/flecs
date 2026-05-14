@@ -17,5 +17,6 @@ type stage struct {
 	id         int
 	queue      *cmdQueue
 	world      *World
-	deferDepth int // > 0 while inside a Write or deferScope; mutations are queued not immediate
+	deferDepth int  // > 0 while inside a Write or deferScope; mutations are queued not immediate
+	inMerge    bool // true while pre/post merge hooks are firing; guards against re-entrant Write
 }

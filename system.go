@@ -425,16 +425,24 @@ func (w *World) Progress(dt float32) {
 					// Within each stage the per-entity coalescer applies; across
 					// stages there is no coalescing (two stages mutating the same
 					// entity produce two migrations in id order).
+					// Pre/post merge hooks fire ONCE per Progress-driven merge
+					// cycle (not once per worker stage): pre fires before the
+					// first worker-stage flush, post fires after stage-0 flush.
+					s0 := w.stages[0]
+					s0.inMerge = true
+					w.firePreMergeHooks()
 					for i := 1; i <= n; i++ {
 						q := w.stages[i].queue
 						w.stages[i].queue = acquireCmdQueue()
 						q.flush(w)
 						releaseCmdQueue(q)
 					}
-					q0 := w.stages[0].queue
-					w.stages[0].queue = acquireCmdQueue()
+					q0 := s0.queue
+					s0.queue = acquireCmdQueue()
 					q0.flush(w)
 					releaseCmdQueue(q0)
+					w.firePostMergeHooks()
+					s0.inMerge = false
 					// stages[0].deferDepth is unchanged (managed by deferScope).
 					i++
 					continue

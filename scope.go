@@ -14,6 +14,12 @@ import (
 // called from a goroutine that is not the current exclusive-access owner.
 var ErrExclusiveAccessViolation = errors.New("flecs: exclusive access violation: Write called from different goroutine while world is claimed")
 
+// ErrMergeReentry is returned (as a panic value) when Write is called
+// re-entrantly from inside a pre- or post-merge hook callback. A merge is
+// already in progress; re-entering Write would corrupt the command-queue
+// depth tracking.
+var ErrMergeReentry = errors.New("flecs: merge reentry: Write called from inside a pre- or post-merge hook")
+
 // Reader is a scoped capability for reading committed world state.
 // Obtained via world.Read(fn). Invalid outside the callback.
 //
