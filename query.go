@@ -75,6 +75,12 @@ const (
 	// degenerate but allowed (behaves identically to TermAnd for matching).
 	// Use FieldMaybe — not Field — to access Or-group columns.
 	TermOr TermKind = 3
+	// TermScope wraps a negated sub-expression of arbitrary terms. Construct via
+	// [WithoutScope]; the Sub field holds the inner terms. A TermScope term has
+	// ID = 0; the sub-expression is evaluated per entity and the result is negated.
+	// Within the sub-expression, a TermAnd immediately followed by one or more
+	// TermOr terms forms an OR-group (C flecs convention).
+	TermScope TermKind = 4
 )
 
 // String returns a human-readable name for the TermKind.
@@ -88,6 +94,8 @@ func (k TermKind) String() string {
 		return "Optional"
 	case TermOr:
 		return "Or"
+	case TermScope:
+		return "Scope"
 	default:
 		return fmt.Sprintf("TermKind(%d)", int(k))
 	}
@@ -125,6 +133,11 @@ type Term struct {
 	// is stored in the per-relationship union store. Union terms cannot seed archetype
 	// iteration and are checked per-entity via the union store in matchesSparseTerms.
 	Union bool
+	// Sub holds the inner terms for a TermScope term. Non-nil only when
+	// Kind == TermScope; inner terms have Sparse/DontFragment/Union routing hints
+	// set by validateAndSortTerms. The sub-expression is evaluated per entity
+	// and the result is negated (the scope passes when Sub evaluates to false).
+	Sub []Term
 }
 
 // With returns a TermAnd term: matched tables must contain id.
@@ -143,6 +156,98 @@ func Maybe(id ID) Term { return Term{ID: id, Kind: TermOptional} }
 // An OR-group of size 1 is degenerate but allowed (behaves like With).
 // Use FieldMaybe — not Field — to access Or-group columns per entity.
 func Or(id ID) Term { return Term{ID: id, Kind: TermOr} }
+
+// ScopeBuilder accumulates the inner term list for a [WithoutScope] expression.
+// Obtain a *ScopeBuilder via the buildFn argument of [WithoutScope]; do not
+// construct directly. Methods return the receiver for chaining.
+type ScopeBuilder struct {
+	terms []Term
+}
+
+// With adds a TermAnd requirement to the scope sub-expression.
+func (b *ScopeBuilder) With(id ID) *ScopeBuilder {
+	b.terms = append(b.terms, Term{ID: id, Kind: TermAnd})
+	return b
+}
+
+// Without adds a TermNot requirement to the scope sub-expression.
+func (b *ScopeBuilder) Without(id ID) *ScopeBuilder {
+	b.terms = append(b.terms, Term{ID: id, Kind: TermNot})
+	return b
+}
+
+// Or adds a TermOr term to the scope sub-expression. When a [ScopeBuilder.With]
+// call is immediately followed by one or more Or calls they form an OR-group
+// (C flecs convention): the sub-expression is satisfied if any member is present.
+func (b *ScopeBuilder) Or(id ID) *ScopeBuilder {
+	b.terms = append(b.terms, Term{ID: id, Kind: TermOr})
+	return b
+}
+
+// Maybe adds a TermOptional term to the scope sub-expression; optional terms
+// do not affect whether the scope matches.
+func (b *ScopeBuilder) Maybe(id ID) *ScopeBuilder {
+	b.terms = append(b.terms, Term{ID: id, Kind: TermOptional})
+	return b
+}
+
+// Source sets a fixed source on the most recently added term. The component is
+// read from src rather than the iterated entity. Panics if no term has been
+// added yet or if src is zero.
+func (b *ScopeBuilder) Source(src ID) *ScopeBuilder {
+	if len(b.terms) == 0 {
+		panic("flecs: ScopeBuilder.Source: no term to apply source to")
+	}
+	if src == 0 {
+		panic("flecs: ScopeBuilder.Source: source entity must not be zero")
+	}
+	b.terms[len(b.terms)-1].Src = src
+	return b
+}
+
+// WithoutScope adds a nested negated scope to the sub-expression. Panics if
+// buildFn produces zero inner terms.
+func (b *ScopeBuilder) WithoutScope(buildFn func(*ScopeBuilder)) *ScopeBuilder {
+	b.terms = append(b.terms, WithoutScope(buildFn))
+	return b
+}
+
+// WithoutScope returns a TermScope term that negates a sub-expression of
+// arbitrary terms. The buildFn receives a [*ScopeBuilder]; call its
+// With/Without/Or/Maybe/WithoutScope methods to populate the inner term list.
+// The finished Term plugs into [NewQueryFromTerms] / [NewCachedQueryFromTerms]
+// alongside With/Without/Or/Maybe.
+//
+// Evaluation: the sub-expression is evaluated per entity (or at table level when
+// all inner terms are simple archetype TermAnd terms). The result is negated:
+// an entity matches the scope if and only if the sub-expression is false.
+//
+// OR-groups inside the scope follow C flecs convention: a With call immediately
+// followed by one or more Or calls forms a single OR-group (the With member is
+// the first element; Or calls extend the group). Example:
+//
+//	b.With(velID).Or(speedID)   // → Velocity OR Speed
+//	b.With(velID).With(speedID) // → Velocity AND Speed
+//
+// Panics at construction time if buildFn produces zero inner terms (mirrors
+// upstream validator.c:1441 "invalid empty scope").
+//
+// Example — Position AND NOT (Velocity OR Speed):
+//
+//	q := flecs.NewQueryFromTerms(w,
+//	    flecs.With(posID),
+//	    flecs.WithoutScope(func(b *flecs.ScopeBuilder) {
+//	        b.With(velID).Or(speedID)
+//	    }),
+//	)
+func WithoutScope(buildFn func(*ScopeBuilder)) Term {
+	b := &ScopeBuilder{}
+	buildFn(b)
+	if len(b.terms) == 0 {
+		panic("flecs: WithoutScope: scope must contain at least one term (empty scope is invalid)")
+	}
+	return Term{Kind: TermScope, Sub: b.terms}
+}
 
 // Self returns a copy of the term with explicit TraverseSelf semantics.
 // This is the default traversal mode; calling Self() is provided for
@@ -507,8 +612,17 @@ func (q *Query) Iter() *QueryIter {
 	allDontFragment := archetypeAndCount == 0 && dontFragmentAndCount > 0 && unionAndCount == 0
 	// allUnion: all And terms are union pairs → pure union-store iteration.
 	allUnion := archetypeAndCount == 0 && dontFragmentAndCount == 0 && unionAndCount > 0
-	// hasSparseTerms: at least one And term has sparse-set or union data → mixed entity-at-a-time.
-	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion)
+	// hasComplexScope: any TermScope term requires per-entity evaluation → force mixed mode.
+	hasComplexScope := false
+	for _, t := range q.terms {
+		if t.Kind == TermScope && !isScopeTableSimple(t.Sub) {
+			hasComplexScope = true
+			break
+		}
+	}
+	// hasSparseTerms: at least one And term has sparse-set or union data, or there
+	// is a complex scope term → mixed entity-at-a-time evaluation needed.
+	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion) || hasComplexScope
 	_ = dontFragmentAndCount // used indirectly via allDontFragment
 
 	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
@@ -905,11 +1019,13 @@ func (it *QueryIter) nextMixed() bool {
 	}
 }
 
-// matchesSparseTerms returns true if entity e satisfies all DontFragment and
-// Union terms in the query. TermAnd requires presence; TermNot requires absence.
-// Sparse-only terms (DontFragment=false, Union=false) are handled by the archetype
-// check in matchesTable and are skipped here. TermOptional and TermOr do not
-// affect matching (they are checked separately for Field access).
+// matchesSparseTerms returns true if entity e satisfies all DontFragment, Union,
+// and complex-scope terms in the query. TermAnd requires presence; TermNot
+// requires absence. Sparse-only terms (DontFragment=false, Union=false) are
+// handled by the archetype check in matchesTable and are skipped here.
+// TermOptional and TermOr do not affect matching. Simple TermScope terms
+// (isScopeTableSimple) are handled at table level and skipped here; complex
+// scopes are evaluated per entity.
 func (it *QueryIter) matchesSparseTerms(e ID) bool {
 	for _, term := range it.terms {
 		if term.DontFragment {
@@ -950,6 +1066,19 @@ func (it *QueryIter) matchesSparseTerms(e ID) bool {
 				if has {
 					return false
 				}
+			}
+		} else if term.Kind == TermScope {
+			// Scope evaluation: complex scopes always require per-entity evaluation.
+			// Simple scopes (all-archetype-And inner terms) are handled at the table
+			// level by matchesTable, so skip them here when a current table exists.
+			// In pure-sparse/union mode (it.current == nil) there is no current table,
+			// so we must evaluate even simple scopes per-entity (entityHasTermInScope
+			// will look up the entity's table from the world index in that case).
+			if it.current != nil && isScopeTableSimple(term.Sub) {
+				continue // handled by matchesTable for the current archetype table
+			}
+			if evalScopeSubTerms(it.world, e, it.current, term.Sub) {
+				return false // NOT(sub-expression) → scope failed
 			}
 		}
 	}
@@ -1095,6 +1224,25 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 				break // not in archetype; skip archetype check (checked per-entity)
 			}
 			if t.HasComponent(term.ID) {
+				return false
+			}
+		case TermScope:
+			if !isScopeTableSimple(term.Sub) {
+				break // complex scope: per-entity evaluation in matchesSparseTerms
+			}
+			// Table-level fast path for all-TermAnd simple scopes:
+			// NOT(A ∧ B ∧ … ∧ Z) is false for every entity in this table when all
+			// inner IDs are present in the archetype (all entities own them all).
+			// Reject the table; otherwise the scope is trivially satisfied for all
+			// entities (at least one ID is absent from every entity in the table).
+			allPresent := true
+			for _, sub := range term.Sub {
+				if !t.HasComponent(sub.ID) {
+					allPresent = false
+					break
+				}
+			}
+			if allPresent {
 				return false
 			}
 		}
@@ -1460,18 +1608,143 @@ func computeQuerySkipFlags(w *World, terms []Term) (skipDisabled, skipPrefab boo
 	skipDisabled = true
 	skipPrefab = true
 	for _, t := range terms {
-		idx := t.ID.Index()
-		if idx == disabledIdx {
-			skipDisabled = false
-		}
-		if idx == prefabIdx {
-			skipPrefab = false
+		if t.Kind == TermScope {
+			for _, sub := range t.Sub {
+				idx := sub.ID.Index()
+				if idx == disabledIdx {
+					skipDisabled = false
+				}
+				if idx == prefabIdx {
+					skipPrefab = false
+				}
+			}
+		} else {
+			idx := t.ID.Index()
+			if idx == disabledIdx {
+				skipDisabled = false
+			}
+			if idx == prefabIdx {
+				skipPrefab = false
+			}
 		}
 		if !skipDisabled && !skipPrefab {
 			break
 		}
 	}
 	return
+}
+
+// isScopeTableSimple reports whether all inner scope terms can be fully evaluated
+// at table granularity. A scope is table-simple when every inner term is a
+// standalone TermAnd (no DontFragment, Union, Sparse, fixed source, and not the
+// first element of an OR-group, i.e. not followed by a TermOr term).
+// When true, matchesTable / tryMatchTable can apply the fast path without any
+// per-entity evaluation.
+func isScopeTableSimple(sub []Term) bool {
+	for i, t := range sub {
+		if t.Kind != TermAnd {
+			return false
+		}
+		if t.DontFragment || t.Union || t.Sparse || t.Src != 0 {
+			return false
+		}
+		if i+1 < len(sub) && sub[i+1].Kind == TermOr {
+			return false // starts an OR-group → per-entity evaluation needed
+		}
+	}
+	return true
+}
+
+// entityHasTermInScope checks whether entity e satisfies a single scope inner
+// term. t is the entity's current archetype table (may be nil in pure-sparse /
+// union iteration; the function falls back to an index lookup in that case).
+func entityHasTermInScope(w *World, e ID, t *table.Table, term Term) bool {
+	if term.DontFragment {
+		return sparseSetGet(w, e, term.ID) != nil
+	}
+	if term.Union {
+		relKey := ID(term.ID.First().Index())
+		store, ok := w.unionStore[relKey]
+		if !ok || store == nil {
+			return false
+		}
+		pos, has := store.index[ID(e.Index())]
+		if !has {
+			return false
+		}
+		termTarget := term.ID.Second()
+		if !isWildcardID(w, termTarget) {
+			return store.dense[pos].target.Index() == termTarget.Index()
+		}
+		return true
+	}
+	if term.Src != 0 {
+		// Fixed-source term: evaluate against the named entity, not $this.
+		rec := w.index.Get(term.Src)
+		if rec == nil || rec.Table == nil {
+			return false
+		}
+		return rec.Table.HasComponent(term.ID)
+	}
+	// Archetype term.
+	if t != nil {
+		return t.HasComponent(term.ID)
+	}
+	// Pure-sparse / union mode: no current archetype table; look up entity's table.
+	rec := w.index.Get(e)
+	if rec == nil || rec.Table == nil {
+		return false
+	}
+	return rec.Table.HasComponent(term.ID)
+}
+
+// evalScopeSubTerms evaluates the scope sub-expression against entity e and
+// returns true when the sub-expression is satisfied. The caller negates the
+// result: a TermScope term passes when this function returns false.
+//
+// OR-group convention (C flecs style): a TermAnd immediately followed by one
+// or more TermOr terms is the first member of the OR-group; the group is
+// satisfied if any member is present (entityHasTermInScope returns true for it).
+func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
+	i := 0
+	for i < len(sub) {
+		term := sub[i]
+		// C flecs OR-group: TermAnd followed by TermOr is the group's first member.
+		if term.Kind == TermAnd && i+1 < len(sub) && sub[i+1].Kind == TermOr {
+			groupSatisfied := entityHasTermInScope(w, e, t, term)
+			i++
+			for i < len(sub) && sub[i].Kind == TermOr {
+				if entityHasTermInScope(w, e, t, sub[i]) {
+					groupSatisfied = true
+				}
+				i++
+			}
+			if !groupSatisfied {
+				return false
+			}
+			continue
+		}
+		switch term.Kind {
+		case TermAnd:
+			if !entityHasTermInScope(w, e, t, term) {
+				return false
+			}
+		case TermNot:
+			if entityHasTermInScope(w, e, t, term) {
+				return false
+			}
+		case TermScope:
+			// Nested scope: evaluate inner sub-expression and negate.
+			if evalScopeSubTerms(w, e, t, term.Sub) {
+				return false // NOT(inner)
+			}
+		case TermOptional, TermOr:
+			// Optional: no effect on matching.
+			// Degenerate TermOr without a preceding TermAnd: no-op.
+		}
+		i++
+	}
+	return true
 }
 
 // validateAndSortTerms validates terms for NewQueryFromTerms/NewCachedQueryFromTerms,
@@ -1495,8 +1768,19 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		panic(caller + ": at least one TermAnd term is required; a query with only Not/Optional/Or terms would match an unbounded entity set")
 	}
 
-	// Validate fixed-source terms.
+	// Validate fixed-source terms (top-level and inside scope Sub).
 	for i, t := range terms {
+		if t.Kind == TermScope {
+			for j, sub := range t.Sub {
+				if sub.Src == 0 {
+					continue
+				}
+				if !w.index.IsAlive(sub.Src) {
+					panic(fmt.Sprintf("%s: scope fixed-source sub-term at index [%d][%d] (id %d) has a dead or non-existent source entity %d", caller, i, j, sub.ID, sub.Src))
+				}
+			}
+			continue
+		}
 		if t.Src == 0 {
 			continue
 		}
@@ -1550,9 +1834,13 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
-	// Check for cross-kind duplicate IDs.
+	// Check for cross-kind duplicate IDs. TermScope terms are skipped (their
+	// ID is 0 and sub-terms live in a separate scope namespace).
 	seen := make(map[ID]struct{}, len(terms))
 	for _, t := range terms {
+		if t.Kind == TermScope {
+			continue
+		}
 		if _, dup := seen[t.ID]; dup {
 			panic(fmt.Sprintf("%s: duplicate term ID %d; each ID may appear at most once across all term kinds", caller, t.ID))
 		}
@@ -1560,10 +1848,12 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	}
 
 	// Build sorted term list: And (by ID), Not (by ID), Or-groups (group order,
-	// within-group by ID), Optional (by ID).
+	// within-group by ID), Optional (by ID), Scope (in original order).
 	// Within the And-block, fixed-source TermAnd terms come first (parallels
 	// upstream's plan-order: setfixed ops precede $this-bound TermAnd ops).
-	var fixedSrcAndTerms, normalAndTerms, notTerms, optTerms []Term
+	// Scope terms are appended last (after Optional) in original order so that
+	// per-entity evaluation is independent of archetype sorting.
+	var fixedSrcAndTerms, normalAndTerms, notTerms, optTerms, scopeTerms []Term
 	for _, t := range terms {
 		switch t.Kind {
 		case TermAnd:
@@ -1576,6 +1866,8 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 			notTerms = append(notTerms, t)
 		case TermOptional:
 			optTerms = append(optTerms, t)
+		case TermScope:
+			scopeTerms = append(scopeTerms, t)
 		}
 	}
 	sort.Slice(fixedSrcAndTerms, func(i, j int) bool { return fixedSrcAndTerms[i].ID < fixedSrcAndTerms[j].ID })
@@ -1600,17 +1892,36 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	cp = append(cp, notTerms...)
 	cp = append(cp, orTerms...)
 	cp = append(cp, optTerms...)
+	cp = append(cp, scopeTerms...)
 
 	// Apply inheritable auto-promotion: any And/Optional term whose component was
 	// marked inheritable and whose traversal is still the default zero gets
 	// promoted to SelfUp(IsA). Terms with explicit traversal (Self/Up/SelfUp/
 	// Cascade) are unaffected. Mirror of C flecs validator.c:766-770.
+	// Also recurse into scope Sub terms (sub-terms are not sorted but do get
+	// inheritable promotion applied).
 	for i := range cp {
+		if cp[i].Kind == TermScope {
+			for j := range cp[i].Sub {
+				applyInheritablePromotion(w, &cp[i].Sub[j])
+			}
+			continue
+		}
 		applyInheritablePromotion(w, &cp[i])
 	}
 
-	// Mark sparse/DontFragment/Union terms. Must happen after sorting so that cp is final.
+	// Mark sparse/DontFragment/Union routing hints. Must happen after sorting so
+	// that cp is final. Also recurse into scope Sub terms so that
+	// isScopeTableSimple and evalScopeSubTerms can use the flags.
 	for i := range cp {
+		if cp[i].Kind == TermScope {
+			for j := range cp[i].Sub {
+				cp[i].Sub[j].Sparse = isSparseTermID(w, cp[i].Sub[j].ID)
+				cp[i].Sub[j].DontFragment = isDontFragmentTermID(w, cp[i].Sub[j].ID)
+				cp[i].Sub[j].Union = isUnionTermID(w, cp[i].Sub[j].ID)
+			}
+			continue
+		}
 		cp[i].Sparse = isSparseTermID(w, cp[i].ID)
 		cp[i].DontFragment = isDontFragmentTermID(w, cp[i].ID)
 		cp[i].Union = isUnionTermID(w, cp[i].ID)

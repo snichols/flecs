@@ -513,10 +513,14 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			hasSparseTerms = true
 			break
 		}
+		if t.Kind == TermScope && !isScopeTableSimple(t.Sub) {
+			hasSparseTerms = true
+			break
+		}
 	}
 
 	if hasSparseTerms {
-		// Mixed: use cached archetype tables; per-entity sparse/DontFragment filtering in nextMixed.
+		// Mixed: use cached archetype tables; per-entity sparse/DontFragment/scope filtering in nextMixed.
 		return &QueryIter{
 			world:              cq.w,
 			terms:              cq.terms,
@@ -697,6 +701,29 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 			return
 		}
 	}
+	// Phase 2b: Check TermScope terms (table-level fast path for simple scopes).
+	// NOT(A ∧ B ∧ … ∧ Z) is false for every entity in this table when all inner
+	// archetype IDs are present in the table signature → reject the table.
+	// Complex scopes (with Or-groups, DontFragment, Union, fixed-source, or nested
+	// scopes) are deferred to per-entity evaluation during iteration.
+	for _, term := range cq.terms {
+		if term.Kind != TermScope {
+			continue
+		}
+		if !isScopeTableSimple(term.Sub) {
+			continue // complex scope: evaluated per entity during iteration
+		}
+		allPresent := true
+		for _, sub := range term.Sub {
+			if !t.HasComponent(sub.ID) {
+				allPresent = false
+				break
+			}
+		}
+		if allPresent {
+			return // scope never satisfied for any entity in this table
+		}
+	}
 	// Phase 3: Check traversal And terms; compute per-term resolved sources.
 	var sources map[ID]ID
 	for _, term := range cq.terms {
@@ -785,6 +812,26 @@ func (cq *CachedQuery) Changed() bool {
 			}
 			cq.sparseVersions[key] = ss.version
 		}
+		// Sync sparse versions for scope-internal sparse terms.
+		for _, term := range cq.terms {
+			if term.Kind != TermScope {
+				continue
+			}
+			for _, sub := range term.Sub {
+				if !sub.Sparse {
+					continue
+				}
+				key := ID(sub.ID.Index())
+				ss := cq.w.sparseStorage[key]
+				if ss == nil {
+					continue
+				}
+				if cq.sparseVersions == nil {
+					cq.sparseVersions = make(map[ID]uint64)
+				}
+				cq.sparseVersions[key] = ss.version
+			}
+		}
 		return true
 	}
 	changed := false
@@ -812,6 +859,30 @@ func (cq *CachedQuery) Changed() bool {
 		if !seen || ss.version != last {
 			cq.sparseVersions[key] = ss.version
 			changed = true
+		}
+	}
+	// Check sparse-set versions for scope-internal sparse sub-terms.
+	for _, term := range cq.terms {
+		if term.Kind != TermScope {
+			continue
+		}
+		for _, sub := range term.Sub {
+			if !sub.Sparse {
+				continue
+			}
+			key := ID(sub.ID.Index())
+			ss := cq.w.sparseStorage[key]
+			if ss == nil {
+				continue
+			}
+			if cq.sparseVersions == nil {
+				cq.sparseVersions = make(map[ID]uint64)
+			}
+			last, seen := cq.sparseVersions[key]
+			if !seen || ss.version != last {
+				cq.sparseVersions[key] = ss.version
+				changed = true
+			}
 		}
 	}
 	return changed
