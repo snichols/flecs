@@ -16,6 +16,10 @@ const (
 	EventOnSet EventKind = 2
 	// EventOnRemove fires before a component is removed from an entity, including on entity deletion.
 	EventOnRemove EventKind = 3
+	// EventOnTableCreate fires once per archetype table when the table is first
+	// created (first entity migrates into a previously-unseen component signature).
+	// Does not fire for the world's initial empty table.
+	EventOnTableCreate EventKind = 4
 )
 
 // String returns a human-readable name for the event kind.
@@ -27,6 +31,8 @@ func (ev EventKind) String() string {
 		return "OnSet"
 	case EventOnRemove:
 		return "OnRemove"
+	case EventOnTableCreate:
+		return "OnTableCreate"
 	default:
 		return "Unknown"
 	}

@@ -484,6 +484,83 @@ obs = flecs.ObserveWithOptions[Position](w,
 
 ---
 
+## OnTableCreate {#on-table-create}
+
+`OnTableCreate` fires once per archetype table when that table is **first created** — that is, the first time any entity migrates into a previously-unseen component signature. It is a table-level event, not a component-level event.
+
+Unlike `Observe[T]` / `OnAdd[T]` / `OnSet[T]`, `OnTableCreate` has **no type parameter**: it fires for every new archetype regardless of which components it contains. The handler reads the table's full signature via `t.Type()` and the current row count via `t.Count()`. Mutations to the world must go through `fw` (they are deferred).
+
+```go
+type Position struct{ X, Y float32 }
+type Velocity struct{ X, Y float32 }
+
+w := flecs.New()
+
+w.Write(func(fw *flecs.Writer) {
+    obs := flecs.OnTableCreate(w, func(fw *flecs.Writer, t *flecs.Table) {
+        fmt.Printf("new archetype: %v\n", t.Type())
+    })
+    _ = obs
+})
+
+w.Write(func(fw *flecs.Writer) {
+    e1 := fw.NewEntity()
+    flecs.Set(fw, e1, Position{1, 2})          // new archetype [Position] → fires once
+    e2 := fw.NewEntity()
+    flecs.Set(fw, e2, Position{3, 4})          // same archetype → does NOT fire again
+    e3 := fw.NewEntity()
+    flecs.Set(fw, e3, Position{})
+    flecs.Set(fw, e3, Velocity{})              // new archetype [Position, Velocity] → fires once
+})
+```
+
+### OnTableCreate vs. component observers
+
+| | `Observe[T]` / `OnAdd[T]` | `OnTableCreate` |
+|---|---|---|
+| Scope | one component type `T` | all archetypes |
+| Type parameter | yes (`[T]`) | no |
+| Fires per | entity | archetype table |
+| Re-fires | every matching entity | never (once per table) |
+| `t.Type()` | N/A | full component-ID list |
+
+### Empty root table
+
+`OnTableCreate` does **not** fire for the world's initial empty table (the table that newly created entities occupy before any component is added). This matches upstream's `is_root` suppression in `table.c:1278` and avoids spurious callbacks during world construction.
+
+### yield_existing with OnTableCreate
+
+Use `OnTableCreateWithOptions` with `WithYieldExisting()` to retroactively receive one callback per table that already existed at registration time:
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    e := fw.NewEntity()
+    flecs.Set(fw, e, Position{1, 2}) // [Position] table already exists
+})
+
+w.Write(func(fw *flecs.Writer) {
+    // Fires once immediately for the existing [Position] table.
+    flecs.OnTableCreateWithOptions(w, flecs.WithYieldExisting(),
+        func(fw *flecs.Writer, t *flecs.Table) {
+            fmt.Printf("existing table: %v\n", t.Type())
+        })
+})
+```
+
+The yield sweep fires synchronously before `OnTableCreateWithOptions` returns. Iteration order is sorted-signature order (deterministic within a single run). The empty root table is excluded from the sweep.
+
+### Re-entry
+
+If the handler creates entities (via `fw`) whose component signatures form a new archetype, those commands are deferred and flushed after the outer `Write` scope closes. The resulting new table fires `OnTableCreate` as part of that next flush. This is the same deferred-coalescer path used by `OnAdd`/`OnSet` handlers.
+
+### Table type
+
+The `*flecs.Table` pointer passed to the handler is the same type exposed by `w.TablesFor(componentID)` — it is the `table.Table` type aliased at `world.go:23`. Fields are accessible via the public methods `t.Type() []flecs.ID` and `t.Count() int`.
+
+`OnTableDelete` (fires when a table is reclaimed) is **not yet ported** — Go-flecs has no table-reclamation path; tables persist for the lifetime of the World. See [Not Yet Ported: OnTableDelete](#on-table-delete-not-ported) below.
+
+---
+
 ## Deferred Execution
 
 Observers fire synchronously when the triggering operation is executed. When operations are inside a `Write` scope (which is always the case in Go flecs), the mutations are queued in the deferred command queue and the observers fire when the queue is flushed:
@@ -589,6 +666,12 @@ The following features from C flecs are not yet available in the Go port. They a
 C flecs fires `OnDelete` when a component entity itself is deleted, and `OnDeleteTarget` when a pair target is deleted. Neither event exists in Go flecs.
 
 **Workaround**: Manually call cleanup code before deleting component entities.
+
+### OnTableDelete (not yet ported) {#on-table-delete-not-ported}
+
+`OnTableCreate` fires when a new archetype table is created — **shipped in v0.62.0** (see [OnTableCreate](#on-table-create) above).
+
+`OnTableDelete` fires when a table is reclaimed. It is **not yet ported**: Go-flecs has no table-reclamation path (`delete(w.tables, ...)` is never called; tables persist for the lifetime of the World). Wiring `OnTableDelete` requires implementing table reclamation first, which is a substantial independent change deferred to a follow-up phase.
 
 ### OnTableEmpty / OnTableFill Events
 
