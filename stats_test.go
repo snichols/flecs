@@ -263,14 +263,14 @@ func TestStats_SystemCountAndInPhase(t *testing.T) {
 	}
 }
 
-func TestStats_SystemCountInPhaseInvalidPanic(t *testing.T) {
+func TestStats_SystemCountInPhaseNilPanic(t *testing.T) {
 	w := flecs.New()
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic for invalid phase ID")
+			t.Error("expected panic for nil phase")
 		}
 	}()
-	w.SystemCountInPhase(w.ChildOf())
+	w.SystemCountInPhase(nil)
 }
 
 func TestStats_IsSnapshot(t *testing.T) {

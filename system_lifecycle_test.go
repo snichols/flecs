@@ -231,7 +231,7 @@ func TestSystemLifecycle_RunSystemMutationsFlushed(t *testing.T) {
 }
 
 // TestSystemLifecycle_Phases verifies that Phases() returns the four built-in
-// phase IDs in the documented execution order.
+// phases in the documented execution order.
 func TestSystemLifecycle_Phases(t *testing.T) {
 	w := flecs.New()
 	w.Read(func(r *flecs.Reader) {
@@ -239,10 +239,10 @@ func TestSystemLifecycle_Phases(t *testing.T) {
 		if len(phases) != 4 {
 			t.Fatalf("Phases() len = %d, want 4", len(phases))
 		}
-		want := []flecs.ID{w.PreUpdate(), w.OnFixedUpdate(), w.OnUpdate(), w.PostUpdate()}
-		for i, id := range want {
-			if phases[i] != id {
-				t.Errorf("Phases()[%d] = %d, want %d", i, phases[i], id)
+		want := []*flecs.Phase{w.PreUpdate(), w.OnFixedUpdate(), w.OnUpdate(), w.PostUpdate()}
+		for i, p := range want {
+			if phases[i] != p {
+				t.Errorf("Phases()[%d] = %q, want %q", i, phases[i].Name(), p.Name())
 			}
 		}
 	})
@@ -345,16 +345,16 @@ func TestSystemLifecycle_EachSystemHalt(t *testing.T) {
 	}
 }
 
-// TestSystemLifecycle_SystemsInPhasePanicsOnBadPhase verifies that
-// SystemsInPhase panics when given a non-built-in phase ID.
-func TestSystemLifecycle_SystemsInPhasePanicsOnBadPhase(t *testing.T) {
+// TestSystemLifecycle_SystemsInPhasePanicsOnNilPhase verifies that
+// SystemsInPhase panics when given a nil phase.
+func TestSystemLifecycle_SystemsInPhasePanicsOnNilPhase(t *testing.T) {
 	w := flecs.New()
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("SystemsInPhase with invalid phase ID did not panic")
+			t.Error("SystemsInPhase with nil phase did not panic")
 		}
 	}()
 	w.Read(func(r *flecs.Reader) {
-		r.SystemsInPhase(flecs.ID(9999))
+		r.SystemsInPhase(nil)
 	})
 }

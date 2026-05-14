@@ -843,7 +843,7 @@ func BenchmarkProgress_PipelineFull(b *testing.B) {
 			}
 		}
 	}
-	for _, phase := range []flecs.ID{w.PreUpdate(), w.OnFixedUpdate(), w.OnUpdate(), w.PostUpdate()} {
+	for _, phase := range []*flecs.Phase{w.PreUpdate(), w.OnFixedUpdate(), w.OnUpdate(), w.PostUpdate()} {
 		cq := flecs.NewCachedQuery(w, posID, velID)
 		flecs.NewSystemInPhase(w, phase, cq, sysFn)
 	}

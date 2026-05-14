@@ -1389,8 +1389,8 @@ func TestCovSystem_NewSystemInPhase_Panics(t *testing.T) {
 	mustPanic("nil world", func() {
 		flecs.NewSystemInPhase(nil, w.OnUpdate(), cq, fn)
 	})
-	mustPanic("bad phase", func() {
-		flecs.NewSystemInPhase(w, flecs.ID(99999), cq, fn)
+	mustPanic("nil phase", func() {
+		flecs.NewSystemInPhase(w, nil, cq, fn)
 	})
 	mustPanic("nil query", func() {
 		flecs.NewSystemInPhase(w, w.OnUpdate(), nil, fn)

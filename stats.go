@@ -1,7 +1,6 @@
 package flecs
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -85,29 +84,25 @@ func (w *World) Stats() Stats {
 		Time:             float64(w.time),
 	}
 	if w.frameCount > 0 {
-		phases := make([]PhaseStats, 4)
-		copy(phases, w.lastFramePhases[:])
+		phases := make([]PhaseStats, len(w.lastFramePhases))
+		copy(phases, w.lastFramePhases)
 		s.LastFramePhases = phases
 	}
 	s.ComponentStats = w.buildComponentStats()
 	return s
 }
 
-// SystemCountInPhase returns the number of active (non-closed) systems in the
-// given pipeline phase. Panics if phase is not one of the built-in phases
-// (PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate).
-func (w *World) SystemCountInPhase(phase ID) int {
+// SystemCountInPhase returns the number of registered non-closed systems in the
+// given pipeline phase. Disabled systems are included. Panics if phase is nil.
+func (w *World) SystemCountInPhase(phase *Phase) int {
 	w.checkExclusiveAccessRead()
-	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
-		panic(fmt.Sprintf("flecs: SystemCountInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+	if phase == nil {
+		panic("flecs: SystemCountInPhase: phase must not be nil")
 	}
-	n := 0
-	for _, s := range w.systems {
-		if !s.removed && s.phase == phase {
-			n++
-		}
+	if w.pipelineDirty {
+		w.rebuildPipeline()
 	}
-	return n
+	return len(phase.orderedSystems)
 }
 
 // cachedQueryCount returns the number of active (non-closed) cached queries.

@@ -91,7 +91,15 @@ type World struct {
 	eventOnSetID         ID                              // built-in EventOnSet event entity (index 41)
 	eventOnRemoveID      ID                              // built-in EventOnRemove event entity (index 42)
 	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
-	eventTagID           ID                              // built-in Event tag entity (index 44); user entities start at index 45
+	eventTagID           ID                              // built-in Event tag entity (index 44)
+	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45); user entities start at index 46
+	preUpdate            *Phase                          // built-in PreUpdate pipeline phase
+	onUpdate             *Phase                          // built-in OnUpdate pipeline phase (NewSystem default)
+	postUpdate           *Phase                          // built-in PostUpdate pipeline phase
+	onFixedUpdate        *Phase                          // built-in OnFixedUpdate pipeline phase (accumulator loop)
+	phases               []*Phase                        // all phases: built-in then custom, in registration order
+	phaseOrder           []*Phase                        // cached topological order; rebuilt when pipelineDirty
+	pipelineDirty        bool                            // true when phaseOrder/orderedSystems must be rebuilt
 	withExpandStack      []ID                            // call-stack tracking for With co-add cycle detection
 	cleanupPolicies      map[ID]cleanupPolicyFlags       // relationship entity → cleanup policy bits
 	instantiatePolicies  map[ID]instantiatePolicyFlags   // component entity → OnInstantiate policy bits
@@ -131,7 +139,7 @@ type World struct {
 	frameCount           uint64                          // number of Progress calls
 	fixedTimestep        float32                         // fixed step size; 0 means disabled
 	fixedAccumulator     float32                         // internal accumulator for fixed-step dispatch
-	lastFramePhases      [4]PhaseStats                   // per-phase timing from the most recent Progress call
+	lastFramePhases      []PhaseStats                    // per-phase timing from the most recent Progress call; one entry per phase in topo order
 	logger               *slog.Logger                    // optional structured logger; nil means no logging
 }
 
@@ -183,7 +191,8 @@ type World struct {
 //   - Index 42: EventOnRemove built-in event entity
 //   - Index 43: EventOnTableCreate built-in event entity
 //   - Index 44: Event built-in tag entity (marks an entity as an event identifier)
-//   - Index 45+: user entities (NewEntity)
+//   - Index 45: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
+//   - Index 46+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -457,6 +466,15 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventTag))
 	w.eventTagID = eventTag
+	// Allocate the built-in DependsOn relationship entity (gets index 45).
+	// User entity allocation starts at index 46 after this point.
+	// Bootstrapped with Relationship + PairIsTag (minimum for v1; Traversable and
+	// OnInstantiate/Inherit deferred to a follow-up phase per issue #197 design).
+	dependsOn := w.index.Alloc()
+	rec = w.index.Get(dependsOn)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(dependsOn))
+	w.dependsOnID = dependsOn
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
@@ -481,13 +499,14 @@ func New() *World {
 	applyTraversablePolicy(w, w.childOfID)
 	applyTraversablePolicy(w, w.isAID)
 	// Bootstrap Relationship on built-in relationships, mirroring C bootstrap.c:1280-1288.
-	// SlotOf, DependsOn, and Identifier are upstream but not yet ported; skip.
+	// SlotOf and Identifier are upstream but not yet ported; skip.
 	applyRelationshipPolicy(w, w.isAID)
 	applyRelationshipPolicy(w, w.childOfID)
 	applyRelationshipPolicy(w, w.onDeleteID)
 	applyRelationshipPolicy(w, w.onDeleteTargetID)
 	applyRelationshipPolicy(w, w.onInstantiateID)
 	applyRelationshipPolicy(w, w.withID)
+	applyRelationshipPolicy(w, w.dependsOnID)
 	// Bootstrap Target on built-in target entities, mirroring C bootstrap.c:1291-1293.
 	// Note: Remove, Delete, Cascade, Throw are NOT marked Target in upstream.
 	applyTargetPolicy(w, w.overrideID)
@@ -498,15 +517,30 @@ func New() *World {
 	// the target slot despite having the Relationship trait.
 	applyTraitPolicy(w, w.isAID)
 	applyTraitPolicy(w, w.childOfID)
-	// Bootstrap PairIsTag on IsA and ChildOf, mirroring C bootstrap.c:1272-1273.
-	// SlotOf, DependsOn, and Flag are upstream but not yet ported; skip.
+	// Bootstrap PairIsTag on IsA, ChildOf, and DependsOn, mirroring C bootstrap.c:1272-1273,1283.
+	// SlotOf and Flag are upstream but not yet ported; skip.
 	applyPairIsTagPolicy(w, w.isAID)
 	applyPairIsTagPolicy(w, w.childOfID)
+	applyPairIsTagPolicy(w, w.dependsOnID)
 	// Bootstrap DontInherit on the Prefab tag so that entities inheriting from a
 	// prefab via IsA do NOT acquire the Prefab tag themselves. Mirrors C
 	// ecs_add_pair(world, EcsPrefab, EcsOnInstantiate, EcsDontInherit) at
 	// bootstrap.c:1308.
 	applyInstantiatePolicy(w, w.prefabID, w.dontInheritID)
+	// Create the built-in pipeline phases and establish the default ordering chain:
+	// PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate.
+	// Built-in phases are not entity-backed in v1; they are pure Go structs.
+	w.preUpdate = &Phase{name: "PreUpdate", w: w, enabled: true}
+	w.onFixedUpdate = &Phase{name: "OnFixedUpdate", w: w, enabled: true}
+	w.onUpdate = &Phase{name: "OnUpdate", w: w, enabled: true}
+	w.postUpdate = &Phase{name: "PostUpdate", w: w, enabled: true}
+	w.onFixedUpdate.predecessors = []*Phase{w.preUpdate}
+	w.onUpdate.predecessors = []*Phase{w.onFixedUpdate}
+	w.postUpdate.predecessors = []*Phase{w.onUpdate}
+	w.phases = []*Phase{w.preUpdate, w.onFixedUpdate, w.onUpdate, w.postUpdate}
+	// Set the initial topo order directly (known: linear built-in chain, no custom phases).
+	w.phaseOrder = []*Phase{w.preUpdate, w.onFixedUpdate, w.onUpdate, w.postUpdate}
+	w.pipelineDirty = false
 	// Initialize stage 0 (main stage) and bind the cached write capability to it.
 	s0 := &stage{id: 0, queue: acquireCmdQueue(), world: w}
 	w.stages = []*stage{s0}
@@ -573,23 +607,31 @@ func (w *World) DeleteAction() ID { return w.deleteActionID }
 // recovery is performed.
 func (w *World) PanicAction() ID { return w.panicActionID }
 
-// PreUpdate returns the ID of the built-in PreUpdate pipeline phase entity.
+// PreUpdate returns the built-in PreUpdate pipeline phase.
 // Systems in this phase run first in each Progress call.
-func (w *World) PreUpdate() ID { return w.preUpdateID }
+func (w *World) PreUpdate() *Phase { return w.preUpdate }
 
-// OnUpdate returns the ID of the built-in OnUpdate pipeline phase entity.
-// Systems in this phase run second in each Progress call. NewSystem defaults to this phase.
-func (w *World) OnUpdate() ID { return w.onUpdateID }
+// OnUpdate returns the built-in OnUpdate pipeline phase.
+// Systems in this phase run after OnFixedUpdate. [NewSystem] defaults to this phase.
+func (w *World) OnUpdate() *Phase { return w.onUpdate }
 
-// PostUpdate returns the ID of the built-in PostUpdate pipeline phase entity.
-// Systems in this phase run last in each Progress call (after OnFixedUpdate).
-func (w *World) PostUpdate() ID { return w.postUpdateID }
+// PostUpdate returns the built-in PostUpdate pipeline phase.
+// Systems in this phase run last in each Progress call.
+func (w *World) PostUpdate() *Phase { return w.postUpdate }
 
-// OnFixedUpdate returns the ID of the built-in OnFixedUpdate pipeline phase entity.
+// OnFixedUpdate returns the built-in OnFixedUpdate pipeline phase.
 // Systems in this phase are dispatched via a fixed-step accumulator loop inside
 // each Progress call and always receive the fixed timestep as dt.
-// Use SetFixedTimestep to configure the step; a zero step disables this phase.
-func (w *World) OnFixedUpdate() ID { return w.onFixedUpdateID }
+// Use [World.SetFixedTimestep] to configure the step; a zero step disables this phase.
+func (w *World) OnFixedUpdate() *Phase { return w.onFixedUpdate }
+
+// DependsOn returns the ID of the built-in DependsOn relationship entity.
+// DependsOn is bootstrapped with [World.Relationship] and [World.PairIsTag] traits.
+//
+// The primary ordering API is the typed method form ([Phase.DependsOn] and
+// [System.DependsOn]). This accessor exposes the entity ID for pair queries and
+// HasID checks (e.g. HasID(e, MakePair(w.DependsOn(), target))).
+func (w *World) DependsOn() ID { return w.dependsOnID }
 
 // EventOnAdd returns the ID of the built-in EventOnAdd event entity.
 // Observers registered via Observe[T] or ObserveID for EventOnAdd subscribe

@@ -101,3 +101,12 @@ func DeferForTest(w *World, fn func()) {
 func WriterForTest(w *World) *Writer {
 	return &w.writeCapability
 }
+
+// BuiltinPhaseEntityIDs returns the entity IDs of the four built-in pipeline
+// phases (PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate) allocated in New().
+// These entities exist at indices 4-7 in the world's entity index but are no
+// longer exposed via the public World.PreUpdate() etc. accessors (which now
+// return *Phase). For tests only: used to build accurate built-in skip sets.
+func BuiltinPhaseEntityIDs(w *World) []ID {
+	return []ID{w.preUpdateID, w.onUpdateID, w.postUpdateID, w.onFixedUpdateID}
+}

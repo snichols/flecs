@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.63.0)
+## Shipped (through v0.64.0)
 
 The following features are available in the current release:
 
@@ -16,7 +16,7 @@ The following features are available in the current release:
 - **Hooks** — single per-type hook for `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, `OnReplace[T]` / `OnReplaceID`.
 - **Multi-subscriber observers** — `Observe[T]`, `ObserveID`, `Observe2[T]`; deferred unsubscribe via `Observer.Unsubscribe`.
 - **Coalescing deferred command queue** — `world.Write(func(*Writer))`; nested scopes; safe mutation during iteration. Tagged-union `cmd` structs replace closure captures; bump arena (`cmdArena`) eliminates per-op heap allocation; per-entity intrusive linked list folds all Add/Set/Remove ops for one entity into a single archetype migration. `BenchmarkDeferSingleSet`: 0 allocs/op. Port of C flecs `flecs_cmd_batch_for_entity`.
-- **Systems + 4-phase pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; `Progress`; frame counter; elapsed time.
+- **Systems + dynamic pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; custom phases via `NewPhase` + `(*Phase).DependsOn`; within-phase `(*System).DependsOn` ordering; lazy topological sort via Kahn's algorithm; `Progress`; frame counter; elapsed time.
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
 - **NOT, Optional, and OR query terms** — `With`/`Without`/`Maybe`/`Or` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]` (also handles OR-group disambiguation).
 - **Stats and observability** — `World.Stats()` snapshot with world-level counters, per-phase wall-clock timing from the last Progress, and per-component table/entity counts; `SystemCountInPhase` for tooling.

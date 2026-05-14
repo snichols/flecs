@@ -31,7 +31,8 @@ type System struct {
 	w             *World
 	query         *CachedQuery
 	fn            func(dt float32, it *QueryIter)
-	phase         ID // which pipeline phase this system belongs to
+	phase         *Phase    // which pipeline phase this system belongs to
+	predecessors  []*System // DependsOn edges: this system runs after these
 	removed       bool
 	enabled       bool            // false = skip during pipeline dispatch; default true
 	parallel      bool            // opt-in parallel dispatch; default false
@@ -84,27 +85,31 @@ func NewSystem(w *World, q *CachedQuery, fn func(dt float32, it *QueryIter)) *Sy
 	}
 	w.systems = live
 
-	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdateID, enabled: true}
+	sys := &System{w: w, query: q, fn: fn, phase: w.onUpdate, enabled: true}
 	w.systems = append(w.systems, sys)
+	w.pipelineDirty = true
 	if w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
-			slog.String("phase", phaseName(w, sys.phase)))
+			slog.String("phase", sys.phase.name))
 	}
 	return sys
 }
 
 // NewSystemInPhase registers a new system in the given pipeline phase.
-// phase must be one of w.PreUpdate(), w.OnUpdate(), w.PostUpdate(), or w.OnFixedUpdate().
+// phase may be any built-in or custom *Phase belonging to w.
 //
-// All other validations match NewSystem: panics on nil world/query/fn, closed
-// query, or a query that belongs to a different world.
-func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it *QueryIter)) *System {
+// All other validations match [NewSystem]: panics on nil world/phase/query/fn,
+// closed query, or a query/phase belonging to a different world.
+func NewSystemInPhase(w *World, phase *Phase, q *CachedQuery, fn func(dt float32, it *QueryIter)) *System {
 	if w == nil {
 		panic("flecs: NewSystemInPhase: world must not be nil")
 	}
 	w.checkExclusiveAccessWrite()
-	if phase != w.preUpdateID && phase != w.onUpdateID && phase != w.postUpdateID && phase != w.onFixedUpdateID {
-		panic(fmt.Sprintf("flecs: NewSystemInPhase: phase ID %d is not a recognized built-in phase; valid: PreUpdate, OnUpdate, PostUpdate, OnFixedUpdate", phase))
+	if phase == nil {
+		panic("flecs: NewSystemInPhase: phase must not be nil")
+	}
+	if phase.w != w {
+		panic("flecs: NewSystemInPhase: phase belongs to a different world")
 	}
 	if q == nil {
 		panic("flecs: NewSystemInPhase: query must not be nil")
@@ -130,9 +135,10 @@ func NewSystemInPhase(w *World, phase ID, q *CachedQuery, fn func(dt float32, it
 
 	sys := &System{w: w, query: q, fn: fn, phase: phase, enabled: true}
 	w.systems = append(w.systems, sys)
+	w.pipelineDirty = true
 	if w.logger != nil {
 		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system added",
-			slog.String("phase", phaseName(w, sys.phase)))
+			slog.String("phase", sys.phase.name))
 	}
 	return sys
 }
@@ -277,11 +283,37 @@ func (s *System) effectiveWriteSet() map[ID]struct{} {
 // called. Progress snapshots the active systems at the start of dispatch; any
 // system in that snapshot still runs even if Close is called mid-frame. On
 // the next Progress call the system is definitively skipped.
+// DependsOn declares that this system runs after other within the same phase.
+// Both systems must belong to the same *Phase or the call panics with a
+// message naming both systems and their phases. Idempotent. Returns this for
+// fluent chaining.
+func (s *System) DependsOn(other *System) *System {
+	if other == nil {
+		panic("flecs: System.DependsOn: other must not be nil")
+	}
+	if s.phase != other.phase {
+		panic(fmt.Sprintf(
+			"flecs: System.DependsOn: systems must be in the same phase "+
+				"(this system is in %q, other is in %q)",
+			s.phase.name, other.phase.name,
+		))
+	}
+	for _, pred := range s.predecessors {
+		if pred == other {
+			return s // idempotent
+		}
+	}
+	s.predecessors = append(s.predecessors, other)
+	s.w.pipelineDirty = true
+	return s
+}
+
 func (s *System) Close() {
 	if s.removed {
 		return
 	}
 	s.removed = true
+	s.w.pipelineDirty = true
 	if s.w.logger != nil {
 		s.w.logger.LogAttrs(context.Background(), slog.LevelDebug, "system closed")
 	}
@@ -292,27 +324,25 @@ func (s *System) IsClosed() bool {
 	return s.removed
 }
 
-// Progress runs all registered (non-closed) systems in pipeline phase order:
-// PreUpdate → OnFixedUpdate (accumulator loop) → OnUpdate → PostUpdate.
-// Within a phase, systems run in registration order.
+// Progress runs all registered (non-closed) systems in pipeline phase order.
+// The default order is PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate.
+// Custom phases created with [NewPhase] are inserted at the position defined
+// by their [Phase.DependsOn] declarations. Within each phase, systems run in
+// the order defined by their [System.DependsOn] declarations, with registration
+// order as the tiebreaker.
 //
 // dt must be >= 0; Progress panics on negative dt. A zero dt is allowed and
-// documents as a "null frame" that still increments FrameCount.
+// counts as a "null frame" that still increments FrameCount.
 //
-// Each variable-rate phase (PreUpdate, OnUpdate, PostUpdate) is wrapped in its
-// own deferred-command scope. The OnFixedUpdate phase runs inside a per-iteration
-// deferred scope so that mutations from one fixed tick are visible to the next
-// fixed tick within the same Progress call.
+// Each phase is wrapped in its own deferred-command scope. The OnFixedUpdate
+// phase runs inside a per-iteration deferred scope so that mutations from one
+// fixed tick are visible to the next fixed tick within the same Progress call.
 //
 // Mutations queued by systems in an earlier phase are flushed before the next
 // phase starts, so cross-phase visibility is guaranteed.
 //
-// Within a single phase iteration, mutations are queued and NOT yet visible to
-// peer systems in the same iteration (same-phase safety contract).
-//
-// Deferred-removal semantics: each phase's active set is snapshotted at the
-// start of that phase's Defer block. A system Closed in an earlier phase is
-// excluded from later-phase snapshots.
+// If pipelineDirty is true (any phase or system was added/removed/reordered
+// since the last Progress call), the topo sort is rebuilt before dispatch.
 //
 // Compaction of closed systems is NOT done here; it happens lazily in NewSystem
 // and NewSystemInPhase.
@@ -321,16 +351,21 @@ func (w *World) Progress(dt float32) {
 		panic("flecs: Progress: dt must be >= 0")
 	}
 	w.checkExclusiveAccessWrite()
+	if w.pipelineDirty {
+		w.rebuildPipeline()
+	}
 	w.inProgress = true
 	defer func() { w.inProgress = false }()
 	w.frameCount++
 	w.time += dt
 
-	runPhase := func(p ID, phaseDT float32) {
+	w.lastFramePhases = make([]PhaseStats, len(w.phaseOrder))
+
+	runPhase := func(p *Phase, phaseDT float32) {
 		w.deferScope(func() {
-			active := make([]*System, 0, len(w.systems))
-			for _, s := range w.systems {
-				if s.removed || !s.enabled || s.phase != p {
+			active := make([]*System, 0, len(p.orderedSystems))
+			for _, s := range p.orderedSystems {
+				if s.removed || !s.enabled {
 					continue
 				}
 				if s.interval > 0 {
@@ -459,59 +494,53 @@ func (w *World) Progress(dt float32) {
 		})
 	}
 
-	countPhase := func(p ID) int {
+	countPhase := func(p *Phase) int {
 		n := 0
-		for _, s := range w.systems {
-			if !s.removed && s.enabled && s.phase == p {
+		for _, s := range p.orderedSystems {
+			if !s.removed && s.enabled {
 				n++
 			}
 		}
 		return n
 	}
 
-	runTimed := func(phaseIdx int, name string, p ID, phaseDT float32) {
-		count := countPhase(p)
-		w.lastFramePhases[phaseIdx].Name = name
-		w.lastFramePhases[phaseIdx].SystemCount = count
+	for i, phase := range w.phaseOrder {
+		w.lastFramePhases[i].Name = phase.name
+		if !phase.enabled {
+			continue
+		}
+		if phase == w.onFixedUpdate {
+			// Special: accumulator loop; sum durations across all fixed iterations.
+			count := countPhase(phase)
+			w.lastFramePhases[i].SystemCount = count
+			var total time.Duration
+			if w.fixedTimestep > 0 {
+				w.fixedAccumulator += dt
+				for w.fixedAccumulator >= w.fixedTimestep {
+					step := w.fixedTimestep
+					if count > 0 {
+						start := time.Now()
+						runPhase(phase, step)
+						total += time.Since(start)
+					} else {
+						runPhase(phase, step)
+					}
+					w.fixedAccumulator -= step
+				}
+			}
+			w.lastFramePhases[i].Duration = total
+			continue
+		}
+		count := countPhase(phase)
+		w.lastFramePhases[i].SystemCount = count
 		if count > 0 {
 			start := time.Now()
-			runPhase(p, phaseDT)
-			w.lastFramePhases[phaseIdx].Duration = time.Since(start)
+			runPhase(phase, dt)
+			w.lastFramePhases[i].Duration = time.Since(start)
 		} else {
-			runPhase(p, phaseDT)
-			w.lastFramePhases[phaseIdx].Duration = 0
+			runPhase(phase, dt)
 		}
 	}
-
-	// PreUpdate with real dt.
-	runTimed(0, "PreUpdate", w.preUpdateID, dt)
-
-	// OnFixedUpdate: accumulator loop; sum durations across all iterations.
-	{
-		count := countPhase(w.onFixedUpdateID)
-		w.lastFramePhases[1].Name = "OnFixedUpdate"
-		w.lastFramePhases[1].SystemCount = count
-		var total time.Duration
-		if w.fixedTimestep > 0 {
-			w.fixedAccumulator += dt
-			for w.fixedAccumulator >= w.fixedTimestep {
-				step := w.fixedTimestep
-				if count > 0 {
-					start := time.Now()
-					runPhase(w.onFixedUpdateID, step)
-					total += time.Since(start)
-				} else {
-					runPhase(w.onFixedUpdateID, step)
-				}
-				w.fixedAccumulator -= step
-			}
-		}
-		w.lastFramePhases[1].Duration = total
-	}
-
-	// OnUpdate and PostUpdate with real dt.
-	runTimed(2, "OnUpdate", w.onUpdateID, dt)
-	runTimed(3, "PostUpdate", w.postUpdateID, dt)
 }
 
 // SystemCount returns the number of currently registered (non-closed) systems.
@@ -548,20 +577,4 @@ func RunSystem(s *System, dt float32) {
 		it := s.query.Iter()
 		s.fn(dt, it)
 	})
-}
-
-// phaseName returns a human-readable name for the given pipeline phase ID.
-func phaseName(w *World, phase ID) string {
-	switch phase {
-	case w.preUpdateID:
-		return "PreUpdate"
-	case w.onUpdateID:
-		return "OnUpdate"
-	case w.postUpdateID:
-		return "PostUpdate"
-	case w.onFixedUpdateID:
-		return "OnFixedUpdate"
-	default:
-		return "unknown"
-	}
 }

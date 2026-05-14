@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.64.0 — 2026-05-14 — Phase 16.9: Custom pipeline phases + DependsOn ordering
+
+Ports the two remaining Phase 14.6 gaps: user-defined pipeline phases ordered via `DependsOn` edges, and `(*System).DependsOn` for ordering systems within a phase.
+
+**Breaking changes**: The four built-in phase accessors (`World.PreUpdate`, `World.OnFixedUpdate`, `World.OnUpdate`, `World.PostUpdate`) now return `*Phase` instead of `ID`. Code that stored the return value as `flecs.ID` or passed it directly to `NewSystemInPhase` must be updated (see MIGRATING.md § v0.64.0). Built-in entity count increases from 45 to 46 (new `DependsOn` entity at index 45); user entity allocation now starts at index 46.
+
+### Added
+
+- **`NewPhase(w *World, name string) *Phase`** — creates a custom pipeline phase. The returned `*Phase` must be anchored to the built-in chain via `DependsOn`; `Progress` panics on the first tick for any orphan custom phase.
+- **`(*Phase).DependsOn(other *Phase) *Phase`** — declares execution-order dependency (runs after `other`). Idempotent; returns `this` for fluent chaining. Panics if `other` is nil or from a different world.
+- **`(*Phase).SetEnabled(bool)` / `(*Phase).IsEnabled() bool`** — enable/disable a phase; disabled phases and all their systems are skipped during `Progress`.
+- **`(*Phase).Name() string`** — returns the display name of the phase.
+- **`(*System).DependsOn(other *System) *System`** — orders `this` system after `other` within the same phase, overriding registration order. Panics if systems are in different phases.
+- **`World.DependsOn() ID`** — returns the built-in `DependsOn` relationship entity (index 45).
+
+### Changed
+
+- **`World.PreUpdate() *Phase`**, **`World.OnFixedUpdate() *Phase`**, **`World.OnUpdate() *Phase`**, **`World.PostUpdate() *Phase`** — return type changed from `ID` to `*Phase`. **Breaking**.
+- **`NewSystemInPhase(w, phase *Phase, q, fn)`** — `phase` parameter changed from `ID` to `*Phase`. Panics on nil or cross-world phase. **Breaking**.
+- **`(*Reader).Phases() []*Phase`** — return type changed from `[]ID` to `[]*Phase`.
+- **`(*Reader).SystemsInPhase(phase *Phase) []*System`** — `phase` parameter changed from `ID` to `*Phase`.
+- **`(*Reader).EachSystem(phase *Phase, fn func(*System) bool)`** — `phase` parameter changed from `ID` to `*Phase`.
+- **`World.SystemCountInPhase(phase *Phase) int`** — `phase` parameter changed from `ID` to `*Phase`.
+- **`WorldStats.LastFramePhases`** — type changed from `[4]PhaseStats` to `[]PhaseStats` to accommodate dynamic phase counts.
+- **Pipeline rebuild is now lazy**: any mutation that changes phase or system topology sets a `pipelineDirty` flag; the actual topological sort runs at the start of `Progress` or on-demand in introspection calls.
+- **Built-in entity count**: 45 → 46. User entities now start at index 46. `MarshalJSON` skip set updated; custom phases are NOT serialized (built-ins only survive round-trip).
+
+### Design decisions recorded
+
+1. **Orphan panic policy**: custom phases with no `DependsOn` edge panic at `Progress` time (not at `NewPhase` time). Matches upstream "fail fast at use" rather than "fail fast at construction".
+2. **Cycle panic**: strict panic for both phase cycles and system-within-phase cycles. Error message includes phase/system names.
+3. **Kahn sort tiebreaker**: registration order (insertion index) breaks ties in topological order, matching upstream's entity-ID tiebreak. The full queue is re-sorted by position after each step so that freed nodes always follow all previously-freed nodes with smaller registration indices.
+4. **Custom phases in marshal**: deliberately not serialized. Phase topology is structural metadata that must be re-declared in code; serializing it would create a fragile coupling between snapshot format and pipeline registration order.
+5. **`DependsOn` built-in entity**: bootstrapped with `Relationship` and `PairIsTag` traits (mirrors `ChildOf`/`IsA`). Stored as `w.dependsOnID` (unexported); exposed via `World.DependsOn() ID` for tests and introspection.
+
 ## v0.63.0 — 2026-05-14 — Phase 16.8: Custom events
 
 Ports upstream C flecs's custom event mechanism. Applications can now define arbitrary event entities, subscribe observers to them, and emit them as a typed event bus inside an ECS app. The dispatch table now keys on event entity IDs — a structural change that keeps the `EventKind` convenience enum as a 1:1 mapping to built-in event entities while making the dispatch path uniform across built-in and custom events.

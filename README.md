@@ -229,11 +229,11 @@ state during the window, so all ECS tables are safe to read concurrently.
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |
 | Traversal query terms | `With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)`; `IsFieldSelf`, `FieldShared[T]` |
 | Inheritable components | `SetInheritable[T](w)` / `w.SetInheritable(cid)` — auto-promotes query terms to `Self\|Up(IsA)` so inheritor entities are matched without explicit traversal |
-| Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress` |
+| Systems + pipeline | `NewSystem`, `NewSystemInPhase`, `Progress`; custom phases via `NewPhase` + `(*Phase).DependsOn`; within-phase `(*System).DependsOn` ordering _(v0.64.0)_ |
 | System disabling _(v0.58.0)_ | `sys.SetEnabled(false)` / `sys.IsEnabled()` — pause/resume without removing; `RunSystem` ignores the flag |
 | Rate filters _(v0.61.0)_ | `sys.SetInterval(d)` / `sys.SetRate(n)` — run a system every N ticks or at most once per wall-clock duration; gates compose with AND semantics; counters freeze while disabled |
 | Single-system Run _(v0.58.0)_ | `RunSystem(s, dt)` — invoke one system synchronously, outside the pipeline; mutations flushed before return |
-| Pipeline introspection _(v0.58.0)_ | `r.Phases()`, `r.SystemsInPhase(phase)`, `r.EachSystem(phase, fn)` — inspect registered systems in execution order |
+| Pipeline introspection _(v0.58.0)_ | `r.Phases() []*Phase`, `r.SystemsInPhase(phase *Phase) []*System`, `r.EachSystem(phase *Phase, fn)` — inspect registered systems in execution order |
 | Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
 | Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |

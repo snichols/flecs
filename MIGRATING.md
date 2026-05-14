@@ -1,5 +1,66 @@
 # Migrating
 
+## v0.63.0 → v0.64.0 — BREAKING: Phase accessors return `*Phase`; `NewSystemInPhase` takes `*Phase`
+
+### What changed
+
+The four built-in phase accessors and the `NewSystemInPhase` registration function now use `*Phase` instead of `flecs.ID`. The `*Phase` type is an opaque handle that supports `DependsOn`, `SetEnabled`, `IsEnabled`, and `Name`. The pipeline is now lazily rebuilt with Kahn's topological sort every time the topology changes.
+
+Additionally, the built-in entity count increases from 45 to 46 (new `DependsOn` relationship entity at index 45). User entity allocation now starts at index 46.
+
+### Required migration steps
+
+#### 1. Update phase accessor usage
+
+```go
+// v0.63.0 — accessors returned flecs.ID
+var phase flecs.ID = w.OnUpdate()
+flecs.NewSystemInPhase(w, w.OnUpdate(), q, fn)
+
+// v0.64.0 — accessors return *flecs.Phase
+var phase *flecs.Phase = w.OnUpdate()
+flecs.NewSystemInPhase(w, w.OnUpdate(), q, fn) // same call, *Phase accepted
+```
+
+#### 2. Update introspection call sites
+
+```go
+// v0.63.0
+phases := r.Phases()        // []flecs.ID
+r.SystemsInPhase(phaseID)   // flecs.ID param
+r.EachSystem(phaseID, fn)   // flecs.ID param
+w.SystemCountInPhase(phaseID)
+
+// v0.64.0
+phases := r.Phases()         // []*flecs.Phase
+r.SystemsInPhase(phasePtr)   // *flecs.Phase param
+r.EachSystem(phasePtr, fn)   // *flecs.Phase param
+w.SystemCountInPhase(phasePtr)
+```
+
+#### 3. Update hardcoded built-in entity counts
+
+Code that hardcodes `44` or `45` as the number of built-in entities must be updated to `46`:
+
+```go
+// v0.63.0
+const builtinEntityCount = 45
+
+// v0.64.0
+const builtinEntityCount = 46
+```
+
+#### 4. Update `WorldStats.LastFramePhases` usage
+
+```go
+// v0.63.0 — fixed-size array
+var stats flecs.WorldStats = w.Stats()
+_ = stats.LastFramePhases[2] // [4]PhaseStats
+
+// v0.64.0 — dynamic slice
+_ = stats.LastFramePhases[2] // []PhaseStats — same indexing, but len() may vary
+```
+
 ## v0.52.0 → v0.53.0 (Phase 15.21) — BREAKING: Sparse/DontFragment split
 
 ### What changed
