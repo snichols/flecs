@@ -92,7 +92,9 @@ type World struct {
 	eventOnRemoveID      ID                              // built-in EventOnRemove event entity (index 42)
 	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
 	eventTagID           ID                              // built-in Event tag entity (index 44)
-	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45); user entities start at index 46
+	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45)
+	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46); user entities start at index 47
+	monitors             []*monitorObserver              // all registered monitor observers
 	preUpdate            *Phase                          // built-in PreUpdate pipeline phase
 	onUpdate             *Phase                          // built-in OnUpdate pipeline phase (NewSystem default)
 	postUpdate           *Phase                          // built-in PostUpdate pipeline phase
@@ -192,7 +194,8 @@ type World struct {
 //   - Index 43: EventOnTableCreate built-in event entity
 //   - Index 44: Event built-in tag entity (marks an entity as an event identifier)
 //   - Index 45: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
-//   - Index 46+: user entities (NewEntity)
+//   - Index 46: EventMonitor built-in event entity
+//   - Index 47+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -467,7 +470,6 @@ func New() *World {
 	rec.Row = uint32(w.empty.Append(eventTag))
 	w.eventTagID = eventTag
 	// Allocate the built-in DependsOn relationship entity (gets index 45).
-	// User entity allocation starts at index 46 after this point.
 	// Bootstrapped with Relationship + PairIsTag (minimum for v1; Traversable and
 	// OnInstantiate/Inherit deferred to a follow-up phase per issue #197 design).
 	dependsOn := w.index.Alloc()
@@ -475,6 +477,13 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(dependsOn))
 	w.dependsOnID = dependsOn
+	// Allocate the built-in EventMonitor event entity (gets index 46).
+	// User entity allocation starts at index 47 after this point.
+	eventMonitor := w.index.Alloc()
+	rec = w.index.Get(eventMonitor)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventMonitor))
+	w.eventMonitorID = eventMonitor
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
 	// This mirrors C src/bootstrap.c:705 where cr_childof_wildcard->flags gets
@@ -647,6 +656,12 @@ func (w *World) EventOnRemove() ID { return w.eventOnRemoveID }
 // EventOnTableCreate returns the ID of the built-in EventOnTableCreate event entity.
 func (w *World) EventOnTableCreate() ID { return w.eventOnTableCreateID }
 
+// EventMonitor returns the ID of the built-in EventMonitor event entity (index 46).
+// Monitor observers registered via Monitor / MonitorWithOptions subscribe to this
+// event kind. The entity is exposed for introspection and symmetry with other
+// built-in event entities; direct observer dispatch is not performed via this ID.
+func (w *World) EventMonitor() ID { return w.eventMonitorID }
+
 // Event returns the ID of the built-in Event tag entity.
 // RegisterEvent automatically adds this tag to every custom event entity,
 // enabling HasID(eventID, w.Event()) discrimination.
@@ -767,6 +782,12 @@ func (w *World) deleteOne(e ID) bool {
 	}
 	t := rec.Table
 	row := int(rec.Row)
+	// Fire monitor exit events BEFORE any component removal so that callbacks
+	// can still read the entity's components. Mirrors the 'no-catch-up on
+	// re-enable' semantic: monitors see a clean exit, not a partial state.
+	if len(w.monitors) > 0 {
+		w.fireMonitorsOnDelete(e, t)
+	}
 	if t != nil {
 		for _, id := range t.Type() {
 			// Sparse-only components: data is in sparse-set; sparseHeld path below will
@@ -1173,6 +1194,11 @@ func removeImmediate[T any](w *World, e ID) bool {
 		}
 		w.fireOnRemove(info, cid, e, ptr)
 		sparseSetRemove(w, e, cid)
+		// Fire sparse monitors AFTER removal so entityMatchesMonitorExcluding
+		// sees the updated sparse-set state (no excludeID needed).
+		if len(w.monitors) > 0 {
+			w.fireSparseMonitors(e, cid, 0)
+		}
 		return true
 	}
 	// Sparse-only (no DontFragment): remove from sparse-set AND cause an archetype
@@ -1188,6 +1214,10 @@ func removeImmediate[T any](w *World, e ID) bool {
 		rec := w.index.Get(e)
 		if rec != nil && rec.Table != nil && rec.Table.HasComponent(cid) {
 			w.migrateArchetypeOnly(e, 0, cid)
+		}
+		// Fire sparse monitors AFTER both sparse-set and archetype are updated.
+		if len(w.monitors) > 0 {
+			w.fireSparseMonitors(e, cid, 0)
 		}
 		return true
 	}
@@ -1353,6 +1383,20 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	// Update the migrating entity's record to point at the new location.
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
+
+	// Fire archetype monitors using the table-pair check now that the record
+	// reflects the new state. Fire sparse monitors for each component that
+	// changed — entity state is fully updated so entityMatchesMonitorExcluding
+	// evaluates correctly without an excludeID hint.
+	if len(w.monitors) > 0 {
+		w.fireArchetypeMonitors(e, oldTable, newTable)
+		if addID != 0 {
+			w.fireSparseMonitors(e, addID, 0)
+		}
+		if removeID != 0 {
+			w.fireSparseMonitors(e, removeID, 0)
+		}
+	}
 }
 
 // migrateArchetypeOnly moves entity e's archetype record by adding or removing
@@ -1569,6 +1613,17 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 	// Point e's record at its new location.
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
+
+	// Fire monitors after the record is updated so entity state is consistent.
+	if len(w.monitors) > 0 {
+		w.fireArchetypeMonitors(e, oldTable, newTable)
+		for _, id := range addedIDs {
+			w.fireSparseMonitors(e, id, 0)
+		}
+		for _, id := range removedIDs {
+			w.fireSparseMonitors(e, id, 0)
+		}
+	}
 }
 
 // sigKey encodes a sorted []ID as a string map key (allocating copy).

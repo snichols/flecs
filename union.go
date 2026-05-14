@@ -146,6 +146,11 @@ func unionStoreSet(w *World, relKey ID, e ID, relID ID, targetID ID) bool {
 		oldInfo, _ := w.registry.LookupByID(oldPairID)
 		w.fireOnRemove(oldInfo, oldPairID, e, nil)
 		store.dense[pos].target = targetID
+		// Fire sparse monitors for old pair AFTER the store is updated so that
+		// entityMatchesMonitorExcluding sees oldPairID as no longer active.
+		if len(w.monitors) > 0 {
+			w.fireSparseMonitors(e, oldPairID, 0)
+		}
 	} else {
 		store.index[entityKey] = len(store.dense)
 		store.dense = append(store.dense, unionEntry{entity: e, target: targetID})
@@ -154,6 +159,10 @@ func unionStoreSet(w *World, relKey ID, e ID, relID ID, targetID ID) bool {
 	// Fire OnAdd for new pair.
 	newInfo, _ := w.registry.LookupByID(newPairID)
 	w.fireOnAdd(newInfo, newPairID, e, nil)
+	// Fire sparse monitors for new pair AFTER it is in the store.
+	if len(w.monitors) > 0 {
+		w.fireSparseMonitors(e, newPairID, 0)
+	}
 	return true
 }
 

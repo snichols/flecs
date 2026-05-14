@@ -21,6 +21,12 @@ func clearImmediate(w *World, e ID) bool {
 	// false even when the sparseHeld cleanup below fires.
 	hasComponents := t != nil && len(t.Type()) > 0
 
+	// Fire monitor exit events BEFORE any component removal so callbacks can
+	// still read the entity's current components.
+	if len(w.monitors) > 0 {
+		w.fireMonitorsOnDelete(e, t)
+	}
+
 	if hasComponents {
 		// Fire OnRemove for archetype components. Skip pure Sparse (sparsePolicies &&
 		// !dontFragmentPolicies): their data lives in the sparse-set, not the table

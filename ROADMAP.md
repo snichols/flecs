@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.64.0)
+## Shipped (through v0.65.0)
 
 The following features are available in the current release:
 
@@ -65,6 +65,8 @@ The following features are available in the current release:
 - **Rate filters** _(v0.61.0, Phase 16.6)_ — `(*System).SetInterval(d time.Duration)` / `(*System).GetInterval()` + `(*System).SetRate(n int32)` / `(*System).GetRate()`. Interval gate uses subtract-with-cap accumulator (matches upstream `timer.c:33–35`); rate gate uses modulo counter. Both gates compose with AND semantics — diverges from upstream which forbids the combination. Counters freeze while system is disabled; re-enable resumes from pre-disable state. Closes `docs/README.md` gap line 144.
 - **OnTableCreate observer** _(v0.62.0, Phase 16.7)_ — `OnTableCreate(w, fn)` / `OnTableCreateWithOptions(w, WithYieldExisting(), fn)`. Fires once per newly-created archetype table; untyped (no `[T]`); empty root table excluded. `WithYieldExisting()` sweeps existing tables synchronously at registration. `OnTableDelete` deferred pending table-reclamation infrastructure. Closes the OnTableCreate half of the table-events gap entry in `docs/README.md`.
 - **Custom events** _(v0.63.0, Phase 16.8)_ — `RegisterEvent(fw, name)`, `Emit(fw, eventID, entity, payload)`, `EmitTyped[T]`, `ObserveEvent(w, eventID, fn)`, `ObserveEventTyped[T]`. Dispatch table refactored: observers now keyed on event entity IDs (built-in and custom share the same path). `EventKind` enum preserved as a convenience layer. Five new built-in event entities at indices 40–44; user entities now start at index 45. Closes `docs/README.md` custom-events gap entry.
+- **Custom pipeline phases + DependsOn ordering** _(v0.64.0, Phase 16.9)_ — `NewPhase(w, name)`, `(*Phase).DependsOn(other *Phase)`, `(*Phase).SetEnabled(bool)`, `(*Phase).IsEnabled() bool`, `(*Phase).Name() string`. `(*System).DependsOn(other *System)` for within-phase ordering. Lazy topological sort via Kahn's algorithm. Built-in phase accessors now return `*Phase`; `NewSystemInPhase` takes `*Phase`. Built-in entity count: 46; user entities now start at index 46.
+- **Monitor observers** _(v0.65.0, Phase 16.10)_ — `Monitor(w, terms, fn)` / `MonitorWithOptions(w, terms, opts, fn)`. Fires `fn(fw, e, entered bool)` when an entity transitions into (entered=true) or out of (entered=false) a multi-term query match. Hybrid match-state tracking: table-pair check for archetype-only monitors (O(monitors×terms) per migration, no per-entity state); per-entity matched set for sparse/DontFragment/Union monitors. `WithYieldExisting()` sweeps existing entities at registration. Disabled monitor semantics: no catch-up on re-enable. Entity deletion and `Clear` fire exit events before component removal. Unsubscribe via `Observer.Unsubscribe`. Built-in `EventMonitor` entity at index 46; user entities now start at index 47. Closes `docs/README.md` monitor-observers gap entry.
 
 ## Documentation
 
@@ -102,8 +104,7 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 - **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.9 candidate.)
 - **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
 - **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.9 candidate.)
-- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.10 candidate.)
-- **Monitor observers** — fire once when a query transitions from "no matches" to "has matches" and vice versa. (Phase 16.11 candidate.)
+- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.11 candidate.)
 - **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.12 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)

@@ -2,6 +2,7 @@ package flecs_test
 
 import (
 	"testing"
+	"unsafe"
 
 	flecs "github.com/snichols/flecs"
 )
@@ -1721,4 +1722,34 @@ func TestCovScope_HasID_UnionNoStore(t *testing.T) {
 			t.Error("HasID union no store: expected false, got true")
 		}
 	})
+}
+
+// ── observer.go ───────────────────────────────────────────────────────────────
+
+// TestCovObserver_EventKindString covers the EventOnTableCreate case in String()
+// and the EventOnTableCreate, EventMonitor, and default cases in eventKindToEntity
+// (observer.go lines 39-40, 66-71). These are covered by registering an ObserveID
+// with each event kind, which calls eventKindToEntity internally.
+func TestCovObserver_EventKindStringAndEntity(t *testing.T) {
+	// Cover EventOnTableCreate.String() → "OnTableCreate"
+	if s := flecs.EventOnTableCreate.String(); s != "OnTableCreate" {
+		t.Errorf("EventOnTableCreate.String() = %q, want %q", s, "OnTableCreate")
+	}
+
+	// Cover eventKindToEntity for EventOnTableCreate and EventMonitor via ObserveID.
+	w := flecs.New()
+	type covComp struct{ V int }
+	id := flecs.RegisterComponent[covComp](w)
+
+	// EventOnTableCreate: calls eventKindToEntity(w, EventOnTableCreate).
+	obs1 := flecs.ObserveID(w, id, flecs.EventOnTableCreate, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	if obs1 == nil {
+		t.Fatal("ObserveID EventOnTableCreate returned nil")
+	}
+
+	// EventMonitor: calls eventKindToEntity(w, EventMonitor).
+	obs2 := flecs.ObserveID(w, id, flecs.EventMonitor, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	if obs2 == nil {
+		t.Fatal("ObserveID EventMonitor returned nil")
+	}
 }
