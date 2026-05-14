@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.86.0)
+## Shipped (through v0.87.0)
 
 The following features are available in the current release:
 
@@ -87,6 +87,7 @@ The following features are available in the current release:
 - **Alerts addon** _(v0.83.0, Phase 16.28)_ — `RegisterAlert` / `Alerts` / `AlertsBySeverity` / `AlertsForEntity`; query-driven raise/clear lifecycle via monitor observer; `AlertInfo`/`AlertWarning`/`AlertError`/`AlertCritical` severity constants; `%d` entity-ID message interpolation; definitions survive JSON round-trip. Closes `docs/README.md` gap line 76. See [docs/Alerts.md](docs/Alerts.md).
 - **Units addon** _(v0.85.0, Phase 16.30)_ — `RegisterUnit` / `(*World).UnitFor` / `(*Writer).SetUnit` / `Convert`; 15 built-in units (Meter, KiloMeter, MilliMeter, Second, MilliSecond, Minute, Hour, Gram, KiloGram, MegaGram, Newton, Joule, Hertz, Radian, Degree) at fixed entity indices 48–62; user-defined units with arbitrary base chains; multi-hop `Convert` walks the chain; definitions survive JSON round-trip. Compound units (`m/s`, `kg·m²/s²`) deferred to Phase 16.30.1. Closes `docs/README.md` gap line 78. See [docs/Units.md](docs/Units.md).
 - **REST stats endpoints** _(v0.86.0, Phase 16.31)_ — `GET /stats/world` returns `WorldStats` snapshot; `GET /stats/pipeline` returns full `PipelineStats` (world counters + `[]SystemStats` + `[]PhaseStats`). Snake_case JSON field names; `Cache-Control: no-store`; 503 panic-recovery. Calls `w.StatsSnapshot()` directly (goroutine-safe). Partial closure of `docs/README.md` gap line 90 (mutation/query/type_info still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md).
+- **REST type-info endpoint** _(v0.87.0, Phase 16.32)_ — `GET /type_info/{path}` returns the reflection schema for a named component: `name`, `size`, `align`, `fields` (depth-1 `reflect.StructField` walk), `unit` (when `UnitFor` returns ok), `opaque: true` for dynamic components. Path resolved via `world.Lookup` (`.` separator, deliberate C divergence). `Cache-Control: max-age=300`. 404 for unknown paths and bare entity-tags. Partial closure of `docs/README.md` gap lines 90 and 181. See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#get-type_infopath).
 
 ## Documentation
 

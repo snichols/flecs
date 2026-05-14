@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.87.0 — 2026-05-14 — Phase 16.32: REST type-info endpoint
+
+Adds `GET /type_info/{path}` to the read-only REST handler, returning the reflection
+schema for a named component as JSON. The endpoint resolves the dot-separated path via
+`world.Lookup` (Go-flecs's path separator is `.`, not `/` as in C upstream — deliberate
+v1 divergence) and walks `reflect.StructField` at depth 1 to build the schema.
+
+### API additions
+
+- **`GET /type_info/{path}`** — returns the component's `name`, `size`, `align`, and
+  `fields` (array of `{name, type, offset}` for struct components). Optional fields:
+  `opaque: true` for dynamic components (`TypeInfo.Type == nil`);
+  `unit: "<unit-name>"` when `world.UnitFor` returns a registered unit.
+  `Cache-Control: max-age=300`. Returns `404 Not Found` when the path resolves to nothing
+  or the resolved entity has no TypeInfo (bare entity-tags → 404, registered
+  components → 200).
+
+### Semantics
+
+- **Typed struct components** — depth-1 `reflect.StructField` walk. Pointer, interface,
+  slice, and nested-struct fields are rendered as opaque `reflect.Type.String()` strings;
+  no recursive expansion in v1.
+- **Dynamic components** (`RegisterDynamicComponent`) — `fields: []`, `opaque: true`.
+- **Zero-size structs** — `size: 0`, `fields: []`, no `opaque` flag.
+- **Unit annotation** — `unit: "<unit-name>"` when `world.UnitFor(id)` returns ok.
+
+### Test coverage
+
+9 test functions in `rest_type_info_test.go` cover typed struct, dynamic component, bare
+entity, nonexistent path, unit annotation, nested struct (depth-1 opaque), opaque fields
+(pointer/interface/slice), concurrent access under `-race`, and Cache-Control header.
+`rest.go` per-function coverage: `restTypeInfo` 100%; overall package coverage ≥ 95%.
+
+---
+
 ## v0.86.0 — 2026-05-14 — Phase 16.31: REST stats endpoints
 
 Adds two new HTTP endpoints to the read-only REST handler so external monitoring tools
