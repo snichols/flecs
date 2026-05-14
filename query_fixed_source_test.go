@@ -13,6 +13,9 @@ type fqsSimTime struct{ DT float32 }
 type fqsDifficulty struct{ Level int }
 type fqsSparseComp struct{ Val int }
 type fqsDFPairData struct{ V int }
+type fqsTagComp struct{}        // zero-size tag for fixed-source tag tests
+type fqsDFComp struct{ W int }  // DontFragment component for sparse/mixed tests
+type fqsOptComp struct{ U int } // optional fixed-source component
 
 // TestFixedSourceBasic verifies the motivating singleton-on-query pattern:
 // iterate entities with Position; SimTime is constant and bound to game.
@@ -812,6 +815,223 @@ func TestFixedSourceChainedBuilder(t *testing.T) {
 		}
 		if !found {
 			t.Fatal("expected at least one match via chained builder")
+		}
+	})
+	_ = e
+}
+
+// TestFixedSourceTermOrPanics: Or(id).Source(game) panics at validateAndSortTerms
+// because TermOr with a fixed source is not supported in this phase.
+func TestFixedSourceTermOrPanics(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[fqsPosition](w)
+	simTimeID := flecs.RegisterComponent[fqsSimTime](w)
+
+	var game flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		game = fw.NewEntity()
+		flecs.Set(fw, game, fqsSimTime{DT: 0.016})
+	})
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for TermOr with fixed source, got none")
+		}
+	}()
+	_ = flecs.NewQueryFromTerms(w,
+		flecs.With(posID),
+		flecs.Or(simTimeID).Source(game), // TermOr + fixed-source → panic
+	)
+}
+
+// TestFixedSourceValidateTraversalDirectConstruct covers the validateAndSortTerms
+// traversal+fixed-source panic (line 1509) by constructing a Term directly with
+// both Src and a non-default Traverse — bypassing the Source() builder's own guard.
+func TestFixedSourceValidateTraversalDirectConstruct(t *testing.T) {
+	w := flecs.New()
+	simTimeID := flecs.RegisterComponent[fqsSimTime](w)
+	var rel, game flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		flecs.SetTraversable(w, rel)
+		game = fw.NewEntity()
+		flecs.Set(fw, game, fqsSimTime{DT: 0.016})
+	})
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for direct Term with Src + TraverseUp, got none")
+		}
+	}()
+	// Directly construct a Term with Src and a traversal flag to bypass Source()'s guard
+	// and exercise the validateAndSortTerms check at line 1509.
+	_ = flecs.NewQueryFromTerms(w, flecs.Term{
+		ID:       simTimeID,
+		Kind:     flecs.TermAnd,
+		Src:      game,
+		Traverse: flecs.TraverseUp,
+		Trav:     rel,
+	})
+}
+
+// TestFixedSourceDontFragmentOptional covers updateOptionalPresenceSparse (line 969):
+// a pure-DontFragment query with an optional fixed-source term. When nextSparseOnly
+// advances, updateOptionalPresenceSparse skips the fixed-source optional term.
+func TestFixedSourceDontFragmentOptional(t *testing.T) {
+	w := flecs.New()
+
+	dfID := flecs.RegisterComponent[fqsDFComp](w)
+	optID := flecs.RegisterComponent[fqsOptComp](w)
+	flecs.SetDontFragment(w, dfID)
+
+	var game, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		game = fw.NewEntity()
+		flecs.Set(fw, game, fqsOptComp{U: 7})
+		e = fw.NewEntity()
+		flecs.Set(fw, e, fqsDFComp{W: 1})
+	})
+
+	w.Read(func(fr *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(dfID),
+			flecs.Maybe(optID).Source(game), // optional fixed-source → updateOptionalPresenceSparse skip
+		)
+		it := q.Iter()
+		count := 0
+		for it.Next() {
+			count += it.Count()
+			sl, ok := flecs.FieldMaybe[fqsOptComp](it, optID)
+			if !ok || len(sl) == 0 {
+				t.Fatalf("expected optional fixed-source present, got ok=%v", ok)
+			}
+		}
+		if count != 1 {
+			t.Fatalf("want 1 entity, got %d", count)
+		}
+	})
+	_ = e
+}
+
+// TestFixedSourceMixedOptional covers updateOptionalPresenceMixed (line 992):
+// a mixed (archetype + DontFragment) query with an optional fixed-source term.
+// In mixed iteration, updateOptionalPresenceMixed skips the fixed-source optional term.
+func TestFixedSourceMixedOptional(t *testing.T) {
+	w := flecs.New()
+
+	posID := flecs.RegisterComponent[fqsPosition](w)
+	dfID := flecs.RegisterComponent[fqsDFComp](w)
+	optID := flecs.RegisterComponent[fqsOptComp](w)
+	flecs.SetDontFragment(w, dfID)
+
+	var game, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		game = fw.NewEntity()
+		flecs.Set(fw, game, fqsOptComp{U: 99})
+		e = fw.NewEntity()
+		flecs.Set(fw, e, fqsPosition{X: 1})
+		flecs.Set(fw, e, fqsDFComp{W: 2}) // DontFragment → hasSparseTerms → mixed mode
+	})
+
+	w.Read(func(fr *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.With(dfID),
+			flecs.Maybe(optID).Source(game), // optional fixed-source → updateOptionalPresenceMixed skip
+		)
+		it := q.Iter()
+		count := 0
+		for it.Next() {
+			count += it.Count()
+			sl, ok := flecs.FieldMaybe[fqsOptComp](it, optID)
+			if !ok || len(sl) == 0 {
+				t.Fatalf("expected optional fixed-source present, got ok=%v", ok)
+			}
+		}
+		if count != 1 {
+			t.Fatalf("want 1 entity, got %d", count)
+		}
+	})
+	_ = e
+}
+
+// TestFixedSourceTagComponentField covers Field/FieldMaybe for a zero-size tag
+// component used as a fixed-source term:
+// - Field[tag](it, tagID): ptr==nil → returns make([]T, 1) (line 1250)
+// - FieldMaybe[tag](it, tagID): ptr==nil → returns (make([]T,1), true) (line 1338)
+func TestFixedSourceTagComponentField(t *testing.T) {
+	w := flecs.New()
+
+	posID := flecs.RegisterComponent[fqsPosition](w)
+	tagID := flecs.RegisterComponent[fqsTagComp](w)
+
+	var game, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		game = fw.NewEntity()
+		flecs.Set(fw, game, fqsTagComp{}) // zero-size tag on source
+		e = fw.NewEntity()
+		flecs.Set(fw, e, fqsPosition{X: 1})
+	})
+
+	w.Read(func(fr *flecs.Reader) {
+		// TermAnd + tag: Field returns make([]T, 1) (line 1250)
+		q1 := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.WithSourceTerm(tagID, game),
+		)
+		it1 := q1.Iter()
+		for it1.Next() {
+			tags := flecs.Field[fqsTagComp](it1, tagID)
+			if len(tags) != 1 {
+				t.Fatalf("Field[tag] want len=1, got %d", len(tags))
+			}
+		}
+
+		// TermOptional + tag: FieldMaybe returns (make([]T,1), true) (line 1338)
+		q2 := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.Maybe(tagID).Source(game),
+		)
+		it2 := q2.Iter()
+		for it2.Next() {
+			tags, ok := flecs.FieldMaybe[fqsTagComp](it2, tagID)
+			if !ok || len(tags) != 1 {
+				t.Fatalf("FieldMaybe[tag] want (len=1, true), got len=%d ok=%v", len(tags), ok)
+			}
+		}
+	})
+	_ = e
+}
+
+// TestFixedSourceFieldPanicAbsentOptional covers Field() (line 1245) panicking
+// when called for an optional fixed-source term whose source lacks the component.
+// Callers should use FieldMaybe instead; Field panics to surface the misuse.
+func TestFixedSourceFieldPanicAbsentOptional(t *testing.T) {
+	w := flecs.New()
+
+	posID := flecs.RegisterComponent[fqsPosition](w)
+	simTimeID := flecs.RegisterComponent[fqsSimTime](w)
+
+	var gameNoTime, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		gameNoTime = fw.NewEntity() // no SimTime
+		e = fw.NewEntity()
+		flecs.Set(fw, e, fqsPosition{X: 1})
+	})
+
+	w.Read(func(fr *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.Maybe(simTimeID).Source(gameNoTime), // optional, absent from source
+		)
+		it := q.Iter()
+		if it.Next() {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("expected panic when calling Field for absent optional fixed-source")
+				}
+			}()
+			_ = flecs.Field[fqsSimTime](it, simTimeID) // panics: absent optional → line 1245
 		}
 	})
 	_ = e
