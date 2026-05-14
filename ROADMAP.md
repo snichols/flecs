@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.59.0)
+## Shipped (through v0.60.0)
 
 The following features are available in the current release:
 
@@ -61,6 +61,7 @@ The following features are available in the current release:
 - **Disabled + Prefab built-in tags** _(v0.57.0, Phase 16.2)_ — `DisableEntity(fw, e)` / `EnableEntity(fw, e)` / `IsDisabled(scope, e)` and `MarkPrefab(fw, e)` / `IsPrefab(scope, e)` / `w.Disabled()` / `w.Prefab()`. Ordinary queries silently exclude tables containing either tag (O(1) per-table test); opt in by mentioning the tag in any term kind. `Prefab` bootstrapped with `DontInherit` so IsA instances do not inherit it. Mirrors C `EcsDisabled` / `EcsPrefab` / `EcsTableIsDisabled` / `EcsTableIsPrefab`. Built-in entity count: 39; user entities start at index 40.
 - **System lifecycle bundle** _(v0.58.0, Phase 16.3)_ — `(*System).SetEnabled(bool)` / `(*System).IsEnabled() bool` — pause/resume without removing. `RunSystem(s, dt)` — synchronous out-of-pipeline invocation; bypasses phase ordering and the enabled flag. `(*Reader).Phases() []ID`, `(*Reader).SystemsInPhase(phase) []*System`, `(*Reader).EachSystem(phase, fn)` — pipeline introspection in registration order (includes disabled systems). Option A design: bool field on `*System`; no entity allocation per system.
 - **Sorted cached queries** _(v0.59.0, Phase 16.4)_ — `NewCachedQueryFromTermsWithOptions` + `WithOrderBy(compID, cmp)`. `OrderBy[T]` typed wrapper; `OrderByFunc` raw form. Cached; lazily rebuilt on table `ChangeCount` changes or new matching tables. Single `sort.SliceStable` over all matched entities (vs upstream two-step quicksort + k-way merge — future optimization). Closes `docs/README.md` gap line 110.
+- **Observer lifecycle bundle** _(v0.60.0, Phase 16.5)_ — `ObserveWithOptions[T]` + `WithYieldExisting()` + `(*Observer).SetEnabled(bool)` / `(*Observer).IsEnabled() bool`. `yield_existing` retroactively fires the newly-registered observer for all existing matching entities (OnAdd/OnSet only; synchronous sweep; skips Disabled/Prefab tables). Observer disabling pauses dispatch without unsubscribing, mirroring `(*System).SetEnabled` from Phase 16.3. Closes `docs/README.md` gap lines 156 and 159.
 
 ## Documentation
 
@@ -94,15 +95,13 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 
 Remaining observer/hook and entity gaps from the docs/README.md feature-gap list:
 
-- **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.1 candidate.)
-- **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.4 candidate.)
-- **Custom events** — `EventOnReplace` or arbitrary user-defined event entities emitted via `ecs_emit`. (Phase 16.5 candidate.)
-- **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.5 candidate.)
-- **Yield-on-create** — observer fires for entities that already match when the observer is registered. (Phase 16.6 candidate.)
-- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.7 candidate.)
-- **Monitor observers** — fire once when a query transitions from "no matches" to "has matches" and vice versa. (Phase 16.8 candidate.)
-- **Observer disabling** — temporarily suppress an observer without unsubscribing. (Phase 16.9 candidate.)
-- **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.10 candidate.)
+- **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.6 candidate.)
+- **OnTableEmpty / OnTableFill events** — fire when an archetype table transitions between empty and non-empty. (Phase 16.7 candidate.)
+- **Custom events** — arbitrary user-defined event entities emitted via `ecs_emit`. (Phase 16.8 candidate.)
+- **Multi-term observers** — subscribe to a query expression (e.g., "Position is set, entity also has Velocity"). (Phase 16.8 candidate.)
+- **Observer propagation along relationship edges** — observer on `(IsA, X)` automatically matches subclasses. (Phase 16.9 candidate.)
+- **Monitor observers** — fire once when a query transitions from "no matches" to "has matches" and vice versa. (Phase 16.10 candidate.)
+- **Fixed-source query terms** — a term that matches a component on a specific entity (not `$this`). (Phase 16.11 candidate.)
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
 - **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).
