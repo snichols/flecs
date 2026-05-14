@@ -724,6 +724,93 @@ func TestVarCollectDomainIntersection(t *testing.T) {
 	})
 }
 
+// TestVarChainedSetterSrcVar verifies that (Term).SrcVar(name) works as a chained
+// setter: the resulting query resolves the variable correctly, identical to WithVar.
+func TestVarChainedSetterSrcVar(t *testing.T) {
+	w := flecs.New()
+	planetID := flecs.RegisterComponent[qvPlanet](w)
+	var p1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 = fw.NewEntity()
+		flecs.Set(fw, p1, qvPlanet{Name: "P1"})
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		// Use chained setter instead of WithVar constructor.
+		q := flecs.NewQueryFromTerms(w, flecs.With(planetID).SrcVar("planet"))
+		it := q.Iter()
+		var bindings []flecs.ID
+		for it.Next() {
+			bindings = append(bindings, it.Var("planet"))
+		}
+		if len(bindings) != 1 || bindings[0] != p1 {
+			t.Fatalf("SrcVar chained setter: want [%v], got %v", p1, bindings)
+		}
+	})
+}
+
+// TestVarChainedSetterTgtVar verifies that (Term).TgtVar(name) works as a chained
+// setter: the resulting query resolves the pair-target variable correctly.
+func TestVarChainedSetterTgtVar(t *testing.T) {
+	w := flecs.New()
+	_, _, dockedToID, _, _, _, P1, _ := qvBuildScene(w)
+
+	w.Read(func(_ *flecs.Reader) {
+		// Use chained setter instead of WithPairTgtVar constructor.
+		q := flecs.NewQueryFromTerms(w, flecs.With(dockedToID).TgtVar("planet"))
+		it := q.Iter()
+		var seen []flecs.ID
+		for it.Next() {
+			seen = append(seen, it.Var("planet"))
+		}
+		if len(seen) == 0 {
+			t.Fatal("TgtVar chained setter: expected at least one docking row")
+		}
+		// P1 should appear as a target (ships A and B are docked to P1).
+		found := false
+		for _, id := range seen {
+			if id == P1 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("TgtVar chained setter: P1 not found in targets %v", seen)
+		}
+	})
+}
+
+// TestVarChainedSetterPanics verifies that (Term).SrcVar and (Term).TgtVar panic on
+// invalid inputs — empty name, combined fixed source, combined traversal, pair ID.
+func TestVarChainedSetterPanics(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"SrcVar empty name", func() { flecs.With(1).SrcVar("") }},
+		{"TgtVar empty name", func() { flecs.With(1).TgtVar("") }},
+		{"SrcVar with fixed Src", func() {
+			_ = flecs.With(1).Source(2).SrcVar("v")
+		}},
+		{"SrcVar with traversal", func() {
+			_ = flecs.With(1).Up(2).SrcVar("v")
+		}},
+		{"TgtVar with pair ID", func() {
+			_ = flecs.With(flecs.MakePair(1, 2)).TgtVar("v")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("expected panic for %s", tc.name)
+				}
+			}()
+			tc.fn()
+		})
+	}
+}
+
 // TestVarEntitiesAfterExhaustion verifies that Entities() returns nil when
 // called after Next() returns false (sparseEntity == 0 in var mode).
 func TestVarEntitiesAfterExhaustion(t *testing.T) {

@@ -158,17 +158,18 @@ type Term struct {
 	// contribute to the archetype-filter set — it is resolved once at iter start.
 	// Construct via WithSourceTerm or (Term).Source(e). Zero means $this (default).
 	Src ID
-	// SrcVar names the variable whose current binding supplies the source entity for
+	// srcVar names the variable whose current binding supplies the source entity for
 	// this term. Non-empty → component ID is checked on the variable-bound entity, not
 	// on $this. Mutually exclusive with a non-zero Src and with traversal flags.
-	// Construct via WithVar(componentID, varName). Mirrors EcsIsVariable on src ref
-	// (upstream include/flecs.h:772, ecs_term_ref_t at include/flecs.h:799-811).
-	SrcVar string
-	// TgtVar names the variable whose current binding supplies the pair target for
+	// Set via WithVar(componentID, varName) or (Term).SrcVar(name). Mirrors EcsIsVariable
+	// on src ref (upstream include/flecs.h:772, ecs_term_ref_t at include/flecs.h:799-811).
+	srcVar string
+	// tgtVar names the variable whose current binding supplies the pair target for
 	// this term. Non-empty → term.ID is the relationship; the concrete pair is
 	// (term.ID, binding). Mutually exclusive with a real pair target in ID.
-	// Construct via WithPairTgtVar(rel, varName). Mirrors EcsIsVariable on second ref.
-	TgtVar string
+	// Set via WithPairTgtVar(rel, varName) or (Term).TgtVar(name). Mirrors EcsIsVariable
+	// on second ref.
+	tgtVar string
 	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
 	// component stores its data in a sparse-set (IsSparse or IsDontFragment returned
 	// true). Sparse is a VALUE-FETCH routing hint: Field[T] reads via sparseSetGet
@@ -446,6 +447,45 @@ func (t Term) Source(e ID) Term {
 	return t
 }
 
+// SrcVar binds this term's source to the named query variable. The component is
+// checked on whatever entity the variable is currently bound to, not on $this.
+// Use as a chained setter: flecs.With(compID).SrcVar("myVar").
+//
+// Panics if name is empty or if this term already has a fixed Src set.
+// Cannot be combined with traversal flags (Up/SelfUp/Cascade).
+// Prefer WithVar as the one-step constructor.
+func (t Term) SrcVar(name string) Term {
+	if name == "" {
+		panic("flecs: Term.SrcVar: variable name must not be empty")
+	}
+	if t.Src != 0 {
+		panic("flecs: Term.SrcVar: cannot combine a variable source with a fixed Src entity")
+	}
+	if t.Traverse != TraverseSelf && t.Traverse != 0 {
+		panic("flecs: Term.SrcVar: cannot combine a variable source with traversal (Up/SelfUp/Cascade)")
+	}
+	t.srcVar = name
+	return t
+}
+
+// TgtVar binds this term's pair target to the named query variable. The term's ID
+// is the relationship; the concrete pair target is resolved from the variable binding
+// at iteration time. Use as a chained setter: flecs.With(relID).TgtVar("myVar").
+//
+// Panics if name is empty or if the term's ID is already a pair (TgtVar and a
+// pair-form ID are mutually exclusive — TgtVar supplies the target at runtime).
+// Prefer WithPairTgtVar as the one-step constructor.
+func (t Term) TgtVar(name string) Term {
+	if name == "" {
+		panic("flecs: Term.TgtVar: variable name must not be empty")
+	}
+	if t.ID.IsPair() {
+		panic("flecs: Term.TgtVar: cannot combine TgtVar with a pair-form ID (TgtVar sets the pair target at runtime)")
+	}
+	t.tgtVar = name
+	return t
+}
+
 // WithSourceTerm returns a TermAnd term that reads componentID from sourceEntity
 // rather than the iterated entity. The term does NOT add to the archetype-filter
 // set — it is resolved once at iter start. If sourceEntity does not hold
@@ -482,7 +522,7 @@ func WithVar(componentID ID, varName string) Term {
 	if varName == "" {
 		panic("flecs: WithVar: varName must not be empty")
 	}
-	return Term{ID: componentID, Kind: TermAnd, SrcVar: varName}
+	return Term{ID: componentID, Kind: TermAnd, srcVar: varName}
 }
 
 // WithPairTgtVar returns a TermAnd term that matches the pair (rel, $varName) on
@@ -500,7 +540,7 @@ func WithPairTgtVar(rel ID, varName string) Term {
 	if varName == "" {
 		panic("flecs: WithPairTgtVar: varName must not be empty")
 	}
-	return Term{ID: rel, Kind: TermAnd, TgtVar: varName}
+	return Term{ID: rel, Kind: TermAnd, tgtVar: varName}
 }
 
 // Query holds a structured list of query terms used to match archetype tables.
@@ -766,7 +806,7 @@ func (q *Query) collectVarDomain() []ID {
 	// Collect SrcVar domain (intersection across all SrcVar constraints on the driver).
 	var srcSet map[ID]struct{}
 	for _, t := range q.terms {
-		if t.SrcVar != q.driverVar {
+		if t.srcVar != q.driverVar {
 			continue
 		}
 		tables := q.w.TablesFor(t.ID)
@@ -801,7 +841,7 @@ func (q *Query) collectVarDomain() []ID {
 	seen := make(map[ID]struct{})
 	var domain []ID
 	for _, t := range q.terms {
-		if t.TgtVar != q.driverVar {
+		if t.tgtVar != q.driverVar {
 			continue
 		}
 		for _, tbl := range q.w.tables {
@@ -836,21 +876,21 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 		switch term.Kind {
 		case TermAnd:
 			switch {
-			case term.TgtVar != "":
+			case term.tgtVar != "":
 				// Variable-target pair: resolve binding and check concrete pair.
-				slot := q.varSlots[term.TgtVar]
+				slot := q.varSlots[term.tgtVar]
 				binding := bindings[slot]
 				if binding == 0 || !t.HasComponent(MakePair(term.ID, binding)) {
 					return false
 				}
-			case term.SrcVar == "" && term.Src == 0 && !term.DontFragment && !term.Union:
+			case term.srcVar == "" && term.Src == 0 && !term.DontFragment && !term.Union:
 				// Regular $this archetype And term.
 				if (term.Traverse == TraverseSelf || term.Traverse == 0) && !t.HasComponent(term.ID) {
 					return false
 				}
 			}
 		case TermNot:
-			if term.SrcVar == "" && term.TgtVar == "" && !term.DontFragment && !term.Union {
+			if term.srcVar == "" && term.tgtVar == "" && !term.DontFragment && !term.Union {
 				if t.HasComponent(term.ID) {
 					return false
 				}
@@ -892,7 +932,7 @@ func (q *Query) buildVarRows() []varRow {
 	// When false, the driver entity itself acts as $this (single-loop mode).
 	hasThisConstraint := false
 	for _, t := range q.terms {
-		if t.Kind == TermAnd && t.SrcVar == "" && t.Src == 0 {
+		if t.Kind == TermAnd && t.srcVar == "" && t.Src == 0 {
 			hasThisConstraint = true
 			break
 		}
@@ -906,7 +946,7 @@ func (q *Query) buildVarRows() []varRow {
 		seedIdx := -1
 		minCount := 0
 		for i, t := range q.terms {
-			if t.Kind != TermAnd || t.SrcVar != "" || t.TgtVar != "" || t.Src != 0 ||
+			if t.Kind != TermAnd || t.srcVar != "" || t.tgtVar != "" || t.Src != 0 ||
 				t.DontFragment || t.Union || t.Traverse != TraverseSelf {
 				continue // TgtVar, SrcVar, fixed-source, sparse: not archetype seeds
 			}
@@ -1935,8 +1975,8 @@ func Field[T any](it *QueryIter, id ID) []T {
 	// Mirrors fixed-source semantics: returns a 1-element slice.
 	if it.varSlots != nil {
 		for _, term := range it.terms {
-			if term.ID == id && term.SrcVar != "" {
-				slot := it.varSlots[term.SrcVar]
+			if term.ID == id && term.srcVar != "" {
+				slot := it.varSlots[term.srcVar]
 				srcEnt := it.varBindings[slot]
 				rec := it.world.index.Get(srcEnt)
 				if rec == nil || !rec.Table.HasComponent(id) {
@@ -2327,16 +2367,16 @@ func evalScopeSubTerms(w *World, e ID, t *table.Table, sub []Term) bool {
 	return true
 }
 
-// buildVarSlotsFromTerms scans terms for SrcVar/TgtVar fields, assigns slot indices
+// buildVarSlotsFromTerms scans terms for srcVar/tgtVar fields, assigns slot indices
 // in first-appearance order, and returns the slot map and the driver variable name.
 // The driver is the first variable encountered across all terms (term-list order,
-// SrcVar before TgtVar within a single term). Panics if more than 8 distinct names
+// srcVar before tgtVar within a single term). Panics if more than 8 distinct names
 // are found (v1 cap; upstream EcsQueryMaxVarCount = 64).
 func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string) {
 	var slots map[string]int
 	var driver string
 	for _, t := range terms {
-		for _, name := range [2]string{t.SrcVar, t.TgtVar} {
+		for _, name := range [2]string{t.srcVar, t.tgtVar} {
 			if name == "" {
 				continue
 			}
@@ -2459,17 +2499,17 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	// Validate variable terms: mutual exclusivity and traversal restrictions.
 	// SrcVar mirrors upstream EcsIsVariable on src ref (include/flecs.h:772).
 	for i, t := range terms {
-		if t.SrcVar != "" {
+		if t.srcVar != "" {
 			if t.Src != 0 {
-				panic(fmt.Sprintf("%s: term at index %d has both SrcVar %q and a fixed Src entity; they are mutually exclusive", caller, i, t.SrcVar))
+				panic(fmt.Sprintf("%s: term at index %d has both SrcVar %q and a fixed Src entity; they are mutually exclusive", caller, i, t.srcVar))
 			}
 			if t.Traverse != TraverseSelf && t.Traverse != TraverseExplicitSelf && t.Traverse != 0 {
-				panic(fmt.Sprintf("%s: term at index %d (SrcVar=%q) cannot be combined with traversal flags (Up/SelfUp/Cascade)", caller, i, t.SrcVar))
+				panic(fmt.Sprintf("%s: term at index %d (SrcVar=%q) cannot be combined with traversal flags (Up/SelfUp/Cascade)", caller, i, t.srcVar))
 			}
 		}
-		if t.TgtVar != "" {
+		if t.tgtVar != "" {
 			if t.ID.IsPair() {
-				panic(fmt.Sprintf("%s: term at index %d has both TgtVar %q and a pair ID; they are mutually exclusive (TgtVar sets the pair target at runtime)", caller, i, t.TgtVar))
+				panic(fmt.Sprintf("%s: term at index %d has both TgtVar %q and a pair ID; they are mutually exclusive (TgtVar sets the pair target at runtime)", caller, i, t.tgtVar))
 			}
 		}
 	}
@@ -2551,7 +2591,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		if t.Kind == TermScope || t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
 			continue
 		}
-		if t.SrcVar != "" || t.TgtVar != "" {
+		if t.srcVar != "" || t.tgtVar != "" {
 			continue // variable terms have distinct semantics; exclude from dup check
 		}
 		if _, dup := seen[t.ID]; dup {
@@ -2573,7 +2613,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		case TermAnd:
 			if t.Src != 0 {
 				fixedSrcAndTerms = append(fixedSrcAndTerms, t)
-			} else if t.SrcVar != "" || t.TgtVar != "" {
+			} else if t.srcVar != "" || t.tgtVar != "" {
 				varAndTerms = append(varAndTerms, t) // variable terms sorted separately
 			} else {
 				normalAndTerms = append(normalAndTerms, t)
@@ -2678,7 +2718,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 	// don't constrain $this archetype membership and are not meaningful as plain IDs.
 	var andIDs []ID
 	for _, t := range andTerms {
-		if t.Src == 0 && t.SrcVar == "" && t.TgtVar == "" {
+		if t.Src == 0 && t.srcVar == "" && t.tgtVar == "" {
 			andIDs = append(andIDs, t.ID)
 		}
 	}
