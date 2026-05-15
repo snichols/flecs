@@ -222,6 +222,12 @@ type World struct {
 	// reclaimedTablesCount is a monotonic counter of reclaimed tables.
 	reclaimThreshold     uint32
 	reclaimedTablesCount uint64
+	// Parent-storage policies (Phase 16.47).
+	// parentStoragePolicies maps relationship entity ID (by index) to true when
+	// SetParentStorage has been called for that relationship. When active, pairs
+	// (relID, target) use the signature marker (relID, anyID) and store the
+	// concrete target in a per-row parent column on the shared table.
+	parentStoragePolicies map[ID]bool
 }
 
 // New initializes and returns an empty World.
@@ -1216,11 +1222,33 @@ func deleteImmediate(w *World, e ID) bool {
 			if flags&(policyOnDeleteTargetDelete|policyOnDeleteTargetPanic) == 0 {
 				continue
 			}
+			relKey := ID(relID.Index())
+
+			// Standard fragmented tables: indexed by concrete pair (relID, node).
 			pairID := MakePair(relID, node)
 			tables := w.compIndex.TablesFor(pairID)
-			if len(tables) == 0 {
+
+			// Parent-storage tables: indexed by marker (relID, Any); filter by parent col.
+			if w.parentStoragePolicies[relKey] {
+				marker := MakePair(relID, w.anyID)
+				nodeIdx := node.Index()
+				w.compIndex.Each(marker, func(t *table.Table) bool {
+					col := t.GetParentCol(relKey)
+					ents := t.Entities()
+					for i, src := range ents {
+						if col != nil && i < len(col) && col[i].Index() == nodeIdx && w.index.IsAlive(src) {
+							stack = append(stack, src)
+						}
+					}
+					return true
+				})
+				if len(tables) == 0 {
+					continue
+				}
+			} else if len(tables) == 0 {
 				continue
 			}
+
 			if flags&policyOnDeleteTargetPanic != 0 {
 				// Identify a source entity for the panic message.
 				var src ID
@@ -1617,6 +1645,22 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 		}
 	}
 
+	// Capture parent-column entries for e BEFORE RemoveSwap destroys them.
+	// Skip the removed rel's column (that parent relationship is being dropped).
+	var savedParents []struct{ relID, parent ID }
+	if oldTable != nil {
+		for _, relKey := range oldTable.ParentColRelIDs() {
+			// relKey is ID(originalRel.Index()); the marker in the sig is (rel, anyID).
+			// If removeID is that marker, skip: this parent column is being dropped.
+			if removeID.IsPair() && ID(removeID.First().Index()) == relKey && removeID.Second().Index() == w.anyID.Index() {
+				continue
+			}
+			if parent, ok := oldTable.GetParentEntry(oldRow, relKey); ok {
+				savedParents = append(savedParents, struct{ relID, parent ID }{relKey, parent})
+			}
+		}
+	}
+
 	// Append a new zero-initialized row for e in the destination table.
 	newRow := newTable.Append(e)
 
@@ -1653,6 +1697,12 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 	// Write the new component value, if any.
 	if addID != 0 && copyValue != nil {
 		newTable.Set(newRow, addID, copyValue)
+	}
+
+	// Restore parent-column entries in the new table.
+	for _, saved := range savedParents {
+		newTable.EnsureParentCol(saved.relID)
+		newTable.SetParentEntry(newRow, saved.relID, saved.parent)
 	}
 
 	// Update the migrating entity's record before firing observers so that
@@ -1752,6 +1802,16 @@ func (w *World) migrateArchetypeOnly(e ID, addID, removeID ID) {
 		}
 		w.notifyTableCreated(newTable)
 	}
+	// Capture parent-column entries for e BEFORE RemoveSwap destroys them.
+	var savedParents []struct{ relID, parent ID }
+	if oldTable != nil {
+		for _, relID := range oldTable.ParentColRelIDs() {
+			if parent, ok := oldTable.GetParentEntry(oldRow, relID); ok {
+				savedParents = append(savedParents, struct{ relID, parent ID }{relID, parent})
+			}
+		}
+	}
+
 	newRow := newTable.Append(e)
 	if oldTable != nil {
 		for _, id := range oldSig {
@@ -1782,6 +1842,12 @@ func (w *World) migrateArchetypeOnly(e ID, addID, removeID ID) {
 	}
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
+
+	// Restore parent-column entries in the new table.
+	for _, saved := range savedParents {
+		newTable.EnsureParentCol(saved.relID)
+		newTable.SetParentEntry(newRow, saved.relID, saved.parent)
+	}
 
 	// Fire OnTableFill when new table transitions 0→1.
 	if newRow == 0 {

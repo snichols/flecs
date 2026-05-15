@@ -81,9 +81,25 @@ func (r *Reader) EachTableFor(id ID, fn func(*table.Table) bool) {
 // non-self queries pay zero extra cost (no map access).
 func (r *Reader) HasID(e ID, id ID) bool {
 	w := r.world
-	// Union pair: consult union store (pairs never appear in the archetype type).
 	if id.IsPair() {
 		relKey := ID(id.First().Index())
+		// Parent-storage pair: consult parent column instead of archetype.
+		if w.parentStoragePolicies[relKey] {
+			rec := w.index.Get(e)
+			if rec == nil || rec.Table == nil {
+				return false
+			}
+			marker := w.parentStorageMarker(id.First())
+			if !rec.Table.HasComponent(marker) {
+				return false
+			}
+			if isWildcardID(w, id.Second()) {
+				return true
+			}
+			parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			return ok && parent.Index() == id.Second().Index()
+		}
+		// Union pair: consult union store (pairs never appear in the archetype type).
 		if w.unionPolicies[relKey] {
 			store, ok := w.unionStore[relKey]
 			if !ok {
@@ -126,9 +142,25 @@ func (r *Reader) HasID(e ID, id ID) bool {
 // by id. Local-only: does not walk the IsA chain.
 func (r *Reader) OwnsID(e ID, id ID) bool {
 	w := r.world
-	// Union pair: consult union store (pairs never appear in the archetype type).
 	if id.IsPair() {
 		relKey := ID(id.First().Index())
+		// Parent-storage pair: consult parent column instead of archetype.
+		if w.parentStoragePolicies[relKey] {
+			rec := w.index.Get(e)
+			if rec == nil || rec.Table == nil {
+				return false
+			}
+			marker := w.parentStorageMarker(id.First())
+			if !rec.Table.HasComponent(marker) {
+				return false
+			}
+			if isWildcardID(w, id.Second()) {
+				return true
+			}
+			parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			return ok && parent.Index() == id.Second().Index()
+		}
+		// Union pair: consult union store (pairs never appear in the archetype type).
 		if w.unionPolicies[relKey] {
 			store, ok := w.unionStore[relKey]
 			if !ok {
@@ -153,13 +185,9 @@ func (r *Reader) OwnsID(e ID, id ID) bool {
 }
 
 // ParentOf returns the parent of entity e: the target of the first
-// (ChildOf, *) pair found in e's archetype signature.
+// (ChildOf, *) pair found in e's archetype signature or parent column.
 func (r *Reader) ParentOf(e ID) (ID, bool) {
-	rec := r.world.index.Get(e)
-	if rec == nil || rec.Table == nil {
-		return 0, false
-	}
-	return firstPairTarget(rec.Table.Type(), r.world.childOfID.Index())
+	return r.world.ParentOf(e)
 }
 
 // EachChild calls fn for every direct child of parent.
@@ -543,9 +571,25 @@ func HasID(s scope, e ID, id ID) bool {
 			return has
 		}
 	}
-	// Union pair: consult union store (pairs never appear in the archetype type).
 	if id.IsPair() {
 		relKey := ID(id.First().Index())
+		// Parent-storage pair: consult parent column instead of archetype.
+		if w.parentStoragePolicies[relKey] {
+			rec := w.index.Get(e)
+			if rec == nil || rec.Table == nil {
+				return false
+			}
+			marker := w.parentStorageMarker(id.First())
+			if !rec.Table.HasComponent(marker) {
+				return false
+			}
+			if isWildcardID(w, id.Second()) {
+				return true
+			}
+			parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			return ok && parent.Index() == id.Second().Index()
+		}
+		// Union pair: consult union store (pairs never appear in the archetype type).
 		if w.unionPolicies[relKey] {
 			store, ok := w.unionStore[relKey]
 			if !ok {
@@ -594,9 +638,25 @@ func OwnsID(s scope, e ID, id ID) bool {
 			return has
 		}
 	}
-	// Union pair: consult union store (pairs never appear in the archetype type).
 	if id.IsPair() {
 		relKey := ID(id.First().Index())
+		// Parent-storage pair: consult parent column instead of archetype.
+		if w.parentStoragePolicies[relKey] {
+			rec := w.index.Get(e)
+			if rec == nil || rec.Table == nil {
+				return false
+			}
+			marker := w.parentStorageMarker(id.First())
+			if !rec.Table.HasComponent(marker) {
+				return false
+			}
+			if isWildcardID(w, id.Second()) {
+				return true
+			}
+			parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			return ok && parent.Index() == id.Second().Index()
+		}
+		// Union pair: consult union store (pairs never appear in the archetype type).
 		if w.unionPolicies[relKey] {
 			store, ok := w.unionStore[relKey]
 			if !ok {
@@ -756,6 +816,26 @@ func RemoveID(fw *Writer, e ID, id ID) bool {
 		}
 		if _, has := ss.index[e.Index()]; !has {
 			return false
+		}
+		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
+		return true
+	}
+	// Parent-storage pair: check parent column rather than archetype signature.
+	if id.IsPair() && fw.world.parentStoragePolicies[ID(id.First().Index())] {
+		rec := fw.world.index.Get(e)
+		if rec == nil || rec.Table == nil {
+			return false
+		}
+		marker := fw.world.parentStorageMarker(id.First())
+		if !rec.Table.HasComponent(marker) {
+			return false
+		}
+		if !isWildcardID(fw.world, id.Second()) {
+			relKey := ID(id.First().Index())
+			cur, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			if !ok || cur.Index() != id.Second().Index() {
+				return false
+			}
 		}
 		s.queue.append(cmd{kind: cmdRemoveID, entity: e, id: id})
 		return true

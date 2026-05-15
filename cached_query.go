@@ -131,12 +131,14 @@ type CachedQuery struct {
 	// source entity had no inheritable components. Iter returns a zero-result iterator
 	// immediately without consulting the table cache.
 	alwaysFalse bool
-	// varSlots, driverVar, varOrder, and varKinds mirror Query fields for variable queries.
-	// Iter() re-executes buildVarRows on each call when varSlots != nil.
-	varSlots  map[string]int
-	driverVar string
-	varOrder  []string
-	varKinds  map[string]VarKind
+	// varSlots, driverVar, varOrder, varKinds, and hasParentStorageTgtVar mirror
+	// Query fields for variable queries. Iter() re-executes buildVarRows on each call
+	// when varSlots != nil.
+	varSlots              map[string]int
+	driverVar             string
+	varOrder              []string
+	varKinds              map[string]VarKind
+	hasParentStorageTgtVar bool
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID
 	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
@@ -237,6 +239,12 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	cq.driverVar = driverVar
 	cq.varOrder = varOrder
 	cq.varKinds = varKinds
+	for _, t := range cp {
+		if t.ParentStorage && t.tgtVar != "" {
+			cq.hasParentStorageTgtVar = true
+			break
+		}
+	}
 	return cq
 }
 
@@ -491,6 +499,10 @@ func (cq *CachedQuery) Iter() *QueryIter {
 				hasSparseTerms = true
 				break
 			}
+			if t.ParentStorage && t.concreteTarget != 0 && t.Src == 0 {
+				hasSparseTerms = true
+				break
+			}
 		}
 		return &QueryIter{
 			world:              cq.w,
@@ -612,6 +624,11 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			break
 		}
 		if t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
+			hasSparseTerms = true
+			break
+		}
+		// Parent-storage terms with specific targets require per-row filtering.
+		if t.ParentStorage && t.concreteTarget != 0 && t.Src == 0 {
 			hasSparseTerms = true
 			break
 		}

@@ -128,7 +128,7 @@ These are listed for operator prioritization; no follow-up issues were filed in 
 ### Additional gaps discovered in Phase 14.4 (HierarchiesManual port)
 
 - **`OrderedChildren` trait** — **shipped in v0.50.0**. `SetOrderedChildren(w, parentID)` / `IsOrderedChildren(scope, parentID)` / `w.OrderedChildren()`. Opt-in per parent; `EachChild` and `Reader.EachChild` iterate in insertion order. JSON round-trip via `ordered_children` field. See [HierarchiesManual.md § OrderedChildren](HierarchiesManual.md#orderedchildren).
-- **`Parent` hierarchy storage** — a second, non-fragmenting storage for small structured hierarchies where children of multiple parents share the same archetype table. Reduces table fragmentation and memory footprint for prefab-heavy workloads. not yet ported in Go flecs.
+- **`Parent` hierarchy storage** — ✅ **shipped in v0.102.0** (Phase 16.47) via `SetParentStorage(w, relID)` / `IsParentStorage(scope, relID)`. Opt-in non-fragmenting storage for exclusive relationships: children of different parents with the same other components share one archetype table; the concrete parent is stored in a per-row column instead of the pair signature. Reparenting is O(1). All APIs (EachChild, ParentOf, GetUp, HasUp, queries, traversal, cleanup policies, observers, snapshots) behave identically to the default fragmenting mode. See [HierarchiesManual.md § Parent storage](HierarchiesManual.md#parent-storage).
 
 ### Additional gaps discovered in Phase 14.5 (PrefabsManual port)
 

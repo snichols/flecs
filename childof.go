@@ -35,6 +35,25 @@ func (w *World) EachChild(parent ID, fn func(child ID) bool) {
 			return
 		}
 	}
+	// Parent-storage mode: scan the parent column of tables with the marker.
+	childOfKey := ID(w.childOfID.Index())
+	if w.parentStoragePolicies[childOfKey] {
+		parentIdx := parent.Index()
+		marker := w.parentStorageMarker(w.childOfID)
+		w.compIndex.Each(marker, func(t *table.Table) bool {
+			col := t.GetParentCol(childOfKey)
+			ents := t.Entities()
+			for i, child := range ents {
+				if col != nil && i < len(col) && col[i].Index() == parentIdx {
+					if !fn(child) {
+						return false
+					}
+				}
+			}
+			return true
+		})
+		return
+	}
 	pairID := MakePair(w.childOfID, parent)
 	w.compIndex.Each(pairID, func(t *table.Table) bool {
 		for _, child := range t.Entities() {
@@ -58,6 +77,17 @@ func (w *World) ParentOf(e ID) (ID, bool) {
 	w.checkExclusiveAccessRead()
 	rec := w.index.Get(e)
 	if rec == nil || rec.Table == nil {
+		return 0, false
+	}
+	// Parent-storage mode: read from the parent column.
+	childOfKey := ID(w.childOfID.Index())
+	if w.parentStoragePolicies[childOfKey] {
+		marker := w.parentStorageMarker(w.childOfID)
+		if rec.Table.HasComponent(marker) {
+			if parent, ok := rec.Table.GetParentEntry(int(rec.Row), childOfKey); ok {
+				return parent, true
+			}
+		}
 		return 0, false
 	}
 	return firstPairTarget(rec.Table.Type(), w.childOfID.Index())

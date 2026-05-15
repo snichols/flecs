@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.102.0 — 2026-05-15 — Phase 16.47: Parent Hierarchy Storage
+
+Opt-in non-fragmenting storage for exclusive relationships. Children of different
+parents that share the same other components now occupy **one** archetype table;
+the concrete parent is stored in a per-row column rather than the pair signature.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `SetParentStorage(w *World, relID ID)` | Enable parent storage for an exclusive relationship |
+| `IsParentStorage(s scope, relID ID) bool` | Report whether a relationship uses parent storage |
+
+### Behaviour
+
+- **O(1) reparenting** — changing `(relID, target)` on an existing entity updates only the parent column; no archetype migration occurs.
+- **Non-fragmenting** — entities that differ only in their `(relID, target)` pair are co-located in a single table tagged with the marker `(relID, Any)`.
+- **Transparent to all query paths** — `EachChild`, `ParentOf`, `GetUp`, `HasUp`, `HasID`, queries with `WithPair` / `WithPairTgtVar`, `CachedQuery`, traversal, cleanup policies (`OnDeleteTarget`), observers (`OnAdd`/`OnRemove` fire for the concrete pair), and monitor observers all behave identically to the default fragmenting mode.
+- **Snapshot round-trip** — binary snapshots (format version bumped to 2) and JSON marshaling both preserve parent columns and the `parentStoragePolicies` map.
+
+### Preconditions
+
+- `relID` must be declared a `Relationship` via `SetRelationship` first.
+- `relID` must be declared `Exclusive` via `SetExclusive` first.
+- No entities may currently carry a `(relID, *)` pair (`SetParentStorage` panics on violation).
+
+### Usage
+
+```go
+flecs.SetRelationship(w, myRel)
+flecs.SetExclusive(w, myRel)
+flecs.SetParentStorage(w, myRel)
+
+// Enable for the built-in ChildOf relationship:
+flecs.SetParentStorage(w, w.ChildOf())
+```
+
+### Breaking changes
+
+- Binary snapshot format bumped from version 1 to version 2. Snapshots produced by v0.101.0 and earlier are rejected with `ErrSnapshotVersionMismatch`; re-snapshot with the new version.
+
+---
+
 ## v0.101.0 — 2026-05-15 — Phase 16.46: Table Reclamation Infrastructure
 
 Long-running worlds with archetype churn no longer leak memory monotonically. Each

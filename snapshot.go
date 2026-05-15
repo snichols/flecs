@@ -17,7 +17,8 @@ import (
 var snapshotMagic = [4]byte{0xF1, 0xEC, 0x53, 0x00}
 
 // snapshotFormatVersion is the current binary-format version.
-const snapshotFormatVersion = uint32(1)
+// v2: adds parentStoragePolicies (policy map 18) and per-table parent columns.
+const snapshotFormatVersion = uint32(2)
 
 // firstSnapUserIndex is the first raw entity index owned by user code.
 // Built-in entities occupy indices 1–75 (47 non-unit + 25 unit entities + 3 table events);
@@ -317,6 +318,18 @@ func serializeTable(bw *binWriter, w *World, t *table.Table) {
 			bw.u64(w64)
 		}
 	}
+
+	// Parent columns (non-fragmenting parent storage).
+	relIDs := t.ParentColRelIDs()
+	bw.u32(uint32(len(relIDs)))
+	for _, relKey := range relIDs {
+		bw.id(relKey)
+		col := t.GetParentCol(relKey)
+		bw.u32(uint32(len(col)))
+		for _, parent := range col {
+			bw.id(parent)
+		}
+	}
 }
 
 // ─── serializeEmptyTableUserEnts ─────────────────────────────────────────────
@@ -466,6 +479,7 @@ func serializePolicies(bw *binWriter, w *World) {
 	writeBoolMap(bw, w.traitPolicies)
 	writeBoolMap(bw, w.pairIsTagPolicies)
 	writeBoolMap(bw, w.canTogglePolicies)
+	writeBoolMap(bw, w.parentStoragePolicies)
 
 	// cleanupPolicies (uint8 value).
 	var ckv []struct {
@@ -731,6 +745,7 @@ func clearUserState(w *World) {
 	clearBoolPolicyUser(w.traitPolicies)
 	clearBoolPolicyUser(w.pairIsTagPolicies)
 	clearBoolPolicyUser(w.canTogglePolicies)
+	clearBoolPolicyUser(w.parentStoragePolicies)
 	for k := range w.cleanupPolicies {
 		if uint64(k) >= uint64(firstSnapUserIndex) {
 			delete(w.cleanupPolicies, k)
@@ -947,6 +962,32 @@ func deserializeTable(br *binReader, w *World) error {
 		t.SetBitsets(bsMap)
 	}
 
+	// Parent columns.
+	parentColCount, err := br.u32()
+	if err != nil {
+		return err
+	}
+	for i := uint32(0); i < parentColCount; i++ {
+		relKey, err := br.id()
+		if err != nil {
+			return err
+		}
+		colLen, err := br.u32()
+		if err != nil {
+			return err
+		}
+		t.EnsureParentCol(relKey)
+		for j := uint32(0); j < colLen; j++ {
+			parent, err := br.id()
+			if err != nil {
+				return err
+			}
+			if int(j) < int(rowCount) {
+				t.SetParentEntry(int(j), relKey, parent)
+			}
+		}
+	}
+
 	// Set Record.Table and Record.Row for each entity.
 	for row, e := range entityIDs {
 		if rec := w.index.Get(e); rec != nil {
@@ -1154,6 +1195,12 @@ func deserializePolicies(br *binReader, w *World) error {
 		return err
 	}
 	if err := readBoolMapUser(br, &w.canTogglePolicies); err != nil {
+		return err
+	}
+	if w.parentStoragePolicies == nil {
+		w.parentStoragePolicies = make(map[ID]bool)
+	}
+	if err := readBoolMapUser(br, &w.parentStoragePolicies); err != nil {
 		return err
 	}
 

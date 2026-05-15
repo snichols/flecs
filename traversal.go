@@ -32,9 +32,8 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 	if fn(e) {
 		return e, true
 	}
-	// Find the first (rel, target) pair in e's signature.
-	relIdx := rel.Index()
-	target, ok := firstPairTarget(rec.Table.Type(), relIdx)
+	// Find the first parent via parent column (parent-storage) or archetype pair.
+	target, ok := w.firstParentVia(e, rel)
 	if !ok {
 		return 0, false
 	}
@@ -55,11 +54,7 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 		if fn(current) {
 			return current, true
 		}
-		curRec := w.index.Get(current)
-		if curRec == nil || curRec.Table == nil {
-			return 0, false
-		}
-		next, hasNext := firstPairTarget(curRec.Table.Type(), relIdx)
+		next, hasNext := w.firstParentVia(current, rel)
 		if !hasNext {
 			return 0, false
 		}
@@ -67,6 +62,25 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 	}
 	// Depth limit exceeded.
 	return 0, false
+}
+
+// firstParentVia returns the first parent of entity e via relationship rel.
+// When parent-storage is active for rel, reads from the parent column;
+// otherwise searches the archetype signature for the first (rel, target) pair.
+func (w *World) firstParentVia(e ID, rel ID) (ID, bool) {
+	rec := w.index.Get(e)
+	if rec == nil || rec.Table == nil {
+		return 0, false
+	}
+	relKey := ID(rel.Index())
+	if w.parentStoragePolicies[relKey] {
+		marker := w.parentStorageMarker(rel)
+		if rec.Table.HasComponent(marker) {
+			return rec.Table.GetParentEntry(int(rec.Row), relKey)
+		}
+		return 0, false
+	}
+	return firstPairTarget(rec.Table.Type(), rel.Index())
 }
 
 // getUpInternal walks the relationship rel up from e (self-first), returning the value
