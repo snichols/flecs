@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.91.0 — 2026-05-15 — Phase 16.36: Timer addon (entity-based Timer + RateFilter)
+
+Adds the Timer addon: entity-based `Timer` and `RateFilter` components that drive shared system tick rates via `(*System).SetTickSource(e)`.
+
+### New files
+
+- **`timer_addon.go`** — `Timer` / `RateFilter` types, lazy component registration, constructor and lifecycle API, `tickAllTimers` / `tickAllRateFilters` pipeline hooks.
+- **`timer_addon_test.go`** — comprehensive test suite (18 acceptance tests).
+- **`docs/Timer.md`** — user guide: Timer vs RateFilter, TickSource binding, precedence, chaining, JSON/snapshot round-trip, divergences from upstream C.
+
+### API additions
+
+- **`flecs.Timer`** — entity component: `Timeout`, `Elapsed`, `Active`, `SingleShot`, `Fired` (transient one-tick flag).
+- **`flecs.RateFilter`** — entity component: `Rate`, `TickCount`, `Src`, `TimeElapsed`, `Fired` (transient).
+- **`NewTimer(fw, timeout)`** — creates a single-shot timer entity.
+- **`NewInterval(fw, interval)`** — creates a repeating interval timer entity.
+- **`SetTimeout(fw, e, d)`** / **`SetInterval(fw, e, d)`** — configure an existing entity as single-shot or interval timer.
+- **`GetTimeout(scope, e)`** / **`GetInterval(scope, e)`** — read Timeout via the scope interface (composes with Read and Write blocks).
+- **`StartTimer(fw, e)`** / **`StopTimer(fw, e)`** / **`ResetTimer(fw, e)`** — lifecycle control.
+- **`IsTimerFired(scope, e)`** — reads the transient Fired flag on a Timer or RateFilter entity.
+- **`NewRateFilter(fw, rate, source)`** — creates a rate filter entity.
+- **`flecs.SetRate(fw, e, n)`** — sets `RateFilter.Rate` on an entity. Distinct from `(*System).SetRate(n)` (per-system gate, no entity, no *Writer).
+- **`(*System).SetTickSource(e)`** — binds a system to fire only when the Timer/RateFilter entity fires this tick. Returns `*System` for fluent chaining.
+- **`(*System).TickSource()`** — returns the currently bound entity (0 = unbound).
+
+### Pipeline integration
+
+`tickAllTimers` and `tickAllRateFilters` run once per `World.Progress(dt)` call, before any phase dispatch. Timers are never re-ticked inside `OnFixedUpdate` sub-steps.
+
+### Locked decisions
+
+1. **Fired flag semantics** — cleared at the start of the NEXT tick's timer pass (not via defer); visible after `Progress()` returns for the tick where it fired.
+2. **Interval timer accumulator** — loops (subtract-with-carry) until `Elapsed < Timeout`; a single `Progress(250ms)` with `Timeout=100ms` leaves `Elapsed=50ms` (two fires).
+3. **TickSource × interval × rate precedence** — existing `(*System).SetInterval` and `(*System).SetRate` gates evaluate first; if they skip the system, the tick-source check is not reached. AND-composition is allowed (diverges from upstream C which forbids combining).
+4. **Deleted tick-source entity** — system simply never fires (no panic, no cleanup hooks).
+
+### Documentation updates
+
+- `docs/Timer.md` (new)
+- `docs/Systems.md` — new `## TickSource` section
+- `docs/README.md` — flipped Timer addon from "partial" to "✅ shipped in v0.91.0"
+- `README.md` — Timer addon row in feature table
+- `ROADMAP.md` — bumped "Shipped (through v0.91.0)"; added Phase 16.36 entry
+
 ## v0.90.0 — 2026-05-14 — Phase 16.35: REST toggle endpoint
 
 Adds `PUT /toggle/{entity}` and `PUT /toggle/{entity}/{component}` to the REST handler,

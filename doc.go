@@ -476,6 +476,40 @@
 //	    fmt.Printf("  %s: %d tables, %d entities\n", c.Name, c.TableCount, c.EntityCount)
 //	}
 //
+// # Timer addon
+//
+// The Timer addon (Phase 16.36) provides entity-based timers and rate filters
+// that drive shared system tick rates. A [Timer] or [RateFilter] is a
+// first-class entity; any system can bind to it via [System.SetTickSource].
+//
+//	// Repeating interval timer: fires every 100ms of simulation time.
+//	intervalE := flecs.NewInterval(fw, 100*time.Millisecond)
+//
+//	// Single-shot timer: fires once after 500ms.
+//	timerE := flecs.NewTimer(fw, 500*time.Millisecond)
+//
+//	// Rate filter: fires every 3rd Progress call (world frame source).
+//	rfE := flecs.NewRateFilter(fw, 3, 0)
+//
+//	// Bind a system — runs only when intervalE fires this tick.
+//	sys := flecs.NewSystem(w, q, fn)
+//	sys.SetTickSource(intervalE)
+//
+//	// Lifecycle control inside a Write scope:
+//	w.Write(func(fw *flecs.Writer) {
+//	    flecs.StopTimer(fw, timerE)    // pause
+//	    flecs.StartTimer(fw, timerE)   // resume (resets Elapsed)
+//	    flecs.ResetTimer(fw, timerE)   // clear Elapsed without changing Active
+//	})
+//
+//	// Read Fired flag — true during the tick the entity fired.
+//	w.Read(func(fr *flecs.Reader) {
+//	    if flecs.IsTimerFired(fr, intervalE) { ... }
+//	})
+//
+// Timer.Elapsed advances by the dt passed to World.Progress; it never reads
+// time.Now(). See docs/Timer.md for the full API reference.
+//
 // # Structured Logging
 //
 // [World.SetLogger] installs a [log/slog]-compatible logger that receives
