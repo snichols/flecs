@@ -1543,6 +1543,17 @@ See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for full details.
 
 ---
 
+## REST Query DSL
+
+Queries can also be expressed as strings via the `GET /query?expr=` REST endpoint (v0.95.0).
+The endpoint parses a Flecs Query Language v1 subset, executes the query, and returns
+matched entities with typed field values as JSON.
+
+See [QueryDSL.md](QueryDSL.md) for the full grammar and token reference, and
+[FlecsRemoteApi.md § GET /query](FlecsRemoteApi.md#get-query) for the HTTP interface.
+
+---
+
 ## See Also
 
 - [Quickstart](Quickstart.md) — hands-on introduction to entities, components, queries, and systems.
@@ -1551,3 +1562,4 @@ See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for full details.
 - [Relationships.md](Relationships.md) — pair traversal terms and relationship queries.
 - [ComponentTraits](ComponentTraits.md) — CanToggle, Exclusive, and other trait customisation.
 - [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.
+- [QueryDSL.md](QueryDSL.md) — Flecs Query Language v1 subset parser reference.
