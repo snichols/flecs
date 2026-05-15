@@ -50,6 +50,8 @@ import (
 //	DELETE /entity/{path...}                 — delete entity by dot-separated path (200, 400, 404, 503)
 //	PUT /component/{entity}/{component}      — set or add a component on an entity; body is JSON (200, 400, 404, 413, 503)
 //	DELETE /component/{entity}/{component}   — remove a component from an entity (200, 404, 503)
+//	PUT /toggle/{entity}                     — toggle Disabled tag; ?enabled=true/false/omit-to-flip (200, 400, 404, 503)
+//	PUT /toggle/{entity}/{component}         — toggle CanToggle component bit; same ?enabled semantics (200, 400, 404, 503)
 func NewRESTHandler(w *World) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", restStats(w))
@@ -69,6 +71,8 @@ func NewRESTHandler(w *World) http.Handler {
 	mux.HandleFunc("DELETE /entity/{path...}", restDeleteEntity(w, &writeMu))
 	mux.HandleFunc("PUT /component/{entity}/{component}", restPutComponent(w, &writeMu))
 	mux.HandleFunc("DELETE /component/{entity}/{component}", restDeleteComponent(w, &writeMu))
+	mux.HandleFunc("PUT /toggle/{entity}", restPutToggle(w, &writeMu))
+	mux.HandleFunc("PUT /toggle/{entity}/{component}", restPutToggleComponent(w, &writeMu))
 	return mux
 }
 
@@ -760,5 +764,141 @@ func restDeleteComponent(w *World, writeMu *sync.Mutex) http.HandlerFunc {
 			return
 		}
 		rw.WriteHeader(http.StatusOK)
+	}
+}
+
+// parseEnabledParam parses the ?enabled= query parameter.
+// Returns (targetEnabled, flip, ok). If ok is false, the caller should return 400.
+// flip is true when the parameter is absent (flip current state).
+func parseEnabledParam(r *http.Request) (targetEnabled bool, flip bool, ok bool) {
+	raw := r.URL.Query().Get("enabled")
+	if raw == "" {
+		return false, true, true
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, false, false
+	}
+	return v, false, true
+}
+
+func restPutToggle(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		entityPath, _ := url.PathUnescape(r.PathValue("entity"))
+
+		targetEnabled, flip, ok := parseEnabledParam(r)
+		if !ok {
+			writeError(rw, http.StatusBadRequest, "enabled must be a boolean")
+			return
+		}
+
+		var e ID
+		var entityFound bool
+		var currentlyDisabled bool
+		w.Read(func(fr *Reader) {
+			e, entityFound = fr.Lookup(entityPath)
+			if entityFound {
+				currentlyDisabled = IsDisabled(fr, e)
+			}
+		})
+		if !entityFound {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+
+		if flip {
+			targetEnabled = currentlyDisabled // disabled → enable; enabled → disable
+		}
+
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(func(fw *Writer) {
+				if targetEnabled {
+					EnableEntity(fw, e)
+				} else {
+					DisableEntity(fw, e)
+				}
+			})
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		writeJSON(rw, http.StatusOK, map[string]bool{"enabled": targetEnabled})
+	}
+}
+
+func restPutToggleComponent(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		entityPath, _ := url.PathUnescape(r.PathValue("entity"))
+		componentPath, _ := url.PathUnescape(r.PathValue("component"))
+
+		targetEnabled, flip, ok := parseEnabledParam(r)
+		if !ok {
+			writeError(rw, http.StatusBadRequest, "enabled must be a boolean")
+			return
+		}
+
+		var e ID
+		var compID ID
+		var entityFound bool
+		var compFound bool
+		var canToggle bool
+		var currentlyEnabled bool
+		w.Read(func(fr *Reader) {
+			e, compID, _, _, _, entityFound, compFound = resolveComponentPaths(fr, entityPath, componentPath)
+			if compFound {
+				canToggle = IsCanToggle(w, compID)
+				if canToggle && flip {
+					currentlyEnabled = IsEnabledID(fr, e, compID)
+				}
+			}
+		})
+
+		if !entityFound {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+		if !compFound {
+			writeError(rw, http.StatusNotFound, "component not found")
+			return
+		}
+		if !canToggle {
+			writeError(rw, http.StatusBadRequest, "component is not CanToggle")
+			return
+		}
+
+		if flip {
+			targetEnabled = !currentlyEnabled
+		}
+
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(func(fw *Writer) {
+				if targetEnabled {
+					EnableID(fw, e, compID)
+				} else {
+					DisableID(fw, e, compID)
+				}
+			})
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			msg := fmt.Sprint(panicVal)
+			if strings.Contains(msg, "entity does not have the component") {
+				writeError(rw, http.StatusBadRequest, "entity does not have the component")
+			} else {
+				writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			}
+			return
+		}
+		writeJSON(rw, http.StatusOK, map[string]bool{"enabled": targetEnabled})
 	}
 }

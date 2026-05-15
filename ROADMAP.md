@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.89.0)
+## Shipped (through v0.90.0)
 
 The following features are available in the current release:
 
@@ -90,6 +90,7 @@ The following features are available in the current release:
 - **REST type-info endpoint** _(v0.87.0, Phase 16.32)_ — `GET /type_info/{path}` returns the reflection schema for a named component: `name`, `size`, `align`, `fields` (depth-1 `reflect.StructField` walk), `unit` (when `UnitFor` returns ok), `opaque: true` for dynamic components. Path resolved via `world.Lookup` (`.` separator, deliberate C divergence). `Cache-Control: max-age=300`. 404 for unknown paths and bare entity-tags. Partial closure of `docs/README.md` gap lines 90 and 181. See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#get-type_infopath).
 - **REST entity mutation endpoints** _(v0.88.0, Phase 16.33)_ — `PUT /entity` (create or claim; JSON body: `id`, `name`, `parent`; 409 on generation conflict, 404 on unresolvable parent) and `DELETE /entity/{path...}` (delete by dot-separated path; 200 OK on success). Both use `.` as path separator (deliberate C divergence from `/`). Shared `sync.Mutex` serialises concurrent writes. Partial closure of `docs/README.md` gap line 90 (component mutation + toggle + query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#put-entity).
 - **REST component mutation endpoints** _(v0.89.0, Phase 16.34)_ — `PUT /component/{entity}/{component}` (set or add; handles typed, tag, dynamic, and pair components; JSON body; 1 MB cap; `413` on overflow; tag body must be empty) and `DELETE /component/{entity}/{component}` (remove; idempotent — `200 OK` even when component is absent). Pair encoding: `~` separator (deliberate C divergence from URL-encoded parentheses). Shared `sync.Mutex` reused from Phase 16.33. Partial closure of `docs/README.md` gap line 90 (`GET /component` value-read, toggle, and query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#put-componententitycomponent).
+- **REST toggle endpoint** _(v0.90.0, Phase 16.35)_ — `PUT /toggle/{entity}` (toggles the `Disabled` tag; `?enabled=true/false` or omit to flip; `200 OK` with `{"enabled": <bool>}`) and `PUT /toggle/{entity}/{component}` (toggles a `CanToggle` component bit; same `?enabled` semantics; `400` if not CanToggle or entity lacks the component). Shared `sync.Mutex` reused. Partial closure of `docs/README.md` gap line 90 (toggle subset shipped; `GET /component` value-read and query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#toggle-endpoint).
 
 ## Documentation
 

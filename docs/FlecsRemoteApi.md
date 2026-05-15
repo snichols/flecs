@@ -968,10 +968,47 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Toggle endpoint
 
-> **Not yet ported in Go flecs.** `PUT /toggle/<path>?enable=[true|false]` enables or
-> disables an entity (via the `Disabled` tag) or a per-component enable bit (via
-> `ecs_enable_id`). Entity disabling and the `CanToggle` component trait are not yet
-> ported to Go flecs.
+**Shipped in Go flecs v0.90.0** as two routes registered in `NewRESTHandler`:
+
+#### `PUT /toggle/{entity}`
+
+Toggles the `Disabled` tag on an entity.
+
+| `?enabled=` | Effect |
+|---|---|
+| `true` | Removes `Disabled` (enables the entity). |
+| `false` | Adds `Disabled` (disables the entity). |
+| omitted | Flips the current state. |
+
+- **`200 OK`** — body `{"enabled": <bool>}` reflecting the new state.
+- **`400`** — `?enabled=` value is not a valid boolean.
+- **`404`** — entity not found at the dot-separated path.
+- **`503`** — unexpected world panic.
+
+Entity paths use the same dot-separated format as all other Go REST endpoints (e.g. `parent.child`).
+
+#### `PUT /toggle/{entity}/{component}`
+
+Toggles a per-component enable bit via the `CanToggle` trait (Phase 15.3). The component
+segment uses the same encoding as `PUT /component`: plain name for a regular component,
+`rel~tgt` for a pair (tilde separator, no URL-encoding needed).
+
+- **`200 OK`** — body `{"enabled": <bool>}` reflecting the new state.
+- **`400`** — component is not registered as `CanToggle`, or entity does not have the component.
+- **`404`** — entity or component path does not resolve.
+- **`503`** — unexpected world panic.
+
+#### Deliberate divergences from C upstream
+
+| Aspect | Go (v0.90.0) | C upstream (rest.c:509) |
+|---|---|---|
+| Query param name | `?enabled=` | `?enable=` (singular) |
+| Component selection | URL path segment `/{component}` | `?component=` query param |
+| Response body | `{"enabled": <bool>}` | Empty 200 body |
+
+The `enabled` spelling matches the response body field. The path-segment approach is
+consistent with `PUT /component/{entity}/{component}` (Phase 16.34). The non-empty
+response body saves a follow-up read and tells the client the new state directly.
 
 ### Query execution endpoint
 
@@ -1045,7 +1082,7 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 - **Query execution endpoint** (`GET /query?expr=`) — requires FlecsQueryLanguage DSL; not ported to Go flecs.
 - **Entity mutation endpoints** (`PUT /entity`, `DELETE /entity/{path...}`) — ✅ shipped in v0.88.0. See [`## PUT /entity`](#put-entity) and [`## DELETE /entity/{path...}`](#delete-entitypath).
 - **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — ✅ mutation shipped in v0.89.0. See [`## PUT /component/{entity}/{component}`](#put-componententitycomponent) and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent). `GET /component` (value read) not yet ported.
-- **Toggle endpoint** (`PUT /toggle`) — requires entity disabling (`Disabled` tag) and `CanToggle` trait; not ported.
+- **Toggle endpoint** (`PUT /toggle`) — ✅ shipped in v0.90.0. See [`### Toggle endpoint`](#toggle-endpoint) above.
 - **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
 - **Type-info / reflection endpoint** (`GET /type_info/{path}`) — depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, and full meta-cursor parity not yet ported.
 - **FlecsExplorer integration** — browser UI requires unported endpoints; not integrated.

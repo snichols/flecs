@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.90.0 — 2026-05-14 — Phase 16.35: REST toggle endpoint
+
+Adds `PUT /toggle/{entity}` and `PUT /toggle/{entity}/{component}` to the REST handler,
+enabling entity enable/disable and per-component CanToggle toggling over HTTP.
+
+### API additions
+
+- **`PUT /toggle/{entity}`** — toggles the built-in `Disabled` tag on an entity.
+  - `?enabled=true` → removes `Disabled` (enables).
+  - `?enabled=false` → adds `Disabled` (disables).
+  - `?enabled` omitted → flips current state (toggle-button model).
+  - `200 OK` with body `{"enabled": <bool>}` reflecting the new state.
+  - `400` if `?enabled=` is present but not a valid boolean.
+  - `404` if the entity is not found at the dot-separated path.
+  - `503` on unexpected world panic.
+
+- **`PUT /toggle/{entity}/{component}`** — toggles a per-component enable bit via the
+  `CanToggle` trait (Phase 15.3). Component segment uses the same encoding as
+  `PUT /component`: plain name or `rel~tgt` for pairs.
+  - Same `?enabled` semantics (true/false/omit-to-flip).
+  - `400` if the component is not registered as `CanToggle`, or entity does not have it.
+  - `404` if entity or component path does not resolve.
+  - `200 OK` with body `{"enabled": <bool>}`.
+
+### Locked decisions
+
+1. **`?enabled` omitted → flip current state** — matches the toggle-button mental model.
+2. **Per-component toggle included in v1** — small surface; completes the toggle story.
+3. **Response body `{"enabled": <bool>}`** — the new state; saves a follow-up read.
+
+### Deliberate divergences from C upstream
+
+- **`?enabled=`** (Go) vs `?enable=` (C rest.c:509) — reads more naturally in URL form
+  and matches the response body field.
+- **Component selection via URL path segment** vs C's `?component=` query param —
+  consistent with Phase 16.34 `PUT /component/{entity}/{component}`.
+- **Non-empty response body** — C upstream returns an empty 200; Go returns
+  `{"enabled": <bool>}` to save the client a follow-up read.
+
+---
+
 ## v0.89.0 — 2026-05-14 — Phase 16.34: REST component mutation endpoints
 
 Adds `PUT /component/{entity}/{component}` and `DELETE /component/{entity}/{component}` to
