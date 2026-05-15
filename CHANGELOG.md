@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.93.0 — 2026-05-15 — Phase 16.38: Multi-period stats aggregation
+
+Extends the Stats addon (Phase 16.29 / v0.84.0) with ring-buffer aggregation that
+mirrors upstream's `FlecsMonitor` windowing model. Every `Progress` call feeds the
+second window; every 60 ticks reduces the second ring into one minute slot; every 60
+minute-ticks reduces the minute ring into one hour slot.
+
+Upstream reference: `flecs/src/addons/monitor.c` — `flecs_stats_reduce` (line 109),
+`flecs_stats_reduce_last` (line 130), `flecs_stats_repeat_last` (line 153).
+`ECS_STAT_WINDOW = 60` (`flecs/include/flecs/addons/monitor.h`, line 41).
+
+### New types
+
+- **`MetricGauge`** — `{Avg, Min, Max float64}` with `json:"avg"/"min"/"max"` tags.
+- **`MetricCounter`** — `{Rate, Value float64}` for counter metrics.
+- **`StatsWindow`** — fixed 60-slot ring buffer. Methods: `Record(float64)`, `Reduce() MetricGauge`, `Last() MetricGauge`. Divide-by-zero safe on empty window.
+- **`StatsPeriod`** enum: `StatsSecond`, `StatsMinute`, `StatsHour`.
+- **`WorldStatsAggregated`** — per-world-metric `MetricGauge` for one period.
+- **`PipelineStatsAggregated`** — world + per-phase + per-system `MetricGauge` for one period.
+- **`PhaseStatsAggregated`**, **`SystemStatsAggregated`** — per-phase/system aggregated shapes.
+
+### New API
+
+- **`(*World).WorldStatsWindow(period StatsPeriod) WorldStatsAggregated`**
+- **`(*World).PipelineStatsWindow(period StatsPeriod) PipelineStatsAggregated`**
+- **`(*World).StatsTick()`** — manually advance the aggregator one tick (for tests).
+
+### REST changes
+
+- `GET /stats/world?period=second|minute|hour` → `200 WorldStatsAggregated`
+- `GET /stats/pipeline?period=second|minute|hour` → `200 PipelineStatsAggregated`
+- `?period=instant` or absent → byte-identical to pre-v0.93.0 response (back-compat).
+- Unknown `?period=` value → `400 Bad Request`.
+
+### Tests
+
+13 new tests in `stats_addon_test.go`: ring-buffer records/wrap/reduce, minute/hour
+reduction cascade, empty-window safety, world/pipeline window correctness, REST
+period parameter (second, invalid, default, minute pipeline), JSON round-trip.
+`TestStats_Snapshot_PreservesWindows` is skipped: aggregator state is observable-only
+and not included in the snapshot wire format.
+
+### Documentation updates
+
+- `docs/Stats.md` — new "Multi-period aggregation" section.
+- `docs/FlecsRemoteApi.md` — `?period=` parameter table and response shapes.
+- `docs/README.md` — fixed 3 stale "not yet ported" entries (entity scoping, WriteOnce trait, entity/component mutation endpoints).
+- `ROADMAP.md` — bumped shipped heading to v0.93.0; added Phase 16.38.
+- `README.md` — updated Stats feature row.
+
+---
+
 ## v0.92.0 — 2026-05-15 — Phase 16.37: REST GET /component (read live component value)
 
 Completes the REST component-mutation arc by adding the read side:

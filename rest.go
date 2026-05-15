@@ -219,6 +219,19 @@ func restStats(w *World) http.HandlerFunc {
 	}
 }
 
+// parsePeriod parses the ?period= query parameter. Returns (period, true) on
+// success, or (0, false) on an unrecognised value. An absent parameter returns
+// ("", true) to indicate the caller should use the instant (legacy) path.
+func parsePeriod(r *http.Request) (string, bool) {
+	p := r.URL.Query().Get("period")
+	switch p {
+	case "", "instant", "second", "minute", "hour":
+		return p, true
+	default:
+		return "", false
+	}
+}
+
 func restStatsWorld(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -226,9 +239,27 @@ func restStatsWorld(w *World) http.HandlerFunc {
 				writeError(rw, http.StatusServiceUnavailable, "world unavailable")
 			}
 		}()
-		snap := w.StatsSnapshot()
+		period, ok := parsePeriod(r)
+		if !ok {
+			writeError(rw, http.StatusBadRequest, "unknown period")
+			return
+		}
 		rw.Header().Set("Cache-Control", "no-store")
-		writeJSON(rw, http.StatusOK, map[string]worldStatsResponse{"world": toWorldStatsResponse(snap.World)})
+		if period == "" || period == "instant" {
+			snap := w.StatsSnapshot()
+			writeJSON(rw, http.StatusOK, map[string]worldStatsResponse{"world": toWorldStatsResponse(snap.World)})
+			return
+		}
+		var sp StatsPeriod
+		switch period {
+		case "second":
+			sp = StatsSecond
+		case "minute":
+			sp = StatsMinute
+		case "hour":
+			sp = StatsHour
+		}
+		writeJSON(rw, http.StatusOK, w.WorldStatsWindow(sp))
 	}
 }
 
@@ -239,9 +270,27 @@ func restStatsPipeline(w *World) http.HandlerFunc {
 				writeError(rw, http.StatusServiceUnavailable, "world unavailable")
 			}
 		}()
-		snap := w.StatsSnapshot()
+		period, ok := parsePeriod(r)
+		if !ok {
+			writeError(rw, http.StatusBadRequest, "unknown period")
+			return
+		}
 		rw.Header().Set("Cache-Control", "no-store")
-		writeJSON(rw, http.StatusOK, toPipelineStatsResponse(snap))
+		if period == "" || period == "instant" {
+			snap := w.StatsSnapshot()
+			writeJSON(rw, http.StatusOK, toPipelineStatsResponse(snap))
+			return
+		}
+		var sp StatsPeriod
+		switch period {
+		case "second":
+			sp = StatsSecond
+		case "minute":
+			sp = StatsMinute
+		case "hour":
+			sp = StatsHour
+		}
+		writeJSON(rw, http.StatusOK, w.PipelineStatsWindow(sp))
 	}
 }
 

@@ -185,6 +185,17 @@ type World struct {
 	statsTotalTime      float64
 	statsPhaseSnapshot  []PhaseStats  // cached per-phase snapshot, rebuilt in statsCommit
 	statsSystemSnapshot []SystemStats // cached per-system snapshot, rebuilt in statsCommit
+	// Stats aggregator windows — protected by statsMu.
+	// statsAggTickCount is the total number of ticks committed to the second window.
+	// Second window records every tick; minute window reduces every 60 ticks;
+	// hour window reduces every 3600 ticks.
+	statsAggTickCount int
+	statsAggWorldSec  worldAggWindows
+	statsAggWorldMin  worldAggWindows
+	statsAggWorldHour worldAggWindows
+	statsAggPipeSec   pipelineAggWindows
+	statsAggPipeMin   pipelineAggWindows
+	statsAggPipeHour  pipelineAggWindows
 }
 
 // New initializes and returns an empty World.

@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.92.0)
+## Shipped (through v0.93.0)
 
 The following features are available in the current release:
 
@@ -19,7 +19,7 @@ The following features are available in the current release:
 - **Systems + dynamic pipeline** — `NewSystem`, `NewSystemInPhase`; built-in PreUpdate → OnFixedUpdate → OnUpdate → PostUpdate ordering; custom phases via `NewPhase` + `(*Phase).DependsOn`; within-phase `(*System).DependsOn` ordering; lazy topological sort via Kahn's algorithm; `Progress`; frame counter; elapsed time.
 - **Fixed timestep** — `SetFixedTimestep`; accumulator-based `OnFixedUpdate` dispatch with spiral-of-death warning.
 - **NOT, Optional, and OR query terms** — `With`/`Without`/`Maybe`/`Or` term constructors, `NewQueryFromTerms` / `NewCachedQueryFromTerms`, `FieldMaybe[T]` (also handles OR-group disambiguation).
-- **Stats and observability** — `World.Stats()` snapshot with world-level counters, per-phase wall-clock timing from the last Progress, and per-component table/entity counts; `SystemCountInPhase` for tooling.
+- **Stats and observability** — `World.Stats()` snapshot with world-level counters, per-phase wall-clock timing from the last Progress, and per-component table/entity counts; `SystemCountInPhase` for tooling. Multi-period ring-buffer aggregation (`StatsSecond`/`StatsMinute`/`StatsHour`) via `WorldStatsWindow` / `PipelineStatsWindow` (Phase 16.38).
 - **Change detection** — `(*CachedQuery).Changed()` returns true when any matching table was mutated since the last call. Per-table monotonic counter; over-reports never under-reports; zero-overhead when no cached queries exist.
 - **REST API addon** — `NewRESTHandler(w)` returns an `http.Handler` exposing world inspection (stats, components, entities) and snapshot save/load over HTTP. Stdlib `net/http` only; users provide their own `*http.Server`.
 - **Structured logging** — `World.SetLogger(*slog.Logger)` installs an optional `log/slog` lifecycle logger. Ten DEBUG-level event sites (entity created/deleted, component registered, table created, system added/closed, observer registered/unsubscribed, snapshot serialized/loaded). Nil-default; zero overhead on the hot path when no logger is set.

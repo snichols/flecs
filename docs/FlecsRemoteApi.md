@@ -177,10 +177,45 @@ Returns the `WorldStats` portion of the current `StatsSnapshot()` as JSON. Calls
 goroutine-safe. Returns `503 Service Unavailable` if the world panics (e.g. during
 teardown).
 
+### `?period=` query parameter
+
+```
+GET /stats/world?period=<period>
+```
+
+| `period` value | Response shape | Description |
+|---|---|---|
+| (absent) or `instant` | `{"world": {...}}` instant gauge | Back-compat default; byte-identical to pre-v0.93.0 |
+| `second` | `WorldStatsAggregated` | Reduced across last ≤60 ticks |
+| `minute` | `WorldStatsAggregated` | Reduced across last ≤60 second-reductions |
+| `hour` | `WorldStatsAggregated` | Reduced across last ≤60 minute-reductions |
+| (unknown) | `400 Bad Request` | |
+
+When `period` is `second`, `minute`, or `hour`, each metric is returned as an object with `avg`, `min`, and `max` sub-fields:
+
+```json
+{
+  "entity_count": {"avg": 42.3, "min": 40.0, "max": 45.0},
+  "table_count":  {"avg": 7.0,  "min": 7.0,  "max": 7.0},
+  "archetype_count": {"avg": 7.0, "min": 7.0, "max": 7.0},
+  "frame_count":  {"avg": 50.5, "min": 1.0,  "max": 100.0},
+  "total_time":   {"avg": 0.83, "min": 0.016, "max": 1.666},
+  "last_tick_delta": {"avg": 0.016, "min": 0.016, "max": 0.016}
+}
+```
+
+**Time-to-window note**: "1 tick ≈ 1 second" only when the pipeline runs at 1 Hz.
+Aggregation is tick-based, not wall-clock-based.
+
 ```
 GET /stats/world
+GET /stats/world?period=instant    (same as no parameter)
+GET /stats/world?period=second     → WorldStatsAggregated
+GET /stats/world?period=minute     → WorldStatsAggregated
+GET /stats/world?period=hour       → WorldStatsAggregated
 → 200 OK  application/json  Cache-Control: no-store
-→ 503 Service Unavailable   (world panic / teardown)
+→ 400 Bad Request                  (unknown period value)
+→ 503 Service Unavailable          (world panic / teardown)
 ```
 
 ### Curl
@@ -240,10 +275,20 @@ Returns the full `PipelineStats` snapshot as JSON: world counters, per-system
 performance metrics, and per-phase timing. Calls `world.StatsSnapshot()` directly
 (goroutine-safe). Returns `503 Service Unavailable` if the world panics.
 
+Accepts the same `?period=` query parameter as `GET /stats/world`. When a non-instant
+period is specified, the response is a `PipelineStatsAggregated` object with the same
+`world` sub-object as `WorldStatsAggregated` plus `phases` and `systems` arrays where
+each metric is `{avg, min, max}`.
+
 ```
 GET /stats/pipeline
+GET /stats/pipeline?period=instant  (same as no parameter)
+GET /stats/pipeline?period=second   → PipelineStatsAggregated
+GET /stats/pipeline?period=minute   → PipelineStatsAggregated
+GET /stats/pipeline?period=hour     → PipelineStatsAggregated
 → 200 OK  application/json  Cache-Control: no-store
-→ 503 Service Unavailable   (world panic / teardown)
+→ 400 Bad Request                   (unknown period value)
+→ 503 Service Unavailable           (world panic / teardown)
 ```
 
 ### Curl
@@ -1090,11 +1135,14 @@ response body saves a follow-up read and tells the client the new state directly
 
 ### Aggregated stats endpoints (FlecsStats module)
 
-> **Partially ported in Go flecs (v0.86.0).** `GET /stats/world` and `GET /stats/pipeline`
-> are now implemented and return the single-frame `StatsSnapshot()` data (world counters,
-> per-system metrics, per-phase timing). The upstream C equivalents return *multi-period*
-> aggregated statistics collected by the `FlecsStats` module; multi-period aggregation and
-> the `?period=` query parameter are **not yet ported**.
+> **Ported in Go flecs (v0.86.0 + v0.93.0).** `GET /stats/world` and `GET /stats/pipeline`
+> are implemented and support the `?period=` query parameter (v0.93.0). Omitting `?period=`
+> returns the single-frame `StatsSnapshot()` data (back-compat). Adding `?period=second`,
+> `?period=minute`, or `?period=hour` returns multi-period aggregated `WorldStatsAggregated`
+> / `PipelineStatsAggregated` with per-metric `{avg, min, max}` objects. See
+> [`## GET /stats/world`](#get-statsworld) and [`## GET /stats/pipeline`](#get-statspipeline)
+> for full details. The full FlecsStats C module (histogram percentiles, custom user
+> metrics, variable window sizes) is not ported.
 
 ### Command capture endpoints
 
