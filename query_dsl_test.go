@@ -1080,3 +1080,188 @@ func TestParse_VarCycles_NoCycleSharedNode(t *testing.T) {
 		t.Errorf("want nil for non-cyclic graph, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 16.45 DSL tests
+// ---------------------------------------------------------------------------
+
+// dslSetupWorldV3 creates a world with components/entities for Phase 16.45 DSL tests.
+func dslSetupWorldV3(t *testing.T) (*World, ID, ID, ID) {
+	t.Helper()
+	w := New()
+	posID := RegisterComponent[dslPos](w)
+	w.SetName(posID, "Position")
+	rel := ID(0)
+	tgt := ID(0)
+	w.Write(func(fw *Writer) {
+		rel = fw.NewEntity()
+		w.SetName(rel, "DockedTo")
+		tgt = fw.NewEntity()
+		w.SetName(tgt, "hero")
+	})
+	return w, posID, rel, tgt
+}
+
+func TestParse_RelVarSyntax(t *testing.T) {
+	w, _, _, tgt := dslSetupWorldV3(t)
+	terms, err := dslParse(t, w, "($Rel, hero)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Filter out TermVarDecl terms (none expected here, but be defensive)
+	var andTerms []Term
+	for _, tm := range terms {
+		if tm.Kind == TermAnd {
+			andTerms = append(andTerms, tm)
+		}
+	}
+	if len(andTerms) != 1 {
+		t.Fatalf("want 1 TermAnd, got %d", len(andTerms))
+	}
+	if andTerms[0].relVar == "" {
+		t.Error("want relVar set in parsed ($Rel, hero) term")
+	}
+	if andTerms[0].relVar != "Rel" {
+		t.Errorf("want relVar=Rel, got %q", andTerms[0].relVar)
+	}
+	if andTerms[0].relVarTarget != tgt {
+		t.Errorf("want relVarTarget=%v (hero), got %v", tgt, andTerms[0].relVarTarget)
+	}
+}
+
+func TestParse_RelBothVar(t *testing.T) {
+	w, _, _, _ := dslSetupWorldV3(t)
+	terms, err := dslParse(t, w, "($R, $T)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var andTerms []Term
+	for _, tm := range terms {
+		if tm.Kind == TermAnd {
+			andTerms = append(andTerms, tm)
+		}
+	}
+	if len(andTerms) != 1 {
+		t.Fatalf("want 1 TermAnd, got %d", len(andTerms))
+	}
+	if andTerms[0].relVar != "R" {
+		t.Errorf("want relVar=R, got %q", andTerms[0].relVar)
+	}
+	if andTerms[0].tgtVar != "T" {
+		t.Errorf("want tgtVar=T, got %q", andTerms[0].tgtVar)
+	}
+	if andTerms[0].relVarTarget != 0 {
+		t.Errorf("want relVarTarget=0 (both-var), got %v", andTerms[0].relVarTarget)
+	}
+}
+
+func TestParse_NegativeVar(t *testing.T) {
+	w, posID, rel, _ := dslSetupWorldV3(t)
+	_ = posID
+	_ = rel
+	// (DockedTo, $planet), !DockedTo($this, $planet) — predicate negation form.
+	// $planet is bound by the first term, then used in the negated predicate.
+	terms, err := dslParse(t, w, "(DockedTo, $planet), !DockedTo($this, $planet)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var andCount, notCount int
+	for _, tm := range terms {
+		switch tm.Kind {
+		case TermAnd:
+			andCount++
+		case TermNot:
+			notCount++
+			if tm.tgtVar != "planet" {
+				t.Errorf("want tgtVar=planet on TermNot, got %q", tm.tgtVar)
+			}
+		}
+	}
+	if andCount < 1 {
+		t.Error("want at least 1 TermAnd term")
+	}
+	if notCount != 1 {
+		t.Errorf("want 1 TermNot term, got %d", notCount)
+	}
+}
+
+func TestParse_NegativeVar_UnboundError(t *testing.T) {
+	w, _, _, _ := dslSetupWorldV3(t)
+	// !DockedTo($this, $freeVar) — predicate form; $freeVar unbound → error.
+	_, err := dslParse(t, w, "!DockedTo($this, $freeVar)")
+	if err == nil {
+		t.Fatal("want error for unbound negative variable, got nil")
+	}
+	pqe, ok := err.(*ParseQueryError)
+	if !ok {
+		t.Fatalf("want *ParseQueryError, got %T: %v", err, err)
+	}
+	if pqe.Code != ErrCodeUnboundNegativeVar {
+		t.Errorf("want ErrCodeUnboundNegativeVar, got %v", pqe.Code)
+	}
+}
+
+func TestParse_TableVarSyntax(t *testing.T) {
+	w, posID, _, _ := dslSetupWorldV3(t)
+	_ = posID
+	terms, err := dslParse(t, w, "$T:Position($this)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should contain a TermVarDecl for T and a TermAnd for Position.
+	var declCount, andCount int
+	for _, tm := range terms {
+		switch tm.Kind {
+		case TermVarDecl:
+			declCount++
+			if tm.srcVar != "T" {
+				t.Errorf("want srcVar=T in TermVarDecl, got %q", tm.srcVar)
+			}
+			if tm.varKind != VarTable {
+				t.Errorf("want VarTable kind, got %v", tm.varKind)
+			}
+		case TermAnd:
+			andCount++
+		}
+	}
+	if declCount != 1 {
+		t.Errorf("want 1 TermVarDecl, got %d", declCount)
+	}
+	if andCount != 1 {
+		t.Errorf("want 1 TermAnd (Position), got %d", andCount)
+	}
+}
+
+// TestCovDSL_DollarNoIdent covers parsePrimaryTerm when $ is followed by a
+// non-identifier character (query_dsl.go:658.10,661.4, 2 stmts).
+func TestCovDSL_DollarNoIdent(t *testing.T) {
+	w := New()
+	_, err := parseQueryExpr("$!", w)
+	if err == nil {
+		t.Error("expected error for $! expression")
+	}
+	var pe *ParseQueryError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *ParseQueryError, got %T: %v", err, err)
+	}
+	if pe.Code != ErrCodeExpectedIdent {
+		t.Errorf("want ErrCodeExpectedIdent, got %v", pe.Code)
+	}
+}
+
+// TestCovDSL_TableKindNoComponent covers parsePrimaryTerm when $Var: has no
+// component name following the colon (query_dsl.go:669.12,671.5, 1 stmt).
+func TestCovDSL_TableKindNoComponent(t *testing.T) {
+	w := New()
+	_, err := parseQueryExpr("$T:", w)
+	if err == nil {
+		t.Error("expected error for $T: expression without component name")
+	}
+	var pe *ParseQueryError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *ParseQueryError, got %T: %v", err, err)
+	}
+	if pe.Code != ErrCodeExpectedIdent {
+		t.Errorf("want ErrCodeExpectedIdent, got %v", pe.Code)
+	}
+}

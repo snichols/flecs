@@ -131,11 +131,12 @@ type CachedQuery struct {
 	// source entity had no inheritable components. Iter returns a zero-result iterator
 	// immediately without consulting the table cache.
 	alwaysFalse bool
-	// varSlots, driverVar, and varOrder mirror Query fields for variable queries.
+	// varSlots, driverVar, varOrder, and varKinds mirror Query fields for variable queries.
 	// Iter() re-executes buildVarRows on each call when varSlots != nil.
 	varSlots  map[string]int
 	driverVar string
 	varOrder  []string
+	varKinds  map[string]VarKind
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID
 	orderByCmp          OrderByFunc             // user comparator; nil = unsorted
@@ -223,7 +224,8 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewCachedQueryFromTerms", terms)
-	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar)
+	varKinds := buildVarKindsFromTerms(terms)
+	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar, varKinds)
 	varOrder := buildVarTopoOrder("flecs: NewCachedQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
 	if alwaysFalse {
@@ -234,6 +236,7 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 	cq.varSlots = varSlots
 	cq.driverVar = driverVar
 	cq.varOrder = varOrder
+	cq.varKinds = varKinds
 	return cq
 }
 
@@ -449,12 +452,14 @@ func (cq *CachedQuery) Iter() *QueryIter {
 			varSlots:     cq.varSlots,
 			driverVar:    cq.driverVar,
 			varOrder:     cq.varOrder,
+			varKinds:     cq.varKinds,
 		}
 		rows := proxy.buildVarRows()
 		return &QueryIter{
 			world:              cq.w,
 			terms:              cq.terms,
 			varSlots:           cq.varSlots,
+			varKinds:           cq.varKinds,
 			varBindings:        make([]ID, len(cq.varSlots)),
 			varRows:            rows,
 			varRowPos:          -1,

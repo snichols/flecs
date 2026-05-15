@@ -21,6 +21,7 @@ type queryResultEntry struct {
 	Entity int64                      `json:"entity"`
 	Path   string                     `json:"path"`
 	Fields map[string]json.RawMessage `json:"fields,omitempty"`
+	Vars   map[string]int64           `json:"vars,omitempty"`
 }
 
 // queryResponse is the top-level JSON envelope for GET /query.
@@ -157,6 +158,7 @@ func restQuery(w *World) http.HandlerFunc {
 				for _, execTerms := range execSets {
 					q := NewQueryFromTerms(w, execTerms...)
 					it := q.Iter()
+					varNames := it.VarNames()
 					for it.Next() {
 						for _, e := range it.Entities() {
 							if needDedup {
@@ -184,6 +186,14 @@ func restQuery(w *World) http.HandlerFunc {
 									if len(fields) > 0 {
 										entry.Fields = fields
 									}
+								}
+
+								if len(varNames) > 0 {
+									vars := make(map[string]int64, len(varNames))
+									for _, name := range varNames {
+										vars[name] = int64(it.Var(name))
+									}
+									entry.Vars = vars
 								}
 
 								results = append(results, entry)

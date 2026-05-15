@@ -10,7 +10,7 @@ Conceptual documentation for the Go flecs ECS library. Start with the [Quickstar
 
 ---
 
-## Manuals (pending)
+## Manuals
 
 | File | Status | Phase |
 |---|---|---|
@@ -66,7 +66,7 @@ Each C doc was read and classified for porting effort.
 
 Features described in the C docs that the Go port does not currently implement:
 
-- **Query language / DSL** (`FlecsScript`, `FlecsQueryLanguage`) — C-only scripting layer.
+- **FlecsScript** (embedded scripting with side-effects) — C-only; will not be ported. The query DSL (FQL v2, `FlecsQueryLanguage`) **shipped in v0.96.0** and is the full Go query expression language; `FlecsScript` (imperative scripts, `ECS_SCRIPT`, `ecs_script_run`) remains out of scope.
 - **Module system** (`ECS_MODULE` / `world.import`) — Go packages serve this role natively.
 - **Entity hooks beyond OnAdd/OnSet/OnRemove** — C has `OnDelete`, `OnTableEmpty`, `OnTableFill`. `OnTableCreate` observer event **shipped in v0.62.0**; `OnTableEmpty`/`OnTableFill` **shipped in v0.98.0**; `OnTableDelete` deferred pending table-reclamation.
 - **Cleanup policies** (`OnDeleteTarget`, `OnDelete`) — **shipped in v0.32.0** via `SetCleanupPolicy` / `GetCleanupPolicy`.

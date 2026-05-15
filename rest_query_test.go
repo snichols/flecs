@@ -1132,3 +1132,145 @@ func TestRest_Query_MultiVar_Optimized(t *testing.T) {
 	_ = P1
 	_ = P2
 }
+
+// ---------------------------------------------------------------------------
+// Phase 16.45 REST tests
+// ---------------------------------------------------------------------------
+
+// TestRest_Query_RelVar verifies the REST endpoint executes a relationship-variable
+// query and returns results with a "vars" field containing the Rel binding.
+func TestRest_Query_RelVar(t *testing.T) {
+	w := flecs.New()
+	var heroID, likesID, entityAID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		w.SetName(heroID, "rvHero")
+		likesID = fw.NewEntity()
+		w.SetName(likesID, "rvLikes")
+		entityAID = fw.NewEntity()
+		w.SetName(entityAID, "rvEntityA")
+		flecs.AddID(fw, entityAID, flecs.MakePair(likesID, heroID))
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=(%24Rel,+rvHero)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	if count < 1 {
+		t.Errorf("want ≥1 result for relVar query, got count=%d\nbody=%s", count, body)
+	}
+	results, _ := m["results"].([]any)
+	if len(results) < 1 {
+		t.Fatalf("want results array, got empty\nbody=%s", body)
+	}
+	entry := results[0].(map[string]any)
+	vars, ok := entry["vars"].(map[string]any)
+	if !ok {
+		t.Fatalf("want vars field in result entry\nbody=%s", body)
+	}
+	relBinding, ok := vars["Rel"]
+	if !ok {
+		t.Errorf("want Rel variable in vars\nbody=%s", body)
+	}
+	_ = relBinding // non-zero means binding is present
+}
+
+// TestRest_Query_NegativeVar verifies REST executes a negative-variable query correctly.
+func TestRest_Query_NegativeVar(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "rvPos")
+	var velID, brakeID, xFast, xSlow flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = fw.NewEntity()
+		w.SetName(velID, "rvVel")
+		brakeID = fw.NewEntity()
+		w.SetName(brakeID, "rvBrake")
+		xFast = fw.NewEntity()
+		w.SetName(xFast, "rvxFast")
+		xSlow = fw.NewEntity()
+		w.SetName(xSlow, "rvxSlow")
+
+		// eA: no brake → should be in results
+		eA := fw.NewEntity()
+		w.SetName(eA, "rvEntityNobrake")
+		flecs.Set(fw, eA, rqPos{X: 1})
+		flecs.AddID(fw, eA, flecs.MakePair(velID, xFast))
+
+		// eB: has brake → should NOT be in results
+		eB := fw.NewEntity()
+		w.SetName(eB, "rvEntityBrake")
+		flecs.Set(fw, eB, rqPos{X: 2})
+		flecs.AddID(fw, eB, flecs.MakePair(velID, xSlow))
+		flecs.AddID(fw, eB, flecs.MakePair(brakeID, xSlow))
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Query: rvPos,(rvVel,$x),!rvBrake($this,$x)
+	// URL-encoded: rvPos,+(rvVel,+%24x),+!rvBrake(%24this,+%24x)
+	resp := rqGet(t, srv, "/query?expr=rvPos,+(rvVel,+%24x),+!rvBrake(%24this,+%24x)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// Only rvEntityNobrake should be returned.
+	if count != 1 {
+		t.Errorf("want 1 result (entity without brake), got count=%d\nbody=%s", count, body)
+	}
+}
+
+// TestRest_Query_TableVar verifies REST executes a table-variable query and returns results.
+func TestRest_Query_TableVar(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "rvPosition2")
+	var eA, eB flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		eA = fw.NewEntity()
+		w.SetName(eA, "rvTblEntA")
+		flecs.Set(fw, eA, rqPos{X: 1})
+		eB = fw.NewEntity()
+		w.SetName(eB, "rvTblEntB")
+		flecs.Set(fw, eB, rqPos{X: 2})
+	})
+	_ = eA
+	_ = eB
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Query: $T:rvPosition2($this)
+	resp := rqGet(t, srv, "/query?expr=%24T%3ArvPosition2(%24this)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	if count < 1 {
+		t.Errorf("want ≥1 result for table-var query, got count=%d\nbody=%s", count, body)
+	}
+	results, _ := m["results"].([]any)
+	if len(results) < 1 {
+		t.Fatalf("want results, got empty\nbody=%s", body)
+	}
+	// Each result should have a "vars" field with "T".
+	entry := results[0].(map[string]any)
+	vars, ok := entry["vars"].(map[string]any)
+	if !ok {
+		t.Fatalf("want vars field in result\nbody=%s", body)
+	}
+	if _, hasT := vars["T"]; !hasT {
+		t.Errorf("want T variable in vars\nbody=%s", body)
+	}
+}
