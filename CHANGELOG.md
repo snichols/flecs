@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.100.0 — 2026-05-15 — Phase 16.45: Extended query variables (centennial release)
+
+Extends the multi-variable query engine with three new variable modes: variable in
+relationship-name position, negative-variable constraints, and table-kind variables.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `WithPairRelVar(varName string, target ID) Term` | Pair term where the relationship slot is a named variable |
+| `WithPairBothVar(relVarName, tgtVarName string) Term` | Pair term where both slots are named variables |
+| `(Term).RelVar(name string) Term` | Chain method: set the relationship-slot variable on any term |
+| `WithVarKind(varName string, kind VarKind) Term` | Declare the kind (`VarEntity`, `VarTable`) for a named variable |
+| `WithTableVar(varName string) Term` | Shorthand for `WithVarKind(varName, VarTable)` |
+| `(*QueryIter).VarTable(name string) *table.Table` | Retrieve the table bound to a table-kind variable |
+| `(*QueryIter).VarNames() []string` | All variable names in slot order |
+| `VarKind` (type) | Enum: `VarEntity = 0`, `VarTable = 1`, `VarAny = 2` (reserved) |
+| `ErrCodeUnboundNegativeVar ParseErrorCode = 8` | Unbound variable introduced inside a negated term |
+
+### Feature 1 — Variable in relationship-name position
+
+`WithPairRelVar("Rel", target)` creates a pair term where the relationship slot is a
+variable. During iteration the variable is bound to each relationship that the seed entity
+holds with the specified target. Both the DSL form `($Rel, target)` and the two-variable
+form `($Rel, $Tgt)` (`WithPairBothVar`) are supported. The optimizer excludes relVar terms
+from archetype seed selection and estimates their domain via relationship-count sampling.
+
+### Feature 2 — Negative-variable constraints
+
+A `TermNot` term may carry a `TgtVar` to constrain iteration: `Without(id).TgtVar("x")`
+matches only entities that have the positive term binding but lack the pair `(id, $x)`.
+The variable must be bound by an earlier positive term; introducing a new variable in a
+negated term is rejected at DSL parse time with `ErrCodeUnboundNegativeVar`. The
+domain-collection engine skips TermNot terms to avoid incorrect domain intersection.
+
+### Feature 3 — Table-kind variables
+
+`WithTableVar("T")` / `$T:Component($this)` in DSL binds the variable to the archetype
+table of each matched entity rather than the entity ID itself. `(*QueryIter).VarTable("T")`
+decodes the binding. Table-kind variables iterate the set of matching tables as their
+domain; the optimizer estimates this domain via `estimateTableKindDomain` (min table count
+across non-variable TermAnd terms).
+
+### DSL additions
+
+| Form | Semantics |
+|---|---|
+| `($Rel, target)` | Relationship-slot variable with fixed target |
+| `($Rel, $Tgt)` | Both slots as variables |
+| `!Rel($this, $var)` | Negative-variable constraint (var must be pre-bound) |
+| `$T:Component($this)` | Table-kind variable annotation |
+
+`ErrCodeUnboundNegativeVar (8)` added to the `ParseErrorCode` enum and
+`docs/QueryDSL.md` error-codes table.
+
+### REST surface
+
+Variable bindings are now exposed in query results: `GET /query?expr=...` response entries
+carry a `"vars"` object mapping each variable name to its bound entity ID (or table pointer
+for table-kind variables).
+
 ## v0.99.0 — 2026-05-15 — Phase 16.44: Join-order optimizer
 
 Adds a pure-performance join-order optimizer for multi-variable queries. At construction time

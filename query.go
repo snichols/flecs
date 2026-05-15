@@ -95,6 +95,11 @@ const (
 	// matches every named entity. Mirrors upstream EcsPredMatch / EcsQueryPredEqMatch.
 	// Construct via [NameMatches]. Cannot be combined with traversal flags or a fixed source.
 	TermNameMatch TermKind = 7
+	// TermVarDecl declares a variable kind without adding a filter constraint.
+	// Construct via WithVarKind(name, kind) or WithTableVar(name). The variable is
+	// registered in the query's variable slot map but the term has no runtime filtering
+	// effect. srcVar names the declared variable; varKind specifies its kind.
+	TermVarDecl TermKind = 11
 	// TermAndFrom expands the Src entity's component list into N TermAnd requirements
 	// at query construction (snapshot). Entities must have ALL of Src's inheritable
 	// components. Components with DontInherit policy (e.g. Prefab) are excluded.
@@ -143,6 +148,22 @@ func (k TermKind) String() string {
 	}
 }
 
+// VarKind classifies the type of binding a named query variable holds.
+// The default VarEntity binds to an entity ID. VarTable binds to an archetype table.
+// VarAny is reserved for future multi-slot variables.
+type VarKind int
+
+const (
+	// VarEntity (default) — variable binds to a single entity ID per result row.
+	VarEntity VarKind = 0
+	// VarTable — variable binds to an archetype table reference.
+	// Access via (*QueryIter).VarTable(name); (*QueryIter).Var(name) returns the
+	// table pointer encoded as an ID.
+	VarTable VarKind = 1
+	// VarAny — reserved for future multi-slot variables. Not implemented.
+	VarAny VarKind = 2
+)
+
 // Term is a structured query term combining a component/pair/tag ID with a TermKind
 // and optional traversal modifier.
 //
@@ -170,6 +191,18 @@ type Term struct {
 	// Set via WithPairTgtVar(rel, varName) or (Term).TgtVar(name). Mirrors EcsIsVariable
 	// on second ref.
 	tgtVar string
+	// relVar names the variable whose current binding supplies the pair relationship
+	// (first slot) for this term. When non-empty, relVarTarget holds the fixed pair
+	// target (if non-zero) or tgtVar names the target variable (if both slots variable).
+	// Mutually exclusive with a pair-form ID. Mirrors EcsIsVariable on first ref.
+	relVar string
+	// relVarTarget is the fixed pair target when relVar is non-empty and tgtVar is empty.
+	// Zero means both slots are variable (tgtVar must also be non-empty in that case).
+	relVarTarget ID
+	// varKind is the kind of variable declared by this TermVarDecl term. Only meaningful
+	// when Kind == TermVarDecl. VarEntity is the default; VarTable declares a table-kind
+	// variable. VarAny is reserved and not implemented.
+	varKind VarKind
 	// Sparse is set to true by validateAndSortTerms / NewQuery when the term's
 	// component stores its data in a sparse-set (IsSparse or IsDontFragment returned
 	// true). Sparse is a VALUE-FETCH routing hint: Field[T] reads via sparseSetGet
@@ -541,6 +574,82 @@ func WithPairTgtVar(rel ID, varName string) Term {
 	return Term{ID: rel, Kind: TermAnd, tgtVar: varName}
 }
 
+// WithPairRelVar returns a TermAnd term that matches pairs ($varName, target) on
+// $this, where the relationship slot is resolved from the named variable's binding
+// at iteration time. Equivalent to ($Rel, target) in FQL.
+//
+// Panics if varName is empty or target is zero.
+func WithPairRelVar(varName string, target ID) Term {
+	if varName == "" {
+		panic("flecs: WithPairRelVar: varName must not be empty")
+	}
+	if target == 0 {
+		panic("flecs: WithPairRelVar: target must not be zero")
+	}
+	return Term{Kind: TermAnd, relVar: varName, relVarTarget: target}
+}
+
+// WithPairBothVar returns a TermAnd term that matches pairs ($relVar, $tgtVar) on
+// $this, where both relationship and target are resolved from named variables.
+// Equivalent to ($Rel, $Tgt) in FQL.
+//
+// Panics if either name is empty.
+func WithPairBothVar(relVarName, tgtVarName string) Term {
+	if relVarName == "" {
+		panic("flecs: WithPairBothVar: relVarName must not be empty")
+	}
+	if tgtVarName == "" {
+		panic("flecs: WithPairBothVar: tgtVarName must not be empty")
+	}
+	return Term{Kind: TermAnd, relVar: relVarName, tgtVar: tgtVarName}
+}
+
+// RelVar binds this term's pair relationship slot to the named query variable.
+// The pair relationship is resolved from the variable's binding at iteration time.
+// Use as a chained setter: flecs.With(targetID).RelVar("R").
+//
+// Panics if name is empty or if the term ID is already a pair.
+// Prefer WithPairRelVar as the one-step constructor.
+func (t Term) RelVar(name string) Term {
+	if name == "" {
+		panic("flecs: Term.RelVar: variable name must not be empty")
+	}
+	if t.ID.IsPair() {
+		panic("flecs: Term.RelVar: cannot combine RelVar with a pair-form ID (RelVar sets the pair relationship at runtime)")
+	}
+	t.relVar = name
+	t.relVarTarget = t.ID // existing ID becomes the fixed target
+	t.ID = 0
+	return t
+}
+
+// WithVarKind declares the kind of a named query variable. The returned TermVarDecl
+// term has no runtime filtering effect; it only registers the variable kind.
+// Use WithTableVar for the common VarTable case.
+//
+// Panics if name is empty or kind is VarAny (reserved).
+func WithVarKind(name string, kind VarKind) Term {
+	if name == "" {
+		panic("flecs: WithVarKind: name must not be empty")
+	}
+	if kind == VarAny {
+		panic("flecs: WithVarKind: VarAny is reserved and not yet implemented")
+	}
+	return Term{Kind: TermVarDecl, srcVar: name, varKind: kind}
+}
+
+// WithTableVar declares name as a table-kind variable (VarTable). The variable
+// binds to the current archetype table at each iteration step. Access the bound
+// table via (*QueryIter).VarTable(name); Var(name) returns the pointer encoded as ID.
+//
+// Convenience for WithVarKind(name, VarTable). Panics if name is empty.
+func WithTableVar(name string) Term {
+	if name == "" {
+		panic("flecs: WithTableVar: name must not be empty")
+	}
+	return Term{Kind: TermVarDecl, srcVar: name, varKind: VarTable}
+}
+
 // Query holds a structured list of query terms used to match archetype tables.
 // Terms are stored sorted: TermAnd first (by ID), then TermNot (by ID), then
 // TermOr-groups (preserving group adjacency, within-group sorted by ID), then
@@ -581,6 +690,9 @@ type Query struct {
 	// varOrder[0] is always driverVar (outermost); varOrder[N-1] is innermost.
 	// Built once at construction; nil when varSlots is nil.
 	varOrder []string
+	// varKinds maps variable names to their VarKind. Nil when no table-kind variables
+	// are declared. VarTable entries drive table-level iteration in buildVarRowsRec.
+	varKinds map[string]VarKind
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -688,11 +800,12 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 		}
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewQueryFromTerms", terms)
-	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar)
+	varKinds := buildVarKindsFromTerms(terms)
+	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar, varKinds)
 	varOrder := buildVarTopoOrder("flecs: NewQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder}
+	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder, varKinds: varKinds}
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -812,10 +925,13 @@ func buildFixedSourcePtrs(w *World, terms []Term) (map[ID]unsafe.Pointer, map[ID
 // varRow holds one pre-computed result row for a variable query. thisEntity is
 // the $this entity; thisTable is its archetype table; bindings is a slot-indexed
 // slice of variable values for this row (len = number of query variables).
+// tablePtrs is a parallel slice for table-kind variable bindings; nil when no
+// table-kind variables were bound (avoids allocating for the common case).
 type varRow struct {
 	thisEntity ID
 	thisTable  *table.Table
 	bindings   []ID
+	tablePtrs  []*table.Table
 }
 
 // collectVarDomainFor enumerates the set of candidate entity bindings for varName
@@ -829,11 +945,18 @@ type varRow struct {
 //   - srcVar!="" (source is another variable): pair targets for the relationship on the
 //     specific entity currently bound to srcVar
 //
+// RelVar constraints (relVar==varName terms) contribute distinct relationship IDs from
+// pairs (*, target) where target is fixed (relVarTarget) or variable (tgtVar binding).
+//
 // When both kinds exist the final domain is their intersection.
 func (q *Query) collectVarDomainFor(varName string, bindings []ID) []ID {
 	// SrcVar constraints: terms where srcVar==varName and tgtVar=="" (component ownership).
+	// Excludes TermVarDecl terms (they declare variable kind, not component ownership).
 	var srcSet map[ID]struct{}
 	for _, t := range q.terms {
+		if t.Kind == TermVarDecl {
+			continue
+		}
 		if t.srcVar != varName || t.tgtVar != "" {
 			continue
 		}
@@ -858,14 +981,32 @@ func (q *Query) collectVarDomainFor(varName string, bindings []ID) []ID {
 		}
 	}
 
-	// TgtVar constraints: terms where tgtVar==varName.
+	// TgtVar constraints: terms where tgtVar==varName (positive/binding terms only;
+	// TermNot constrains but does not contribute to domain enumeration).
 	var tgtSet map[ID]struct{}
 	for _, t := range q.terms {
 		if t.tgtVar != varName {
 			continue
 		}
+		if t.Kind == TermNot {
+			continue // negative-var terms filter at varCheckTable, not here
+		}
 		var candidates []ID
-		if t.Src != 0 {
+		if t.relVar != "" {
+			// Both-var term: filter pair targets by the relVar binding (if bound).
+			relSlot := q.varSlots[t.relVar]
+			relBinding := bindings[relSlot]
+			for _, tbl := range q.w.tables {
+				for _, cid := range tbl.Type() {
+					if !cid.IsPair() {
+						continue
+					}
+					if relBinding == 0 || cid.First().Index() == relBinding.Index() {
+						candidates = append(candidates, cid.Second())
+					}
+				}
+			}
+		} else if t.Src != 0 {
 			// Fixed-source entity with variable pair target: collect pair targets on t.Src.
 			rec := q.w.index.Get(t.Src)
 			if rec == nil || rec.Table == nil {
@@ -927,31 +1068,77 @@ func (q *Query) collectVarDomainFor(varName string, bindings []ID) []ID {
 		}
 	}
 
-	// Merge srcSet and tgtSet into the result domain.
-	if srcSet != nil && tgtSet != nil {
-		domain := make([]ID, 0, len(srcSet))
-		for e := range srcSet {
-			if _, ok := tgtSet[e]; ok {
-				domain = append(domain, e)
+	// RelVar constraints: terms where relVar==varName. Collect distinct relationship IDs.
+	var relSet map[ID]struct{}
+	for _, t := range q.terms {
+		if t.relVar != varName {
+			continue
+		}
+		// Determine target filter: fixed target or tgtVar binding (if already bound).
+		var targetFilter ID
+		if t.tgtVar != "" {
+			tgtSlot := q.varSlots[t.tgtVar]
+			targetFilter = bindings[tgtSlot] // 0 if not yet bound → match all targets
+		} else {
+			targetFilter = t.relVarTarget // fixed target (non-zero)
+		}
+		var candidates []ID
+		for _, tbl := range q.w.tables {
+			for _, cid := range tbl.Type() {
+				if !cid.IsPair() {
+					continue
+				}
+				if targetFilter == 0 || cid.Second().Index() == targetFilter.Index() {
+					candidates = append(candidates, cid.First())
+				}
 			}
 		}
-		return domain
-	}
-	if srcSet != nil {
-		domain := make([]ID, 0, len(srcSet))
-		for e := range srcSet {
-			domain = append(domain, e)
+		if relSet == nil {
+			relSet = make(map[ID]struct{}, len(candidates))
+			for _, r := range candidates {
+				relSet[r] = struct{}{}
+			}
+		} else {
+			next := make(map[ID]struct{}, len(relSet))
+			for _, r := range candidates {
+				if _, ok := relSet[r]; ok {
+					next[r] = struct{}{}
+				}
+			}
+			relSet = next
 		}
-		return domain
+	}
+
+	// Merge srcSet, tgtSet, and relSet into the result domain.
+	sets := []map[ID]struct{}{}
+	if srcSet != nil {
+		sets = append(sets, srcSet)
 	}
 	if tgtSet != nil {
-		domain := make([]ID, 0, len(tgtSet))
-		for e := range tgtSet {
-			domain = append(domain, e)
-		}
-		return domain
+		sets = append(sets, tgtSet)
 	}
-	return nil
+	if relSet != nil {
+		sets = append(sets, relSet)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	// Intersect all sets.
+	base := sets[0]
+	for _, s := range sets[1:] {
+		next := make(map[ID]struct{}, len(base))
+		for e := range base {
+			if _, ok := s[e]; ok {
+				next[e] = struct{}{}
+			}
+		}
+		base = next
+	}
+	domain := make([]ID, 0, len(base))
+	for e := range base {
+		domain = append(domain, e)
+	}
+	return domain
 }
 
 // varCheckTable returns true if table t satisfies all non-variable archetype
@@ -968,7 +1155,21 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 		switch term.Kind {
 		case TermAnd:
 			switch {
-			case term.tgtVar != "" && term.srcVar == "" && term.Src == 0:
+			case term.relVar != "" && term.srcVar == "" && term.Src == 0:
+				// Relationship-position variable pair: ($relVar, target) or ($relVar, $tgtVar).
+				relSlot := q.varSlots[term.relVar]
+				relBinding := bindings[relSlot]
+				var tgt ID
+				if term.tgtVar != "" {
+					tgtSlot := q.varSlots[term.tgtVar]
+					tgt = bindings[tgtSlot]
+				} else {
+					tgt = term.relVarTarget
+				}
+				if relBinding == 0 || tgt == 0 || !t.HasComponent(MakePair(relBinding, tgt)) {
+					return false
+				}
+			case term.tgtVar != "" && term.srcVar == "" && term.Src == 0 && term.relVar == "":
 				// Variable-target pair on $this: resolve binding and check concrete pair.
 				// Terms where srcVar!="" or Src!=0 are variable-to-variable or fixed-source
 				// constraints consumed during domain collection (collectVarDomainFor) — skip here.
@@ -984,7 +1185,15 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 				}
 			}
 		case TermNot:
-			if term.srcVar == "" && term.tgtVar == "" && !term.DontFragment && !term.Union {
+			if term.tgtVar != "" && term.srcVar == "" && term.Src == 0 && term.relVar == "" {
+				// Negative variable-target pair: !Rel($this, $varName).
+				// The variable must be bound (negative-var constraint).
+				slot := q.varSlots[term.tgtVar]
+				binding := bindings[slot]
+				if binding != 0 && t.HasComponent(MakePair(term.ID, binding)) {
+					return false
+				}
+			} else if term.srcVar == "" && term.tgtVar == "" && term.relVar == "" && !term.DontFragment && !term.Union {
 				if t.HasComponent(term.ID) {
 					return false
 				}
@@ -1036,9 +1245,9 @@ func (q *Query) buildVarRows() []varRow {
 		seedIdx := -1
 		minCount := 0
 		for i, t := range q.terms {
-			if t.Kind != TermAnd || t.srcVar != "" || t.tgtVar != "" || t.Src != 0 ||
-				t.DontFragment || t.Union || t.Traverse != TraverseSelf {
-				continue // variable, fixed-source, sparse: not archetype seeds
+			if t.Kind != TermAnd || t.srcVar != "" || t.tgtVar != "" || t.relVar != "" || t.Src != 0 ||
+				t.DontFragment || t.Union || t.Traverse != TraverseSelf || t.ID == 0 {
+				continue // variable, fixed-source, sparse, relVar: not archetype seeds
 			}
 			c := q.w.compIndex.Count(t.ID)
 			if seedIdx == -1 || c < minCount {
@@ -1057,14 +1266,15 @@ func (q *Query) buildVarRows() []varRow {
 	}
 
 	bindings := make([]ID, nSlots)
+	tblPtrs := make([]*table.Table, nSlots)
 	var rows []varRow
-	q.buildVarRowsRec(q.varOrder, 0, bindings, baseTables, hasThisConstraint, &rows)
+	q.buildVarRowsRec(q.varOrder, 0, bindings, tblPtrs, baseTables, hasThisConstraint, &rows)
 	return rows
 }
 
 // buildVarRowsRec recursively binds each variable in varOrder (topo-sorted) and,
 // once all variables are bound, enumerates matching $this entities.
-func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, baseTables []*table.Table, hasThisConstraint bool, rows *[]varRow) {
+func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, tblPtrs []*table.Table, baseTables []*table.Table, hasThisConstraint bool, rows *[]varRow) {
 	nSlots := len(q.varSlots)
 
 	if depth == len(varOrder) {
@@ -1074,6 +1284,20 @@ func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, bas
 			// Use the last-bound variable (driver in the single-variable case).
 			lastVar := varOrder[len(varOrder)-1]
 			lastSlot := q.varSlots[lastVar]
+			// If the last variable is table-kind, use it as the table provider.
+			if q.varKinds != nil && q.varKinds[lastVar] == VarTable {
+				tbl := tblPtrs[lastSlot]
+				if tbl == nil {
+					return
+				}
+				tp := copyTblPtrs(tblPtrs)
+				for _, e := range tbl.Entities() {
+					b := make([]ID, nSlots)
+					copy(b, bindings)
+					*rows = append(*rows, varRow{thisEntity: e, thisTable: tbl, bindings: b, tablePtrs: tp})
+				}
+				return
+			}
 			ent := bindings[lastSlot]
 			rec := q.w.index.Get(ent)
 			if rec == nil || rec.Table == nil {
@@ -1084,17 +1308,18 @@ func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, bas
 			}
 			b := make([]ID, nSlots)
 			copy(b, bindings)
-			*rows = append(*rows, varRow{thisEntity: ent, thisTable: rec.Table, bindings: b})
+			*rows = append(*rows, varRow{thisEntity: ent, thisTable: rec.Table, bindings: b, tablePtrs: copyTblPtrs(tblPtrs)})
 		} else {
 			// Nested-loop: find $this entities from baseTables filtered by variable constraints.
-			for _, t := range baseTables {
-				if !q.varCheckTable(t, bindings) {
+			tp := copyTblPtrs(tblPtrs)
+			for _, tbl := range baseTables {
+				if !q.varCheckTable(tbl, bindings) {
 					continue
 				}
-				for _, e := range t.Entities() {
+				for _, e := range tbl.Entities() {
 					b := make([]ID, nSlots)
 					copy(b, bindings)
-					*rows = append(*rows, varRow{thisEntity: e, thisTable: t, bindings: b})
+					*rows = append(*rows, varRow{thisEntity: e, thisTable: tbl, bindings: b, tablePtrs: tp})
 				}
 			}
 		}
@@ -1103,12 +1328,44 @@ func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, bas
 
 	varName := varOrder[depth]
 	slot := q.varSlots[varName]
+
+	// Table-kind variables iterate baseTables instead of an entity domain.
+	if q.varKinds != nil && q.varKinds[varName] == VarTable {
+		for _, tbl := range baseTables {
+			if !q.varCheckTable(tbl, bindings) {
+				continue
+			}
+			// Bind this table-kind variable in both slots:
+			// bindings[slot] holds the pointer encoded as ID (returned by Var()).
+			// tblPtrs[slot] holds the typed pointer (returned by VarTable(); avoids unsafe decode).
+			bindings[slot] = ID(uintptr(unsafe.Pointer(tbl)))
+			tblPtrs[slot] = tbl
+			// Restrict entity iteration to this single table for deeper variables.
+			q.buildVarRowsRec(varOrder, depth+1, bindings, tblPtrs, []*table.Table{tbl}, hasThisConstraint, rows)
+		}
+		bindings[slot] = 0
+		tblPtrs[slot] = nil
+		return
+	}
+
 	domain := q.collectVarDomainFor(varName, bindings)
 	for _, ent := range domain {
 		bindings[slot] = ent
-		q.buildVarRowsRec(varOrder, depth+1, bindings, baseTables, hasThisConstraint, rows)
+		q.buildVarRowsRec(varOrder, depth+1, bindings, tblPtrs, baseTables, hasThisConstraint, rows)
 	}
 	bindings[slot] = 0 // reset for subsequent outer iterations
+}
+
+// copyTblPtrs returns a copy of src if any entry is non-nil, otherwise nil.
+func copyTblPtrs(src []*table.Table) []*table.Table {
+	for _, p := range src {
+		if p != nil {
+			cp := make([]*table.Table, len(src))
+			copy(cp, src)
+			return cp
+		}
+	}
+	return nil
 }
 
 // Iter starts a fresh iteration over all archetype tables matching the query.
@@ -1171,6 +1428,7 @@ func (q *Query) Iter() *QueryIter {
 			world:              q.w,
 			terms:              q.terms,
 			varSlots:           q.varSlots,
+			varKinds:           q.varKinds,
 			varBindings:        make([]ID, len(q.varSlots)),
 			varRows:            rows,
 			varRowPos:          -1,
@@ -1458,10 +1716,11 @@ type QueryIter struct {
 	// Results are pre-computed by buildVarRows at Iter() time; nextVar() walks them.
 	// Backward-compat: nil varSlots → no variable overhead (existing fast paths apply).
 	// Mirrors upstream query->vars[] + ctx->vars lifetime model (src/query/types.h:439-444).
-	varSlots    map[string]int // variable name → slot index; nil = no variables
-	varBindings []ID           // current binding per slot (updated by nextVar)
-	varRows     []varRow       // pre-computed result rows; nil = zero results
-	varRowPos   int            // current position in varRows; -1 = before first
+	varSlots    map[string]int     // variable name → slot index; nil = no variables
+	varBindings []ID               // current binding per slot (updated by nextVar)
+	varRows     []varRow           // pre-computed result rows; nil = zero results
+	varRowPos   int                // current position in varRows; -1 = before first
+	varKinds    map[string]VarKind // variable kind map (nil when no table-kind variables)
 }
 
 // Next advances to the next matching table (or next wildcard expansion row
@@ -1672,6 +1931,43 @@ func (it *QueryIter) Var(name string) ID {
 		panic("flecs: QueryIter.Var: not positioned on a valid row (call Next first)")
 	}
 	return it.varBindings[slot]
+}
+
+// VarTable returns the archetype table bound to the named table-kind variable for
+// the current iteration row. Returns nil if the variable is entity-kind (not a table
+// binding). Panics if name is not defined or the iterator is not positioned.
+func (it *QueryIter) VarTable(name string) *table.Table {
+	if it.varSlots == nil {
+		panic(fmt.Sprintf("flecs: QueryIter.VarTable: query has no variables; %q is undefined", name))
+	}
+	slot, ok := it.varSlots[name]
+	if !ok {
+		panic(fmt.Sprintf("flecs: QueryIter.VarTable: variable %q is not defined in this query", name))
+	}
+	if it.varKinds == nil || it.varKinds[name] != VarTable {
+		return nil // entity-kind variable
+	}
+	if it.varRowPos < 0 {
+		panic("flecs: QueryIter.VarTable: not positioned on a valid row (call Next first)")
+	}
+	row := &it.varRows[it.varRowPos]
+	if row.tablePtrs == nil {
+		return nil
+	}
+	return row.tablePtrs[slot]
+}
+
+// VarNames returns the names of all variables defined in this query, in slot order
+// (first-defined first). Returns nil when the query has no variables.
+func (it *QueryIter) VarNames() []string {
+	if it.varSlots == nil {
+		return nil
+	}
+	names := make([]string, len(it.varSlots))
+	for name, slot := range it.varSlots {
+		names[slot] = name
+	}
+	return names
 }
 
 // matchesSparseTerms returns true if entity e satisfies all DontFragment, Union,
@@ -2486,7 +2782,7 @@ func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string
 	var slots map[string]int
 	var driver string
 	for _, t := range terms {
-		for _, name := range [2]string{t.srcVar, t.tgtVar} {
+		for _, name := range [3]string{t.srcVar, t.tgtVar, t.relVar} {
 			if name == "" {
 				continue
 			}
@@ -2498,13 +2794,34 @@ func buildVarSlotsFromTerms(caller string, terms []Term) (map[string]int, string
 					panic(caller + ": query variable count exceeds the cap of 16 (upstream EcsQueryMaxVarCount = 64 allows further increases)")
 				}
 				slots[name] = len(slots)
-				if driver == "" {
+				// TermNot variables filter but don't bind; skip as initial driver candidate.
+				// TermVarDecl variables (table-kind) can be drivers (handled by buildVarRowsRec).
+				if driver == "" && t.Kind != TermNot {
 					driver = name
 				}
 			}
 		}
 	}
 	return slots, driver
+}
+
+// buildVarKindsFromTerms builds a map of variable name → VarKind from TermVarDecl terms.
+// Returns nil if no table-kind variables are declared.
+func buildVarKindsFromTerms(terms []Term) map[string]VarKind {
+	var kinds map[string]VarKind
+	for _, t := range terms {
+		if t.Kind != TermVarDecl {
+			continue
+		}
+		if t.varKind == VarEntity {
+			continue // default kind, no annotation needed
+		}
+		if kinds == nil {
+			kinds = make(map[string]VarKind)
+		}
+		kinds[t.srcVar] = t.varKind
+	}
+	return kinds
 }
 
 // buildVarTopoOrder returns variable names in dependency order for the nested join loop:
@@ -2840,7 +3157,10 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		if t.Kind == TermScope || t.Kind == TermEq || t.Kind == TermNotEq || t.Kind == TermNameMatch {
 			continue
 		}
-		if t.srcVar != "" || t.tgtVar != "" {
+		if t.Kind == TermVarDecl {
+			continue // variable-kind declarations have no component ID to check
+		}
+		if t.srcVar != "" || t.tgtVar != "" || t.relVar != "" {
 			continue // variable terms have distinct semantics; exclude from dup check
 		}
 		if _, dup := seen[t.ID]; dup {
@@ -2862,7 +3182,7 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		case TermAnd:
 			if t.Src != 0 {
 				fixedSrcAndTerms = append(fixedSrcAndTerms, t)
-			} else if t.srcVar != "" || t.tgtVar != "" {
+			} else if t.srcVar != "" || t.tgtVar != "" || t.relVar != "" {
 				varAndTerms = append(varAndTerms, t) // variable terms sorted separately
 			} else {
 				normalAndTerms = append(normalAndTerms, t)
@@ -2875,6 +3195,8 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 			optTerms = append(optTerms, t)
 		case TermScope:
 			scopeTerms = append(scopeTerms, t)
+		case TermVarDecl:
+			// intentionally dropped — declares variable kind only, not a filter constraint
 		}
 	}
 	sort.Slice(fixedSrcAndTerms, func(i, j int) bool { return fixedSrcAndTerms[i].ID < fixedSrcAndTerms[j].ID })

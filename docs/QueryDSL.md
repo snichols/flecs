@@ -84,11 +84,12 @@ from-call    = ("AndFrom"|"OrFrom"|"NotFrom") "(" ident ")"
 predicate    = "$this" "==" ident
              | "$this" "!=" ident
              | "$this" "~"  string-literal
-prim-term    = pair-term | bound-term | ident-term
-pair-term    = "(" rel "," target ")" [ traversal ]
-bound-term   = ident "(" source ")" [ traversal ]
+prim-term    = pair-term | tblvar-term | bound-term | ident-term
+pair-term    = "(" rel-slot "," target ")" [ traversal ]
+tblvar-term  = "$" var-ident ":" ident [ "(" "$this" ")" ]   ; table-kind variable
+bound-term   = ident "(" source [ "," "$" var-ident ] ")"    ; optional var target
 ident-term   = ident [ traversal ]
-rel          = ident | "*"
+rel-slot     = "$" var-ident | ident | "*"                   ; variable or fixed rel
 target       = var | ident | "*" | "_"
 source       = "$this" | ident
 var          = "$" var-ident
@@ -300,23 +301,38 @@ Position(hero).Up
 
 ## Query variables
 
-A `$varName` token in the target slot of a pair captures the concrete matched target as a
-named variable, enabling relational joins:
+A `$varName` token captures a matched entity (or relationship/table) as a named variable,
+enabling relational joins. Variable bindings are surfaced in the REST response under the
+`"vars"` key of each result entry.
 
+**Pair-target variable** (original form):
 ```
 (ChildOf, $parent)
 ```
+Captures the `ChildOf` target in `$parent`. The variable is accessible via `it.Var("parent")`.
 
-Matches entities that have any `ChildOf` relationship; the actual parent entity is
-captured in the variable `$parent`. Variables can then be reused in subsequent terms to
-constrain the domain (requires the Go API — the REST endpoint materialises each entity's
-variable bindings but does not expose them as separate top-level fields).
+**Relationship-slot variable** (Phase 16.45):
+```
+($Rel, hero)       -- relationship variable, fixed target
+($Rel, $tgt)       -- both relationship and target are variables
+```
+Iterates all distinct relationships paired with `hero`. Go API: `WithPairRelVar("Rel", heroID)`, `WithPairBothVar("Rel", "tgt")`.
 
-`$this` is the implicit entity variable (the matched entity) and is only valid as the
-subject of an equality predicate — it is not allowed as a pair target.
+**Negative-variable constraint** (Phase 16.45):
+```
+(Velocity, $x), !Brake($this, $x)
+```
+The `!Brake($this, $x)` term filters out entities that have `(Brake, $x)` — `$x` must be bound by an earlier term. A free (unbound) variable in a negated term is a parse error (`ErrCodeUnboundNegativeVar`). Go API: `Without(brakeID).TgtVar("x")`.
 
-Variable names follow `var-ident` syntax (letters and digits only, no dots). Maximum 16
-user variables per expression.
+**Table-kind variable** (Phase 16.45):
+```
+$T:Position($this)
+```
+`$T` binds to each archetype table containing `Position`; subsequent entity iteration runs within that table. Accessible via `it.VarTable("T")`. Go API: `WithTableVar("T")` + `With(posID)`.
+
+`$this` is the implicit entity variable and is only valid as the subject of an equality predicate or as the first argument of a predicate form — it is not allowed as a pair target.
+
+Variable names follow `var-ident` syntax (letters and digits only, no dots). Maximum 16 user variables per expression.
 
 ---
 
@@ -400,6 +416,7 @@ The `Pos` field lets a UI pin an error marker at the exact character offset in t
 | `ErrCodeUnknownIdent` | `5` | Identifier not found in world (unknown entity name). |
 | `ErrCodeBadModifier` | `6` | Traversal postfix on a term kind that does not support it. |
 | `ErrCodeBadCombination` | `7` | Illegal operator/term combination (e.g., `$this` as pair target, `*` as source, `~` with non-string, `!` on from-call). |
+| `ErrCodeUnboundNegativeVar` | `8` | Variable in a negated term is not bound by any earlier positive term. |
 
 ---
 

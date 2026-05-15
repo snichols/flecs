@@ -14,6 +14,7 @@ const pairTargetSampleCap = 256
 // constraining terms) — always deprioritized to the innermost position.
 //
 // Domain rules (v1 heuristics; v2 multi-term intersection deferred):
+//   - Table-kind variable: count of tables matching the minimum TermAnd constraint.
 //   - srcVar == varName (WithVar style): tables containing that component;
 //     sparse/DontFragment components use the sparse-set dense-slice length.
 //   - tgtVar == varName, Src != 0 (fixed-source pair target): 1, the most
@@ -23,17 +24,26 @@ const pairTargetSampleCap = 256
 //     tables (see docs/Queries.md "Join-order optimization").
 //   - tgtVar == varName, srcVar != "" (pair target on another variable): source
 //     is not yet bound statically; domain is unknown — treated as math.MaxInt.
+//   - relVar == varName, relVarTarget != 0 (WithPairRelVar): count of distinct
+//     relationships paired with the fixed target across sampled tables.
+//   - relVar == varName, relVarTarget == 0 (WithPairBothVar): target unknown
+//     statically; domain is unknown — treated as math.MaxInt.
 //   - No constraining terms: math.MaxInt (free variable).
 //
 // The function returns the minimum estimate across all constraining terms for
 // the variable, favouring the most selective constraint.
-func estimateVarDomain(w *World, varName string, terms []Term) int {
+func estimateVarDomain(w *World, varName string, terms []Term, varKinds map[string]VarKind) int {
+	// Table-kind variable: domain is the count of matching archetype tables.
+	if varKinds != nil && varKinds[varName] == VarTable {
+		return estimateTableKindDomain(w, terms)
+	}
+
 	best := math.MaxInt
 	for _, t := range terms {
 		if t.Kind != TermAnd {
 			continue
 		}
-		if t.srcVar == varName && t.tgtVar == "" {
+		if t.srcVar == varName && t.tgtVar == "" && t.relVar == "" {
 			d := estimateSrcVarDomain(w, t)
 			if d < best {
 				best = d
@@ -45,8 +55,31 @@ func estimateVarDomain(w *World, varName string, terms []Term) int {
 				best = d
 			}
 		}
+		if t.relVar == varName {
+			d := estimateRelVarDomain(w, t)
+			if d < best {
+				best = d
+			}
+		}
 	}
 	return best
+}
+
+// estimateTableKindDomain estimates the domain for a table-kind variable:
+// the minimum table count across all regular (non-variable) TermAnd terms.
+// This mirrors the seed-table selection heuristic in Query.Iter().
+func estimateTableKindDomain(w *World, terms []Term) int {
+	minTables := math.MaxInt
+	for _, t := range terms {
+		if t.Kind != TermAnd || t.ID == 0 || t.srcVar != "" || t.tgtVar != "" || t.relVar != "" {
+			continue
+		}
+		cnt := w.compIndex.Count(t.ID)
+		if cnt < minTables {
+			minTables = cnt
+		}
+	}
+	return minTables
 }
 
 // estimateSrcVarDomain estimates domain size for a WithVar-style srcVar term.
@@ -117,6 +150,38 @@ func estimateTgtVarDomain(w *World, t Term) int {
 	return len(seen)
 }
 
+// estimateRelVarDomain estimates domain size for a relVar pair-relationship term.
+// For WithPairRelVar (fixed target): count distinct relationship IDs paired with
+// that target across sampled tables. For WithPairBothVar (target is also a
+// variable, relVarTarget == 0): target unknown statically → math.MaxInt.
+func estimateRelVarDomain(w *World, t Term) int {
+	if t.relVarTarget == 0 {
+		// Both slots are variables — target unknown statically.
+		return math.MaxInt
+	}
+	target := t.relVarTarget
+	seen := make(map[ID]struct{})
+	sampled := 0
+	for _, tbl := range w.tables {
+		if sampled >= pairTargetSampleCap {
+			break
+		}
+		for _, cid := range tbl.Type() {
+			if !cid.IsPair() {
+				continue
+			}
+			if cid.Second() == target {
+				seen[cid.First()] = struct{}{}
+			}
+		}
+		sampled++
+	}
+	if len(seen) == 0 {
+		return math.MaxInt
+	}
+	return len(seen)
+}
+
 // selectOptimalDriver returns the best driver variable for the outermost join loop.
 // It preserves the topo-sort invariant: only root variables (in-degree 0 in the
 // dependency graph) are candidates. Among roots, the variable with the smallest
@@ -125,7 +190,7 @@ func estimateTgtVarDomain(w *World, t Term) int {
 //
 // Upstream reference: flecs/src/query/compiler/compiler.c lines 1002-1021
 // (variable reorder loop selecting the smallest-domain variable).
-func selectOptimalDriver(w *World, varSlots map[string]int, terms []Term, defaultDriver string) string {
+func selectOptimalDriver(w *World, varSlots map[string]int, terms []Term, defaultDriver string, varKinds map[string]VarKind) string {
 	if len(varSlots) <= 1 {
 		return defaultDriver
 	}
@@ -149,7 +214,7 @@ func selectOptimalDriver(w *World, varSlots map[string]int, terms []Term, defaul
 		if inDeg[varName] > 0 {
 			continue // dependent variable — cannot be driver
 		}
-		d := estimateVarDomain(w, varName, terms)
+		d := estimateVarDomain(w, varName, terms, varKinds)
 		slot := varSlots[varName]
 		// Prefer smaller domain; break ties by slot order (first-defined).
 		if d < bestDomain || (d == bestDomain && slot < bestSlot) {

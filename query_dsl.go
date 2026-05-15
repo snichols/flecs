@@ -7,14 +7,15 @@ import "fmt"
 type ParseErrorCode int
 
 const (
-	ErrCodeUnknown        ParseErrorCode = iota // zero value; no specific code
-	ErrCodeExpectedIdent                        // expected an identifier or '('
-	ErrCodeUnclosedParen                        // missing closing ')' or '"'
-	ErrCodeUnboundVar                           // variable referenced but never bound
-	ErrCodeCycle                                // variable dependency cycle
-	ErrCodeUnknownIdent                         // identifier not found in world
-	ErrCodeBadModifier                          // invalid postfix modifier (e.g. chained .Up.Cascade)
-	ErrCodeBadCombination                       // invalid prefix/operator combination (e.g. ?!)
+	ErrCodeUnknown            ParseErrorCode = iota // zero value; no specific code
+	ErrCodeExpectedIdent                            // expected an identifier or '('
+	ErrCodeUnclosedParen                            // missing closing ')' or '"'
+	ErrCodeUnboundVar                               // variable referenced but never bound
+	ErrCodeCycle                                    // variable dependency cycle
+	ErrCodeUnknownIdent                             // identifier not found in world
+	ErrCodeBadModifier                              // invalid postfix modifier (e.g. chained .Up.Cascade)
+	ErrCodeBadCombination                           // invalid prefix/operator combination (e.g. ?!)
+	ErrCodeUnboundNegativeVar                       // variable in negated term is not bound by any earlier term
 )
 
 // ParseQueryError is returned by parseQueryExpr when the expression cannot
@@ -57,6 +58,10 @@ func (e *ParseQueryError) Error() string {
 //	Position($var)        — component on query variable (WithVar)
 //	(Rel, target)         — pair on $this; optional .Up/.SelfUp/.Cascade postfix
 //	(Rel, $var)           — pair with variable target (WithPairTgtVar)
+//	($Rel, target)        — pair with relationship variable (WithPairRelVar)
+//	($Rel, $tgt)          — pair with both slots variable (WithPairBothVar)
+//	!Comp($this, $var)    — negated pair with bound variable target; $var must be bound earlier
+//	$T:Position($this)    — table-kind variable; $T binds to tables containing Position
 //	!(A, B)               — negated scope group (WithoutScope)
 //	$this == hero         — entity equality predicate (IsEntity)
 //	$this != hero         — entity inequality predicate (NotEntity)
@@ -82,10 +87,11 @@ func parseQueryExpr(expr string, w *World) ([]Term, error) {
 
 // queryParser holds the parser state.
 type queryParser struct {
-	runes []rune
-	pos   int
-	w     *World
-	vars  map[string]int // variable name → slot index (first-appearance order)
+	runes        []rune
+	pos          int
+	w            *World
+	vars         map[string]int // variable name → slot index (first-appearance order)
+	pendingTerms []Term         // TermVarDecl terms emitted by table-kind annotations; prepended to output
 }
 
 func (p *queryParser) nearby() string {
@@ -278,11 +284,66 @@ func (p *queryParser) parseTargetOrWild() (ID, error) {
 	return p.resolveIdent(name)
 }
 
-// parsePair parses "(rel, tgt)" where tgt may be a $var, ident, *, or _.
+// parsePair parses "(rel, tgt)" where rel or tgt may be a $var, ident, *, or _.
 // On entry pos points at '('. On return pos is just past ')'.
-// After ')' checks for .Up / .SelfUp / .Cascade traversal postfix.
+// After ')' checks for .Up / .SelfUp / .Cascade traversal postfix (only for fixed-rel pairs).
 func (p *queryParser) parsePair() (Term, error) {
 	p.pos++ // consume '('
+	p.skipWhitespace()
+
+	// ($Rel, ...) — variable in relationship position
+	if p.pos < len(p.runes) && p.runes[p.pos] == '$' {
+		p.pos++ // consume '$'
+		relVarName, ok := p.parseVarIdent()
+		if !ok {
+			return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected variable name after '$' in pair relationship")
+		}
+		if relVarName == "this" {
+			return Term{}, p.errorCode(ErrCodeBadCombination, "$this as pair relationship is not supported")
+		}
+		if err := p.registerVar(relVarName); err != nil {
+			return Term{}, err
+		}
+		p.skipWhitespace()
+		if p.pos >= len(p.runes) || p.runes[p.pos] != ',' {
+			return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected ',' after relationship variable in pair")
+		}
+		p.pos++ // consume ','
+		p.skipWhitespace()
+
+		var t Term
+		if p.pos < len(p.runes) && p.runes[p.pos] == '$' {
+			// ($Rel, $tgt) — both slots are variables
+			p.pos++ // consume '$'
+			tgtVarName, ok := p.parseVarIdent()
+			if !ok {
+				return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected variable name after '$' in pair target")
+			}
+			if tgtVarName == "this" {
+				return Term{}, p.errorCode(ErrCodeBadCombination, "$this as pair target is not supported")
+			}
+			if err := p.registerVar(tgtVarName); err != nil {
+				return Term{}, err
+			}
+			t = WithPairBothVar(relVarName, tgtVarName)
+		} else {
+			// ($Rel, target) — variable relationship, fixed target
+			tgt, err := p.parseTargetOrWild()
+			if err != nil {
+				return Term{}, err
+			}
+			t = WithPairRelVar(relVarName, tgt)
+		}
+
+		p.skipWhitespace()
+		if p.pos >= len(p.runes) || p.runes[p.pos] != ')' {
+			return Term{}, p.errorCode(ErrCodeUnclosedParen, "unclosed pair: expected ')'")
+		}
+		p.pos++       // consume ')'
+		return t, nil // no traversal postfix for relVar pairs (no fixed rel to traverse)
+	}
+
+	// (Rel, tgt) — fixed relationship
 	rel, err := p.parseRelOrWild()
 	if err != nil {
 		return Term{}, err
@@ -496,12 +557,13 @@ func (p *queryParser) parseFromCall(funcName string) (Term, error) {
 	}
 }
 
-// parseSourceBindingTerm parses "comp(src)" where compID is already resolved
-// and pos points at '('. Handles entity names and $var sources.
+// parseSourceBindingTerm parses "comp(src)" or "comp(src, $tgt)" where compID is
+// already resolved and pos points at '('. Handles entity names and $var sources.
 //
-//	Position(hero)   → WithSourceTerm(posID, heroID)
-//	Position($var)   → WithVar(posID, "var")
-//	Position($this)  → With(posID)          (explicit $this = default source)
+//	Position(hero)          → WithSourceTerm(posID, heroID)
+//	Position($var)          → WithVar(posID, "var")
+//	Position($this)         → With(posID)          (explicit $this = default source)
+//	Brake($this, $x)        → WithPairTgtVar(brakeID, "x")  (predicate pair form)
 func (p *queryParser) parseSourceBindingTerm(compID ID) (Term, error) {
 	p.pos++ // consume '('
 	p.skipWhitespace()
@@ -515,6 +577,7 @@ func (p *queryParser) parseSourceBindingTerm(compID ID) (Term, error) {
 	}
 
 	var t Term
+	srcIsThis := false
 	if p.runes[p.pos] == '$' {
 		p.pos++ // consume '$'
 		varName, ok := p.parseVarIdent()
@@ -523,6 +586,7 @@ func (p *queryParser) parseSourceBindingTerm(compID ID) (Term, error) {
 		}
 		if varName == "this" {
 			t = With(compID) // $this is the default source; no change
+			srcIsThis = true
 		} else {
 			if err := p.registerVar(varName); err != nil {
 				return Term{}, err
@@ -542,6 +606,31 @@ func (p *queryParser) parseSourceBindingTerm(compID ID) (Term, error) {
 	}
 
 	p.skipWhitespace()
+
+	// Predicate pair form: Rel($this, $tgt) — second argument adds a variable target.
+	// Only supported when source is $this (first arg = implicit subject).
+	if srcIsThis && p.pos < len(p.runes) && p.runes[p.pos] == ',' {
+		p.pos++ // consume ','
+		p.skipWhitespace()
+		if p.pos >= len(p.runes) || p.runes[p.pos] != '$' {
+			return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected $var as pair target in predicate form Rel($this, $var)")
+		}
+		p.pos++ // consume '$'
+		tgtVarName, ok := p.parseVarIdent()
+		if !ok {
+			return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected variable name after '$' in predicate target")
+		}
+		if tgtVarName == "this" {
+			return Term{}, p.errorCode(ErrCodeBadCombination, "$this as pair target is not supported")
+		}
+		if err := p.registerVar(tgtVarName); err != nil {
+			return Term{}, err
+		}
+		// Rewrite: Rel($this, $tgt) ≡ (Rel, $tgt) — a pair with variable target on $this.
+		t = WithPairTgtVar(compID, tgtVarName)
+		p.skipWhitespace()
+	}
+
 	if p.pos >= len(p.runes) || p.runes[p.pos] != ')' {
 		return Term{}, p.errorCode(ErrCodeUnclosedParen, "unclosed source binding: expected ')'")
 	}
@@ -557,7 +646,7 @@ func (p *queryParser) parsePrimaryTerm() (Term, error) {
 		return Term{}, p.errorf("unexpected end of expression; expected term")
 	}
 
-	// $ → predicate ($this op rhs) or error
+	// $ → predicate ($this op rhs), table-kind annotation ($T:Comp), or error
 	if p.runes[p.pos] == '$' {
 		savedPos := p.pos
 		p.pos++ // consume '$'
@@ -566,11 +655,51 @@ func (p *queryParser) parsePrimaryTerm() (Term, error) {
 			p.pos = savedPos
 			return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected variable name after '$'")
 		}
-		if varName != "this" {
-			return Term{}, p.errorCode(ErrCodeBadCombination,
-				"$%s as a standalone term is not supported; use $var in a pair target or source binding", varName)
+		if varName == "this" {
+			return p.parsePredicate()
 		}
-		return p.parsePredicate()
+		// $Var:Component(...) — table-kind variable annotation
+		if p.pos < len(p.runes) && p.runes[p.pos] == ':' {
+			p.pos++ // consume ':'
+			compName, ok2 := p.parseIdent()
+			if !ok2 {
+				return Term{}, p.errorCode(ErrCodeExpectedIdent, "expected component name after ':' in table-kind annotation $%s:...", varName)
+			}
+			compID, err := p.resolveIdent(compName)
+			if err != nil {
+				return Term{}, err
+			}
+			if err2 := p.registerVar(varName); err2 != nil {
+				return Term{}, err2
+			}
+			p.pendingTerms = append(p.pendingTerms, WithTableVar(varName))
+			// Consume optional ($this) source binding
+			p.skipWhitespace()
+			if p.pos < len(p.runes) && p.runes[p.pos] == '(' {
+				p.pos++ // consume '('
+				p.skipWhitespace()
+				if p.pos < len(p.runes) && p.runes[p.pos] == '$' {
+					p.pos++ // consume '$'
+					srcName, ok3 := p.parseVarIdent()
+					if !ok3 || srcName != "this" {
+						if !ok3 {
+							srcName = "?"
+						}
+						return Term{}, p.errorCode(ErrCodeBadCombination, "table-kind annotation $%s:... only supports ($this) as source; got $%s", varName, srcName)
+					}
+				} else if p.pos < len(p.runes) && p.runes[p.pos] != ')' {
+					return Term{}, p.errorCode(ErrCodeBadCombination, "table-kind annotation $%s:... only supports ($this) as source", varName)
+				}
+				p.skipWhitespace()
+				if p.pos >= len(p.runes) || p.runes[p.pos] != ')' {
+					return Term{}, p.errorCode(ErrCodeUnclosedParen, "unclosed source binding in table-kind term $%s:...", varName)
+				}
+				p.pos++ // consume ')'
+			}
+			return With(compID), nil
+		}
+		return Term{}, p.errorCode(ErrCodeBadCombination,
+			"$%s as a standalone term is not supported; use $var in a pair target or source binding, or as $Var:Component table annotation", varName)
 	}
 
 	// '(' → pair term
@@ -643,6 +772,16 @@ func (p *queryParser) parseTerm() (Term, error) {
 		}
 	}
 
+	// Snapshot bound vars before parsing a negated primary term; negative terms
+	// must not introduce new variable bindings (the bound var must pre-exist).
+	var varsBefore map[string]bool
+	if isNegated {
+		varsBefore = make(map[string]bool, len(p.vars))
+		for k := range p.vars {
+			varsBefore[k] = true
+		}
+	}
+
 	t, err := p.parsePrimaryTerm()
 	if err != nil {
 		return Term{}, err
@@ -651,6 +790,14 @@ func (p *queryParser) parseTerm() (Term, error) {
 	if isNegated {
 		if t.Kind != TermAnd {
 			return Term{}, p.errorCode(ErrCodeBadCombination, "! can only negate a component or pair term")
+		}
+		// Reject any variable first introduced by this negated term.
+		for k := range p.vars {
+			if !varsBefore[k] {
+				delete(p.vars, k) // un-register to keep slot table consistent
+				return Term{}, p.errorCode(ErrCodeUnboundNegativeVar,
+					"variable $%s in negated term is not bound by any earlier term; negation cannot introduce new bindings", k)
+			}
 		}
 		t.Kind = TermNot
 	}
@@ -770,7 +917,15 @@ func checkVarCycles(deps map[string][]string) error {
 }
 
 // parseExpr parses the full expression from the current position to EOF
-// and returns the term list.
+// and returns the term list. TermVarDecl terms collected by table-kind
+// annotations are prepended so buildVarKindsFromTerms can find them.
 func (p *queryParser) parseExpr() ([]Term, error) {
-	return p.parseAndList(false)
+	terms, err := p.parseAndList(false)
+	if err != nil {
+		return nil, err
+	}
+	if len(p.pendingTerms) > 0 {
+		terms = append(p.pendingTerms, terms...)
+	}
+	return terms, nil
 }

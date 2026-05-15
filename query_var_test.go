@@ -1471,3 +1471,474 @@ func TestOptimizer_ResultSetIdentical(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Phase 16.45: Feature 1 — Variable in relationship-name position
+// ---------------------------------------------------------------------------
+
+// qvPos16 is a local component type for Phase 16.45 tests.
+type qvPos16 struct{ X, Y float32 }
+
+// TestVar_RelVar_Simple verifies ($Rel, hero) binds to the relationship of a single pair.
+func TestVar_RelVar_Simple(t *testing.T) {
+	w := flecs.New()
+	var entityA, likesID, heroID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		w.SetName(heroID, "hero1645")
+		likesID = fw.NewEntity()
+		w.SetName(likesID, "Likes1645")
+		entityA = fw.NewEntity()
+		flecs.AddID(fw, entityA, flecs.MakePair(likesID, heroID))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w, flecs.WithPairRelVar("Rel", heroID))
+		it := q.Iter()
+
+		type row struct{ entity, rel flecs.ID }
+		var got []row
+		for it.Next() {
+			for _, e := range it.Entities() {
+				got = append(got, row{entity: e, rel: it.Var("Rel")})
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("want 1 row, got %d", len(got))
+		}
+		if got[0].entity != entityA {
+			t.Errorf("want entityA, got %v", got[0].entity)
+		}
+		if got[0].rel != likesID {
+			t.Errorf("want Likes (%v), got %v", likesID, got[0].rel)
+		}
+	})
+}
+
+// TestVar_RelVar_MultipleBindings verifies multiple bindings when entity has pairs with
+// two distinct relationships pointing to the same target.
+func TestVar_RelVar_MultipleBindings(t *testing.T) {
+	w := flecs.New()
+	var entityB, heroID, likesID, ownsID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		w.SetName(heroID, "hero1645b")
+		likesID = fw.NewEntity()
+		w.SetName(likesID, "Likes1645b")
+		ownsID = fw.NewEntity()
+		w.SetName(ownsID, "Owns1645b")
+		entityB = fw.NewEntity()
+		flecs.AddID(fw, entityB, flecs.MakePair(likesID, heroID))
+		flecs.AddID(fw, entityB, flecs.MakePair(ownsID, heroID))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w, flecs.WithPairRelVar("Rel", heroID))
+		it := q.Iter()
+
+		rels := make(map[flecs.ID]bool)
+		for it.Next() {
+			rels[it.Var("Rel")] = true
+		}
+		if !rels[likesID] {
+			t.Error("want Likes in Rel bindings")
+		}
+		if !rels[ownsID] {
+			t.Error("want Owns in Rel bindings")
+		}
+		if len(rels) != 2 {
+			t.Errorf("want exactly 2 distinct Rel bindings, got %d: %v", len(rels), rels)
+		}
+	})
+}
+
+// TestVar_RelBothVar verifies ($Rel, $tgt) binds to all pairs across entities.
+func TestVar_RelBothVar(t *testing.T) {
+	w := flecs.New()
+	var heroID, planetID, likesID, orbitsID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		w.SetName(heroID, "hero1645c")
+		planetID = fw.NewEntity()
+		w.SetName(planetID, "planet1645c")
+		likesID = fw.NewEntity()
+		w.SetName(likesID, "Likes1645c")
+		orbitsID = fw.NewEntity()
+		w.SetName(orbitsID, "Orbits1645c")
+
+		eA := fw.NewEntity()
+		flecs.AddID(fw, eA, flecs.MakePair(likesID, heroID))
+		eB := fw.NewEntity()
+		flecs.AddID(fw, eB, flecs.MakePair(orbitsID, planetID))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w, flecs.WithPairBothVar("Rel", "tgt"))
+		it := q.Iter()
+
+		type pair struct{ rel, tgt flecs.ID }
+		pairs := make(map[pair]bool)
+		for it.Next() {
+			pairs[pair{rel: it.Var("Rel"), tgt: it.Var("tgt")}] = true
+		}
+		if !pairs[pair{rel: likesID, tgt: heroID}] {
+			t.Error("want (Likes, hero) pair in results")
+		}
+		if !pairs[pair{rel: orbitsID, tgt: planetID}] {
+			t.Error("want (Orbits, planet) pair in results")
+		}
+	})
+}
+
+// TestVar_RelVar_WithFixedTarget verifies ($R, parent), Position($this) joins correctly.
+func TestVar_RelVar_WithFixedTarget(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	var parentID, childOfID, orbitsID, entityA, entityB, entityC flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parentID = fw.NewEntity()
+		w.SetName(parentID, "parent1645d")
+		childOfID = fw.NewEntity()
+		w.SetName(childOfID, "ChildOf1645d")
+		orbitsID = fw.NewEntity()
+		w.SetName(orbitsID, "Orbits1645d")
+
+		entityA = fw.NewEntity()
+		flecs.AddID(fw, entityA, flecs.MakePair(childOfID, parentID))
+		flecs.Set(fw, entityA, qvPos16{X: 1})
+
+		entityB = fw.NewEntity()
+		flecs.AddID(fw, entityB, flecs.MakePair(orbitsID, parentID))
+		flecs.Set(fw, entityB, qvPos16{X: 2})
+
+		entityC = fw.NewEntity()
+		flecs.AddID(fw, entityC, flecs.MakePair(childOfID, parentID))
+		// no Position
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.WithPairRelVar("R", parentID),
+		)
+		it := q.Iter()
+
+		rels := make(map[flecs.ID]bool)
+		entities := make(map[flecs.ID]bool)
+		for it.Next() {
+			for _, e := range it.Entities() {
+				rels[it.Var("R")] = true
+				entities[e] = true
+			}
+		}
+		if !rels[childOfID] {
+			t.Error("want ChildOf in R bindings")
+		}
+		if !rels[orbitsID] {
+			t.Error("want Orbits in R bindings")
+		}
+		if entities[entityC] {
+			t.Error("entityC (no Position) should not appear")
+		}
+		if !entities[entityA] {
+			t.Error("entityA should appear")
+		}
+		if !entities[entityB] {
+			t.Error("entityB should appear")
+		}
+	})
+}
+
+// TestVar_RelVar_TermChainMethod verifies the .RelVar("R") chain method on a term.
+func TestVar_RelVar_TermChainMethod(t *testing.T) {
+	w := flecs.New()
+	var heroID, likesID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		w.SetName(heroID, "hero1645e")
+		likesID = fw.NewEntity()
+		w.SetName(likesID, "Likes1645e")
+		eA := fw.NewEntity()
+		flecs.AddID(fw, eA, flecs.MakePair(likesID, heroID))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		// With(heroID).RelVar("R") means: ($R, heroID) — heroID as target, $R as relationship var.
+		q := flecs.NewQueryFromTerms(w, flecs.With(heroID).RelVar("R"))
+		it := q.Iter()
+
+		var relBindings []flecs.ID
+		for it.Next() {
+			relBindings = append(relBindings, it.Var("R"))
+		}
+		if len(relBindings) == 0 {
+			t.Fatal("want at least 1 result from RelVar chain method")
+		}
+		found := false
+		for _, r := range relBindings {
+			if r == likesID {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("want Likes in R bindings from RelVar chain method, got %v", relBindings)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16.45: Feature 2 — Negative-variable constraints
+// ---------------------------------------------------------------------------
+
+// TestVar_NegativeVar_Filters verifies With(pos), (Vel, $x), !Brake($this, $x)
+// returns only entities whose velocity-target has no Brake pair on $this.
+func TestVar_NegativeVar_Filters(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	var velID, brakeID, xFast, xSlow, entityA, entityB flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = fw.NewEntity()
+		w.SetName(velID, "Vel1645f")
+		brakeID = fw.NewEntity()
+		w.SetName(brakeID, "Brake1645f")
+		xFast = fw.NewEntity()
+		w.SetName(xFast, "xFast1645f")
+		xSlow = fw.NewEntity()
+		w.SetName(xSlow, "xSlow1645f")
+
+		entityA = fw.NewEntity()
+		flecs.Set(fw, entityA, qvPos16{X: 1})
+		flecs.AddID(fw, entityA, flecs.MakePair(velID, xFast))
+
+		entityB = fw.NewEntity()
+		flecs.Set(fw, entityB, qvPos16{X: 2})
+		flecs.AddID(fw, entityB, flecs.MakePair(velID, xSlow))
+		flecs.AddID(fw, entityB, flecs.MakePair(brakeID, xSlow))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.WithPairTgtVar(velID, "x"),
+			flecs.Without(brakeID).TgtVar("x"),
+		)
+		it := q.Iter()
+
+		entities := make(map[flecs.ID]bool)
+		for it.Next() {
+			for _, e := range it.Entities() {
+				entities[e] = true
+			}
+		}
+		if !entities[entityA] {
+			t.Error("entityA (no brake) should be included")
+		}
+		if entities[entityB] {
+			t.Error("entityB (has brake) should be excluded by negative-var constraint")
+		}
+	})
+}
+
+// TestVar_NegativeVar_OptimizerInteraction verifies a query with a negative-var term
+// executes correctly: only entity without the filtered pair survives.
+func TestVar_NegativeVar_OptimizerInteraction(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	var velID, brakeID, x1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = fw.NewEntity()
+		brakeID = fw.NewEntity()
+		x1 = fw.NewEntity()
+
+		e1 := fw.NewEntity()
+		flecs.Set(fw, e1, qvPos16{})
+		flecs.AddID(fw, e1, flecs.MakePair(velID, x1))
+
+		e2 := fw.NewEntity()
+		flecs.Set(fw, e2, qvPos16{})
+		flecs.AddID(fw, e2, flecs.MakePair(velID, x1))
+		flecs.AddID(fw, e2, flecs.MakePair(brakeID, x1))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(posID),
+			flecs.WithPairTgtVar(velID, "x"),
+			flecs.Without(brakeID).TgtVar("x"),
+		)
+		it := q.Iter()
+		count := 0
+		for it.Next() {
+			count += len(it.Entities())
+		}
+		if count != 1 {
+			t.Errorf("want 1 result (only e1, not e2 which has brake), got %d", count)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16.45: Feature 3 — Table-kind variables
+// ---------------------------------------------------------------------------
+
+// qvTagA is a local tag type for Phase 16.45 table-kind tests.
+type qvTagA16 struct{}
+
+// TestVar_TableKind_Basic verifies WithTableVar("T") + With(posID) returns all entities
+// in tables containing Position, and VarTable returns the bound table.
+func TestVar_TableKind_Basic(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	tagID := flecs.RegisterComponent[qvTagA16](w)
+	var e1, e2, e3 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, qvPos16{X: 1})
+
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, qvPos16{X: 2})
+		flecs.AddID(fw, e2, tagID)
+
+		e3 = fw.NewEntity()
+		flecs.AddID(fw, e3, tagID)
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithTableVar("T"),
+			flecs.With(posID),
+		)
+		it := q.Iter()
+
+		entities := make(map[flecs.ID]bool)
+		tables := make(map[flecs.ID]bool)
+		for it.Next() {
+			for _, e := range it.Entities() {
+				entities[e] = true
+			}
+			tbl := it.VarTable("T")
+			if tbl != nil {
+				tables[it.Var("T")] = true
+			}
+		}
+		if !entities[e1] {
+			t.Error("e1 (Position only) should appear")
+		}
+		if !entities[e2] {
+			t.Error("e2 (Position+tag) should appear")
+		}
+		if entities[e3] {
+			t.Error("e3 (tag only) should not appear")
+		}
+		if len(tables) == 0 {
+			t.Error("want at least 1 table binding")
+		}
+	})
+}
+
+// TestVar_TableKind_Accessor verifies VarTable("T") returns a non-nil table and
+// Var("T") returns a non-zero raw pointer ID.
+func TestVar_TableKind_Accessor(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	w.Write(func(fw *flecs.Writer) {
+		e1 := fw.NewEntity()
+		flecs.Set(fw, e1, qvPos16{X: 1})
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithTableVar("T"),
+			flecs.With(posID),
+		)
+		it := q.Iter()
+		found := false
+		for it.Next() {
+			tbl := it.VarTable("T")
+			if tbl == nil {
+				t.Error("VarTable(\"T\") returned nil for table-kind variable")
+				continue
+			}
+			rawID := it.Var("T")
+			if rawID == 0 {
+				t.Error("Var(\"T\") returned 0 for table-kind variable")
+			}
+			found = true
+		}
+		if !found {
+			t.Error("want at least one iteration with VarTable")
+		}
+	})
+}
+
+// TestVar_TableKind_OptimizerWins verifies that 20 entities in one Position table
+// are all returned by the table-kind query in a single table binding.
+func TestVar_TableKind_OptimizerWins(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[qvPos16](w)
+	w.Write(func(fw *flecs.Writer) {
+		for i := 0; i < 20; i++ {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, qvPos16{X: float32(i)})
+		}
+	})
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithTableVar("T"),
+			flecs.With(posID),
+		)
+		it := q.Iter()
+
+		tablesSeen := make(map[flecs.ID]int)
+		entCount := 0
+		for it.Next() {
+			for range it.Entities() {
+				entCount++
+			}
+			tbl := it.VarTable("T")
+			if tbl != nil {
+				tablesSeen[it.Var("T")]++
+			}
+		}
+		if entCount != 20 {
+			t.Errorf("want 20 entities total, got %d", entCount)
+		}
+		if len(tablesSeen) == 0 {
+			t.Error("want at least 1 table binding")
+		}
+	})
+}
+
+// TestVar_TableKind_WithPair verifies table-kind variable + pair constraint iterates
+// only entities in tables that have the pair.
+func TestVar_TableKind_WithPair(t *testing.T) {
+	w := flecs.New()
+	var parentID, childOfID, child1, child2, nonChild flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		parentID = fw.NewEntity()
+		w.SetName(parentID, "parent1645tk")
+		childOfID = fw.NewEntity()
+		w.SetName(childOfID, "ChildOf1645tk")
+
+		child1 = fw.NewEntity()
+		flecs.AddID(fw, child1, flecs.MakePair(childOfID, parentID))
+		child2 = fw.NewEntity()
+		flecs.AddID(fw, child2, flecs.MakePair(childOfID, parentID))
+		nonChild = fw.NewEntity()
+	})
+	w.Read(func(_ *flecs.Reader) {
+		childOfPair := flecs.MakePair(childOfID, parentID)
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithTableVar("T"),
+			flecs.With(childOfPair),
+		)
+		it := q.Iter()
+
+		entities := make(map[flecs.ID]bool)
+		for it.Next() {
+			for _, e := range it.Entities() {
+				entities[e] = true
+			}
+		}
+		if !entities[child1] {
+			t.Error("child1 should appear")
+		}
+		if !entities[child2] {
+			t.Error("child2 should appear")
+		}
+		if entities[nonChild] {
+			t.Error("nonChild should not appear")
+		}
+	})
+}

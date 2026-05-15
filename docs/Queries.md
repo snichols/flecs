@@ -1434,12 +1434,99 @@ Both `Query` and `CachedQuery` expose these accessors.
 - Cost model accounting for materialization vs streaming.
 - Histograms / HyperLogLog / learned costs.
 
+### Variable in relationship-name position (Phase 16.45, v0.100.0)
+
+Variables can occupy the **relationship slot** of a pair, not just the target slot. The relationship variable iterates every distinct relationship ID found in matching pairs.
+
+```go
+// ($Rel, target) — enumerate all relationships paired with a fixed target.
+flecs.WithPairRelVar(varName string, target ID) Term
+
+// ($Rel, $tgt) — both relationship and target are variables.
+flecs.WithPairBothVar(relVarName, tgtVarName string) Term
+
+// Chain method: With(target).RelVar("R") ≡ WithPairRelVar("R", target).
+flecs.With(heroID).RelVar("R")
+```
+
+Example — "find all relationships that entity A has with hero":
+
+```go
+q := flecs.NewQueryFromTerms(w, flecs.WithPairRelVar("Rel", heroID))
+it := q.Iter()
+for it.Next() {
+    entity := it.Entities()[0]         // $this — the entity owning the pair
+    rel    := it.Var("Rel")            // e.g., LikesID, OwnsID, ...
+}
+```
+
+**Semantics.** For each distinct relationship ID `r` that appears in a `(r, target)` pair in any matching archetype, the engine yields one result row per entity that owns `(r, target)`.
+
+**DSL syntax.** `($Rel, hero)` or `($Rel, $tgt)` (see QueryDSL.md).
+
+### Negative-variable constraints (Phase 16.45, v0.100.0)
+
+A `TermNot` term can reference a **previously-bound variable** in its target slot. The constraint filters out entities that have the pair `(Rel, $varBinding)`.
+
+```go
+// After WithPairTgtVar(velID, "x") has bound $x:
+flecs.Without(brakeID).TgtVar("x")   // !Brake($this, $x)
+```
+
+The variable **must** be bound by an earlier positive term. A free (unbound) negative variable is a parser error (`ErrCodeUnboundNegativeVar`) when using the DSL.
+
+Example — "entities with velocity but no brake on that velocity target":
+
+```go
+q := flecs.NewQueryFromTerms(w,
+    flecs.With(posID),
+    flecs.WithPairTgtVar(velID, "x"),       // binds $x
+    flecs.Without(brakeID).TgtVar("x"),     // !Brake($this, $x)
+)
+```
+
+**DSL syntax.** `!Brake($this, $x)` (predicate form) or bind $x first then use the pair negation form. See QueryDSL.md.
+
+### Table-kind variables (Phase 16.45, v0.100.0)
+
+A **table-kind variable** iterates archetype tables as its domain rather than individual entities. Useful for batch operations ("for each table T containing Position, process all entities in T").
+
+```go
+// Declare a table-kind variable alongside a regular filter term.
+flecs.WithTableVar("T")       // TermVarDecl; declares T as table-kind
+flecs.With(posID)             // filter constraint — tables must contain Position
+
+// Iterator accessors:
+it.VarTable("T") *table.Table  // bound table (nil if entity-kind)
+it.Var("T")      flecs.ID      // table pointer encoded as ID (non-zero)
+```
+
+Example:
+
+```go
+q := flecs.NewQueryFromTerms(w,
+    flecs.WithTableVar("T"),
+    flecs.With(posID),
+)
+it := q.Iter()
+for it.Next() {
+    tbl := it.VarTable("T")    // the archetype table
+    ent := it.Entities()[0]    // entity within that table
+    _ = tbl
+    _ = ent
+}
+```
+
+**DSL syntax.** `$T:Position($this)` (see QueryDSL.md).
+
+**Optimizer.** Table-kind variables have a domain equal to the count of matching archetype tables (typically far smaller than entity count), so the join-order optimizer prefers them as drivers when their table domain is smaller.
+
 ### Current limitations
 
-- **Entity-kind variables only**: no table-kind variables (`EcsVarTable`).
-- **Positive constraints only**: `WithVar` / `WithPairTgtVar` only. Negative-variable constraints (`!Foo($this, $planet)`) are not supported.
-- **`src` and `second` positions only**: variable in relationship name position (`$Rel($this, target)`) is not supported.
-- **No FQL string parsing**: programmatic API only; the `$Var` string syntax from Flecs Query Language is not parsed by the Go port (DSL extension supports `$var` in pair-target and source positions; see `QueryDSL.md`).
+- **`VarAny` reserved, not implemented**: the `VarAny` enum value is reserved for future multi-kind variables (relationship OR target OR entity slot); querying with `VarAny` panics at construction.
+- **No multi-kind variable**: a single variable cannot simultaneously act as both entity-kind and table-kind.
+- **No streaming table iteration**: table-kind results are always materialized before yielding rows.
+- **No FQL string parsing for predicates with two args**: `Rel(srcVar, tgtVar)` where srcVar is not `$this` — deferred.
 
 ### Upstream C references
 
