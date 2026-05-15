@@ -1,8 +1,10 @@
 package flecs
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -213,6 +215,16 @@ func writeError(rw http.ResponseWriter, status int, msg string) {
 	writeJSON(rw, status, map[string]string{"error": msg})
 }
 
+// writeClientClosed writes a 499 Client Closed Request response.
+func writeClientClosed(rw http.ResponseWriter) {
+	writeError(rw, 499, "client closed request")
+}
+
+// isContextError returns true if err is context.Canceled or context.DeadlineExceeded.
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func restStats(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var stats Stats
@@ -418,10 +430,15 @@ func restEntityByID(w *World) http.HandlerFunc {
 
 func restSnapshotGet(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		var data []byte
 		var marshalErr error
-		w.Read(func(fr *Reader) { data, marshalErr = w.MarshalJSON() })
+		w.Read(func(fr *Reader) { data, marshalErr = w.MarshalJSONContext(ctx) })
 		if marshalErr != nil {
+			if isContextError(marshalErr) {
+				writeClientClosed(rw)
+				return
+			}
 			writeError(rw, http.StatusInternalServerError, marshalErr.Error())
 			return
 		}

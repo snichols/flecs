@@ -10,6 +10,10 @@ import (
 	"unsafe"
 )
 
+// ctxCheckIntervalMarshal is the number of entities between ctx.Done() checks
+// during MarshalJSONContext entity iteration.
+const ctxCheckIntervalMarshal = ctxCheckInterval
+
 // jsonWorld is the top-level JSON envelope for a serialized world.
 type jsonWorld struct {
 	Version  int          `json:"version"`
@@ -151,7 +155,8 @@ func (m *marshaler) visit(e ID) error {
 	return nil
 }
 
-// MarshalJSON serializes the world to JSON.
+// MarshalJSON serializes the world to JSON. It delegates to
+// [(*World).MarshalJSONContext] with context.Background().
 //
 // Format (v1): version=1, entities array with serial numbers (starting at 1),
 // optional name field, optional parent field (serial of the ChildOf parent),
@@ -182,6 +187,22 @@ func (m *marshaler) visit(e ID) error {
 //
 // Returns an error if a cycle is detected in the combined ChildOf+IsA graph.
 func (w *World) MarshalJSON() ([]byte, error) {
+	return w.MarshalJSONContext(context.Background())
+}
+
+// MarshalJSONContext serializes the world to JSON with cooperative context
+// cancellation. It checks ctx every [ctxCheckInterval] entities during the
+// entity walk; if the context is cancelled, the current entity is completed
+// and then ctx.Err() is returned. Returning early produces no partial JSON —
+// callers receive a non-nil error.
+//
+// The JSON format is identical to [(*World).MarshalJSON].
+func (w *World) MarshalJSONContext(ctx context.Context) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	skip := map[ID]struct{}{
 		w.ChildOf():             {},
 		w.IsA():                 {},
@@ -460,6 +481,14 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			}
 
 			entities = append(entities, je)
+			if len(entities)%ctxCheckIntervalMarshal == 0 {
+				select {
+				case <-ctx.Done():
+					resultErr = ctx.Err()
+					return
+				default:
+				}
+			}
 		}
 
 		// Serialize Sparse trait component names (policy must be restored before entity replay).

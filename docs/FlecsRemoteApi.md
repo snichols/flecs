@@ -1363,6 +1363,31 @@ response body saves a follow-up read and tells the client the new state directly
 
 ---
 
+## Request context and client-disconnect handling _(v0.106.0)_
+
+All REST handlers honour the `*http.Request.Context()`. When the client closes the
+connection before the response is fully written, the handler detects cancellation
+and writes HTTP status **499 Client Closed Request** with body
+`{"error":"client closed request"}`.
+
+Endpoints that perform long-running world operations abort early:
+
+| Endpoint | Cancellation point |
+|---|---|
+| `GET /query` | Entity-iteration loop (every 1024 entities) |
+| `GET /snapshot` | Entity-serialization walk (`MarshalJSONContext`) |
+| All other endpoints | Pre-flight check at handler entry |
+
+No partial response body is written on cancellation — the 499 status is the only
+output.
+
+**Usage:** no configuration is needed. The Go standard library cancels
+`r.Context()` automatically when `ReadTimeout` fires or the TCP connection drops.
+To add a per-route budget, wrap the request in `http.TimeoutHandler` or derive a
+child context in middleware before the handler is called.
+
+---
+
 ## Feature gaps discovered in Phase 14.9 (FlecsRemoteApi port)
 
 - **Query execution endpoint** (`GET /query?expr=`) — ✅ shipped in v0.95.0 (Phase 16.40). See [`## GET /query`](#get-query) and [QueryDSL.md](QueryDSL.md).

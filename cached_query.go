@@ -1,6 +1,7 @@
 package flecs
 
 import (
+	"context"
 	"sort"
 	"unsafe"
 
@@ -678,6 +679,33 @@ func (cq *CachedQuery) Each(fn func(*QueryIter)) {
 	for it.Next() {
 		fn(it)
 	}
+}
+
+// EachContext iterates all matching tables with cooperative context
+// cancellation. It checks ctx every [ctxCheckInterval] tables; if the context
+// is cancelled, the current table's fn call completes and then ctx.Err() is
+// returned. Returns nil when all tables are exhausted without cancellation.
+func (cq *CachedQuery) EachContext(ctx context.Context, fn func(*QueryIter)) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	it := cq.Iter()
+	n := 0
+	for it.Next() {
+		fn(it)
+		n++
+		if n >= ctxCheckInterval {
+			n = 0
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+	}
+	return nil
 }
 
 // Count returns the number of matching tables. O(1).

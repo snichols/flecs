@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.106.0 — 2026-05-15 — Phase 16.51: Go-idiomatic context.Context cancellation
+
+First post-port-completion phase. Adds cooperative `context.Context` cancellation
+to every long-running ECS operation, making it safe to impose per-request timeouts
+in game-server handlers, REST middlewares, and background workers.
+
+### What changed
+
+- **`(*World).ProgressContext(ctx, dt) error`** — context-aware `Progress`; checks
+  ctx before each pipeline phase, after each serial system, and after each parallel
+  batch wave (with mandatory `mergeWorkerStages` flush to preserve completed work).
+- **`RunSystemContext(ctx, sys, dt) error`** — context-aware `RunSystem`; pre-cancel
+  check before execution.
+- **`(*World).TakeSnapshotContext(ctx) (*Snapshot, error)`** — context-aware
+  `TakeSnapshot`; sets `snap.Partial = true` on early return. A partial snapshot
+  must not be used for restore.
+- **`(*World).RestoreSnapshotContext(ctx, snap) error`** — context-aware
+  `RestoreSnapshot`; no rollback on mid-restore cancellation.
+- **`(*Query).EachContext(ctx, fn) error`** — context-aware query iteration; checks
+  ctx every 1024 `it.Next()` advances.
+- **`(*CachedQuery).EachContext(ctx, fn) error`** — same, for cached queries.
+- **`(*World).MarshalJSONContext(ctx) ([]byte, error)`** — context-aware
+  `MarshalJSON`; checks ctx every 1024 entities.
+- **REST endpoints** — all handlers honour `r.Context()`; write HTTP 499 on
+  client disconnect. `GET /query` and `GET /snapshot` abort mid-iteration.
+- **`Snapshot.Partial bool`** — new field; true when `TakeSnapshotContext` returned
+  early due to cancellation.
+- **`go.uber.org/goleak v1.3.0`** — added as a test dependency for leak detection.
+
+### Design notes
+
+`context.Background()` returns a channel that is never closed; the inner `select`
+always takes the `default` branch. There is no overhead for callers that pass
+`context.Background()` (i.e., all existing call sites). All original functions
+delegate to their `…Context` siblings — no existing code needs to change.
+
+### New tests (`context_test.go`)
+
+21 new tests covering pre-cancel, mid-cancel, timeout, deferred-mutations, partial
+snapshots, parallel-system cancellation, REST disconnect simulation, and goroutine
+leak detection (`goleak.VerifyNone`).
+
+### Documentation
+
+- New: [docs/Cancellation.md](docs/Cancellation.md) — full cancellation reference.
+- Updated: [docs/Systems.md](docs/Systems.md), [docs/Snapshots.md](docs/Snapshots.md),
+  [docs/Queries.md](docs/Queries.md), [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md).
+
+### Breaking changes
+
+None. All new APIs are additive. The `Snapshot.Partial` field defaults to `false`
+and existing code that calls `TakeSnapshot` is unaffected.
+
+---
+
 ## v0.105.0 — 2026-05-15 — Phase 16.50: Per-stage Queues for Parallel-batch Dispatch
 
 Extends Phase 12.1's per-stage deferred-mutation routing from within-system
