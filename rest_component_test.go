@@ -22,6 +22,14 @@ type rcVel struct{ DX, DY float32 }
 // rcPairVal is a typed pair data type.
 type rcPairVal struct{ N int32 }
 
+// errBodyReader is an io.Reader that immediately returns a non-overflow I/O error,
+// used to exercise the "failed to read body" fallback branches.
+type errBodyReader struct{}
+
+func (errBodyReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("simulated network read error")
+}
+
 // newComponentWorld creates a world with two typed components, one dynamic component,
 // and a named test entity.
 func newComponentWorld(t *testing.T) (*flecs.World, flecs.ID, *httptest.Server) {
@@ -423,5 +431,103 @@ func TestRESTDeleteComponentWorldUnavailable(t *testing.T) {
 
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("DELETE /component world unavailable: want 503, got %d", resp.StatusCode)
+	}
+}
+
+// Test 18: PUT >1 MB body to a tag component → 413 (tag-branch overflow).
+func TestRESTPutTagBodyTooLarge(t *testing.T) {
+	w, _, srv := newComponentWorld(t)
+
+	w.Write(func(fw *flecs.Writer) {
+		tag := fw.NewEntity()
+		w.SetName(tag, "BigTag")
+	})
+
+	bigBody := strings.Repeat("x", (1<<20)+100)
+	resp := restDo(t, srv, "PUT", "/component/actor/BigTag", bigBody)
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PUT tag body too large: want 413, got %d", resp.StatusCode)
+	}
+}
+
+// Test 19: PUT tag component whose body reader returns a non-overflow I/O error → 400.
+func TestRESTPutTagBodyReadError(t *testing.T) {
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		w.SetName(e, "actor")
+		tag := fw.NewEntity()
+		w.SetName(tag, "ErrTag")
+	})
+
+	handler := flecs.NewRESTHandler(w)
+	req := httptest.NewRequest("PUT", "/component/actor/ErrTag", errBodyReader{})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PUT tag body read error: want 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// Test 20: PUT >1 MB body to a typed component → 413 (typed-branch overflow).
+func TestRESTPutTypedBodyTooLarge(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	// Leading whitespace is valid JSON filler; the decoder reads past 1 MB before
+	// parsing a value, so MaxBytesReader fires and returns the expected error.
+	bigBody := strings.Repeat(" ", (1<<20)+100)
+	resp := restDo(t, srv, "PUT", "/component/actor/Pos", bigBody)
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PUT typed body too large: want 413, got %d", resp.StatusCode)
+	}
+}
+
+// Test 21: PUT non-string JSON to dynamic component → 400 "dynamic component body must be a JSON string".
+func TestRESTPutDynamicNotJSONString(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	resp := restDo(t, srv, "PUT", "/component/actor/Dyn4", `42`)
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT dynamic non-string JSON: want 400, got %d", resp.StatusCode)
+	}
+}
+
+// Test 22: PUT valid JSON string but invalid base64 to dynamic component → 400 "invalid base64 in body".
+func TestRESTPutDynamicInvalidBase64(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	body, _ := json.Marshal("not-valid-base64!!!")
+	resp := restDo(t, srv, "PUT", "/component/actor/Dyn4", string(body))
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT dynamic invalid base64: want 400, got %d", resp.StatusCode)
+	}
+}
+
+// Test 23: PUT dynamic component whose body reader returns a non-overflow I/O error → 400.
+func TestRESTPutDynamicBodyReadError(t *testing.T) {
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		w.SetName(e, "actor")
+		dynID := flecs.RegisterDynamicComponent(fw, "Dyn4", 4, 4)
+		w.SetName(dynID, "Dyn4")
+	})
+
+	handler := flecs.NewRESTHandler(w)
+	req := httptest.NewRequest("PUT", "/component/actor/Dyn4", errBodyReader{})
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("PUT dynamic body read error: want 400, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
