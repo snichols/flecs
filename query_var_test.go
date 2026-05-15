@@ -1403,3 +1403,71 @@ func TestVarWithSourceTermComposition(t *testing.T) {
 		_ = C
 	})
 }
+
+// TestOptimizer_ResultSetIdentical verifies that the join-order optimizer
+// produces a result set equivalent to the pre-optimization (first-defined-wins)
+// ordering for the canonical multi-variable scene.
+//
+// The test runs the same query twice with different term orderings (so the
+// optimizer may or may not reorder the driver), collects all rows, sorts them,
+// and asserts they are identical.
+func TestOptimizer_ResultSetIdentical(t *testing.T) {
+	w := flecs.New()
+	shipID, planetID, dockedToID, A, B, C, P1, P2 := qvBuildScene(w)
+
+	collect := func(q *flecs.Query) [][2]flecs.ID {
+		it := q.Iter()
+		var rows [][2]flecs.ID
+		for it.Next() {
+			rows = append(rows, [2]flecs.ID{it.Entities()[0], it.Var("planet")})
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i][0] != rows[j][0] {
+				return rows[i][0] < rows[j][0]
+			}
+			return rows[i][1] < rows[j][1]
+		})
+		return rows
+	}
+
+	want := [][2]flecs.ID{{A, P1}, {B, P1}, {B, P2}, {C, P2}}
+	sort.Slice(want, func(i, j int) bool {
+		if want[i][0] != want[j][0] {
+			return want[i][0] < want[j][0]
+		}
+		return want[i][1] < want[j][1]
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		// Term order 1: ship (larger domain) first — optimizer may reorder to planet-driver.
+		q1 := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+		)
+		rows1 := collect(q1)
+
+		// Term order 2: same terms, different ordering (planet constraint first).
+		q2 := flecs.NewQueryFromTerms(w,
+			flecs.WithVar(planetID, "planet"),
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+		)
+		rows2 := collect(q2)
+
+		if len(rows1) != len(want) {
+			t.Fatalf("q1: want %d rows, got %d", len(want), len(rows1))
+		}
+		if len(rows2) != len(want) {
+			t.Fatalf("q2: want %d rows, got %d", len(want), len(rows2))
+		}
+		for i := range want {
+			if rows1[i] != want[i] {
+				t.Errorf("q1 row %d: want %v, got %v", i, want[i], rows1[i])
+			}
+			if rows2[i] != want[i] {
+				t.Errorf("q2 row %d: want %v, got %v", i, want[i], rows2[i])
+			}
+		}
+	})
+}

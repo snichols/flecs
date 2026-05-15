@@ -223,6 +223,7 @@ func NewCachedQueryFromTerms(w *World, terms ...Term) *CachedQuery {
 		panic("flecs: NewCachedQueryFromTerms: world must not be nil")
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewCachedQueryFromTerms", terms)
+	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar)
 	varOrder := buildVarTopoOrder("flecs: NewCachedQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewCachedQueryFromTerms", terms)
 	if alwaysFalse {
@@ -372,6 +373,22 @@ func (cq *CachedQuery) TermsFull() []Term {
 	}
 	cp := make([]Term, len(cq.terms))
 	copy(cp, cq.terms)
+	return cp
+}
+
+// DriverVariable returns the name of the outermost join-loop variable chosen by
+// the join-order optimizer. Returns "" for non-variable queries.
+func (cq *CachedQuery) DriverVariable() string { return cq.driverVar }
+
+// VariableOrder returns the full variable evaluation order in outermost-first
+// sequence (driver first, innermost last). Returns nil for non-variable queries.
+// The returned slice is a copy; callers may not retain or modify the original.
+func (cq *CachedQuery) VariableOrder() []string {
+	if cq.varOrder == nil {
+		return nil
+	}
+	cp := make([]string, len(cq.varOrder))
+	copy(cp, cq.varOrder)
 	return cp
 }
 

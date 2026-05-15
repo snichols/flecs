@@ -572,10 +572,10 @@ type Query struct {
 	// Slots are assigned in term-list order of first appearance. Nil = no variables.
 	// Mirrors upstream query->vars[] ownership (src/query/types.h:439-444).
 	varSlots map[string]int
-	// driverVar is the name of the first-defined variable (outermost join loop).
-	// The driver's domain is enumerated at Iter(); additional variables are enumerated
-	// in nested loops in topo-dependency order. No auto-optimization; first-defined is
-	// always the driver. See upstream compiler.c:1002-1021 (Phase 16.27 candidate).
+	// driverVar is the name of the outermost join-loop variable, chosen by the
+	// join-order optimizer (Phase 16.44). The optimizer picks the root variable with
+	// the smallest estimated domain; first-defined-wins is the fallback when no domain
+	// information is available. See selectOptimalDriver and upstream compiler.c:1002-1021.
 	driverVar string
 	// varOrder is the topo-sorted variable enumeration order for the nested join loop.
 	// varOrder[0] is always driverVar (outermost); varOrder[N-1] is innermost.
@@ -688,6 +688,7 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 		}
 	}
 	varSlots, driverVar := buildVarSlotsFromTerms("flecs: NewQueryFromTerms", terms)
+	driverVar = selectOptimalDriver(w, varSlots, terms, driverVar)
 	varOrder := buildVarTopoOrder("flecs: NewQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
@@ -708,6 +709,22 @@ func (q *Query) Terms() []ID { return q.andIDs }
 func (q *Query) TermsFull() []Term {
 	cp := make([]Term, len(q.terms))
 	copy(cp, q.terms)
+	return cp
+}
+
+// DriverVariable returns the name of the outermost join-loop variable chosen by
+// the join-order optimizer. Returns "" for non-variable queries.
+func (q *Query) DriverVariable() string { return q.driverVar }
+
+// VariableOrder returns the full variable evaluation order in outermost-first
+// sequence (driver first, innermost last). Returns nil for non-variable queries.
+// The returned slice is a copy; callers may not retain or modify the original.
+func (q *Query) VariableOrder() []string {
+	if q.varOrder == nil {
+		return nil
+	}
+	cp := make([]string, len(q.varOrder))
+	copy(cp, q.varOrder)
 	return cp
 }
 
@@ -993,9 +1010,9 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 // variable query and returns them as pre-computed rows. Called once per Iter().
 //
 // Driver domain enumeration mirrors upstream flecs_query_var_set_entity / range
-// (src/query/engine/eval_utils.c:58-235). Join order: first-defined variable as driver
-// (outermost), additional variables in topo-dependency order nested inside.
-// No auto-optimization (upstream compiler.c:1002-1021 is Phase 16.27 candidate).
+// (src/query/engine/eval_utils.c:58-235). Join order: driverVar (chosen by the
+// join-order optimizer at construction, Phase 16.44) is outermost; additional
+// variables follow in topo-dependency order.
 func (q *Query) buildVarRows() []varRow {
 	nSlots := len(q.varSlots)
 

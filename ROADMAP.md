@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.97.0)
+## Shipped (through v0.99.0)
 
 The following features are available in the current release:
 
@@ -99,6 +99,7 @@ The following features are available in the current release:
 - **Query DSL v2 parser** _(v0.96.0, Phase 16.41)_ — extends `query_dsl.go` from v1 to v2: OR (`||`), negated scope groups (`!(A,B)`), optional terms (`?T`), traversal postfixes (`.Up`/`.SelfUp`/`.Cascade`), source binding (`T(entity)`), query variables (`$var` in pair targets), equality predicates (`$this == e`, `$this != e`, `$this ~ "pat"`), and type-list operators (`AndFrom`/`OrFrom`/`NotFrom`). `ParseErrorCode` enum with 8 values. `restBuildExecSets` helper synthesises valid engine execution sets for OR-only and pure-predicate queries. 28 new parser tests + 10 REST integration tests; 95.0% coverage. `docs/QueryDSL.md` replaced with full v2 reference. See [docs/QueryDSL.md](docs/QueryDSL.md).
 - **Compound units** _(v0.97.0, Phase 16.42)_ — extends the Units addon (v0.85.0/Phase 16.30) with compound units: products, quotients, and integer powers of existing atomic units. `RegisterCompoundUnit(fw, name, num, denom []ID)` / `UnitProduct` / `UnitQuotient` / `UnitPower`; `IsCompound(w, id) bool`; `UnitFactors(w, id) ([]ID, []ID)`; `(w *World).UnitSymbol(id) string`. Auto-generated display symbols (`·`-joined numerators, `/`-denominator, Unicode exponents). `Convert` extended via `siCanonical` dimensional analysis (net-exponent maps; compatible iff maps identical). 10 new built-in compound units at indices 65–74: `MeterPerSecond`, `KiloMeterPerHour`, `MeterPerSecondSquared`, `NewtonCompound`, `JouleCompound`, `Watt`, `Pascal`, `HertzCompound`, `RadianPerSecond`, `Inverse`; user entities now start at index 75. User-defined compound units survive JSON and binary snapshot round-trips. REST `/type_info` emits compound symbol. Closes `docs/README.md` gap line 78. See [docs/Units.md](docs/Units.md).
 - **OnTableEmpty / OnTableFill events** _(v0.98.0, Phase 16.43)_ — two new built-in observer events for archetype table population transitions. `OnTableEmpty(w, fn)` / `OnTableEmptyWithOptions(w, opts, fn)` fires when a table's row count transitions 1→0 (last entity removed). `OnTableFill(w, fn)` / `OnTableFillWithOptions(w, opts, fn)` fires when a table's row count transitions 0→1 (first entity added). Multi-term filter support via `WithQuery(terms...)` in opts — evaluated against the table's component signature. `WithYieldExisting()`: Fill yields all currently non-empty tables; Empty yields all currently empty tables. Root empty table fires normally (OnTableFill on first `NewEntity`, OnTableEmpty on last `Delete`). Transitions fire in order of occurrence inside `Write(fn)` deferred scopes. Two new built-in event entities at indices 44–45 (`EventOnTableEmpty`, `EventOnTableFill`); all subsequent indices shift +2; user entities now start at index 75. `OnTableDelete` remains out of scope (reclamation infrastructure required). Closes `docs/README.md` gap line 155. See [docs/ObserversManual.md § OnTableEmpty / OnTableFill](ObserversManual.md#on-table-empty-and-on-table-fill).
+- **Join-order optimizer** _(v0.99.0, Phase 16.44)_ — pure-performance optimization layered on the multi-variable query engine (Phase 16.25/16.26): at query construction the optimizer picks the root variable with the smallest estimated domain as the outermost (driver) join loop, mirroring the upstream variable-reorder loop in `flecs/src/query/compiler/compiler.c:1002-1021`. Domain estimation: typed-component variables use `compIndex.Count` (table count proxy); Sparse/DontFragment variables use sparse-set dense-slice length; pair-target variables sample up to 256 archetype tables and count distinct targets; fixed-source pair-target variables are estimated as domain=1. Dependency invariant preserved: only root variables (in-degree 0 in the topo-sort dependency graph) are candidates; first-defined-wins fallback when no domain estimate is available. New API: `(*Query).DriverVariable() string` / `(*Query).VariableOrder() []string` (and same on `*CachedQuery`). Bit-for-bit identical result sets — optimizer changes loop order, not output correctness. `query_optimizer.go`; `selectOptimalDriver`; docs in `Queries.md § Join-order optimization`. See [docs/Queries.md § Join-order optimization](docs/Queries.md#join-order-optimization).
 
 ## Documentation
 
@@ -144,7 +145,9 @@ Remaining observer/hook and entity gaps from the docs/README.md feature-gap list
 
 ### Query extensions
 
-- **Join-order optimization** _(Phase 16.27 candidate)_ — smarter driver-variable selection based on domain size, mirroring the upstream `compiler.c:1002-1021` reorder loop. Currently first-defined variable is always the driver; this would auto-select the variable with the smallest domain as the outermost loop. Also deferred: variable in relationship-name position (`$Rel($this, target)`), negative-variable constraints (`!Foo($this, $planet)`), and table-kind variables (`EcsVarTable`).
+- **Variable in relationship-name position** _(deferred)_ — `$Rel($this, target)` style term. Separate follow-up phase.
+- **Negative-variable constraints** _(deferred)_ — `!Foo($this, $planet)`. Separate follow-up phase.
+- **Table-kind variables** _(deferred)_ — `EcsVarTable`. Separate follow-up phase.
 
 ### Addons
 - (all originally-planned addons shipped)

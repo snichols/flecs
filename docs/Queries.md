@@ -1312,7 +1312,7 @@ With ships A→P1, B→P1,P2, C→P2 and both planets orbiting S1, this yields f
 
 **Performance note**: multi-variable runtime is O(d₁ × d₂ × … × dN) where dN is each variable's domain size. Structure queries so that inner variables are heavily constrained by outer bindings.
 
-**Join order**: the first variable defined in the term list is always the outermost (driver) loop. Smarter join-order optimization (driver selection by domain size, mirroring upstream `compiler.c:1002-1021`) is deferred to Phase 16.27.
+**Join order**: the join-order optimizer (Phase 16.44 / v0.99.0) automatically selects the root variable with the smallest estimated domain as the outermost (driver) loop. See [§ Join-order optimization](#join-order-optimization) below.
 
 ### Constructors
 
@@ -1355,7 +1355,7 @@ _ = planets[0].Name                          // "P1" or "P2"
 
 ### Join semantics
 
-- **Driver variable**: the first variable name encountered in the term list (left-to-right) is the *driver* (outermost join loop). Additional variables are enumerated in topo-dependency order nested inside it.
+- **Driver variable**: the root variable with the smallest estimated domain is the *driver* (outermost join loop); see [§ Join-order optimization](#join-order-optimization). Falls back to first-defined-wins when no domain estimate is available.
 - **Dependency order**: variable B depends on variable A when a term has `srcVar=A, tgtVar=B` (B's domain requires A's binding). A topo-sort determines the nested loop order. Cycles panic at construction with the cycle path.
 - **Result materialisation**: all `(variable-bindings, $this-entity)` tuples are pre-computed at `Iter()` time. Each `Next()` advances to the next pre-computed row.
 - **Backward compat**: queries with zero variables use the existing fast path; no overhead.
@@ -1397,13 +1397,49 @@ Variable queries compose with:
 - **`Without` terms** — applied as archetype filters on `$this` candidate tables.
 - **`Or` groups** — evaluated per candidate table in `varCheckTable`.
 
+### Join-order optimization
+
+_(Phase 16.44 / v0.99.0)_
+
+At query construction the optimizer picks the root variable with the smallest estimated domain as the outermost (driver) loop. This mirrors the upstream variable-reorder loop in `flecs/src/query/compiler/compiler.c` lines 1002-1021.
+
+**Domain estimation heuristics (v1):**
+
+| Variable constraint | Estimated domain |
+|---|---|
+| `WithVar(C, "$X")` — component term | `compIndex.Count(C)` tables (archetype proxy); or sparse-set dense-slice length for Sparse/DontFragment components |
+| `WithPairTgtVar(R, "$X")` on `$this` | Count of distinct `(R, target)` targets across up to **256 sampled tables** (see cap below) |
+| Fixed-source pair `With(R).Source(e).TgtVar("$X")` | `1` (entity e's pair targets are almost always exclusive) |
+| Variable-source pair (`srcVar != ""`) | `math.MaxInt` — cannot estimate without the outer binding |
+| No constraining terms | `math.MaxInt` (free variable — pushed innermost) |
+
+The optimizer respects the topo-sort dependency invariant: only **root variables** (in-degree 0 in the dependency graph) are candidates for driver. Domain size is a tie-breaker among independent root variables; first-defined-wins is the fallback when no domain estimate exists for any root.
+
+**256-table sampling cap**: for `(R, $var)` pair-target domain estimation, the optimizer samples up to 256 archetype tables and counts distinct target entities seen. This is a conservative lower-bound estimate; the actual domain may be larger in very large worlds. The cap keeps construction cheap: O(256 × pairs-per-table) regardless of world size.
+
+**Introspection:**
+
+```go
+q := flecs.NewQueryFromTerms(w, ...)
+driver := q.DriverVariable()  // "" for non-variable queries
+order  := q.VariableOrder()   // ["planet", "star"] — driver first, innermost last
+```
+
+Both `Query` and `CachedQuery` expose these accessors.
+
+**Deferred to v2 (documented limitations):**
+
+- Multi-term intersection refinement — estimating `|A ∩ B|` from `|A| × selectivity(B)`.
+- Dynamic re-ordering mid-iteration based on observed cardinality.
+- Cost model accounting for materialization vs streaming.
+- Histograms / HyperLogLog / learned costs.
+
 ### Current limitations
 
 - **Entity-kind variables only**: no table-kind variables (`EcsVarTable`).
 - **Positive constraints only**: `WithVar` / `WithPairTgtVar` only. Negative-variable constraints (`!Foo($this, $planet)`) are not supported.
 - **`src` and `second` positions only**: variable in relationship name position (`$Rel($this, target)`) is not supported.
-- **No FQL string parsing**: programmatic API only; the `$Var` string syntax from Flecs Query Language is not parsed by the Go port.
-- **No join-order optimization**: first-defined variable is always the driver. Auto-optimization (Phase 16.27 candidate, matching upstream `compiler.c:1002-1021`) is deferred.
+- **No FQL string parsing**: programmatic API only; the `$Var` string syntax from Flecs Query Language is not parsed by the Go port (DSL extension supports `$var` in pair-target and source positions; see `QueryDSL.md`).
 
 ### Upstream C references
 
@@ -1412,7 +1448,7 @@ Variable queries compose with:
 - Variable kinds (`src/query/types.h:20-37`) — `EcsVarEntity` (single-entity); Go port uses this kind only.
 - Variable discovery: `flecs_query_discover_vars` (`src/query/compiler/compiler.c:128`).
 - Iterator binding: `flecs_query_var_set_entity` / `flecs_query_var_reset` (`src/query/engine/eval_utils.c:58-235`).
-- Join-order optimizer (`compiler.c:1002-1021`) — Phase 16.27 candidate.
+- Join-order optimizer: `flecs/src/query/compiler/compiler.c` lines 1002-1021 (variable reorder loop; Go port in `query_optimizer.go:selectOptimalDriver`).
 
 ---
 
@@ -1468,7 +1504,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(flecs.MakePair(w.Wildcard(), bobID)))
 
 **Fixed per-term source** — ✅ **shipped in v0.73.0.** See [§ Fixed per-term source](#fixed-per-term-source) below.
 
-**Query variables** — ✅ **shipped in v0.80.0** (single-variable); **extended to N variables in v0.81.0**. See [§ Query variables](#query-variables) above. Join-order optimization deferred to Phase 16.27.
+**Query variables** — ✅ **shipped in v0.80.0** (single-variable); **extended to N variables in v0.81.0**; **join-order optimizer shipped in v0.99.0** (Phase 16.44). See [§ Query variables](#query-variables) and [§ Join-order optimization](#join-order-optimization) above.
 
 **Sorted queries** — ✅ shipped in v0.59.0. See [§ Sorted queries](#sorted-queries) below.
 
