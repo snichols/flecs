@@ -18,6 +18,10 @@ const (
 	ErrCodeUnboundNegativeVar                       // variable in negated term is not bound by any earlier term
 )
 
+// ParseErrUnboundNegativeVar is the canonical alias for ErrCodeUnboundNegativeVar,
+// matching the name used in the issue specification.
+const ParseErrUnboundNegativeVar = ErrCodeUnboundNegativeVar
+
 // ParseQueryError is returned by parseQueryExpr when the expression cannot
 // be parsed or an identifier cannot be resolved.
 //

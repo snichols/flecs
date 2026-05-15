@@ -3080,6 +3080,28 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		}
 	}
 
+	// Validate unbound negative-var terms: a TermNot with tgtVar must reference
+	// a variable bound by at least one positive (non-TermNot) term. Negative
+	// terms can only filter, not introduce new bindings.
+	for i, t := range terms {
+		if t.Kind != TermNot || t.tgtVar == "" {
+			continue
+		}
+		bound := false
+		for _, other := range terms {
+			if other.Kind == TermNot {
+				continue
+			}
+			if other.tgtVar == t.tgtVar || other.srcVar == t.tgtVar {
+				bound = true
+				break
+			}
+		}
+		if !bound {
+			panic(fmt.Sprintf("%s: TermNot at index %d has tgtVar %q that is not bound by any positive term; negation cannot introduce new variable bindings", caller, i, t.tgtVar))
+		}
+	}
+
 	// Validate fixed-source terms (top-level and inside scope Sub).
 	for i, t := range terms {
 		if t.Kind == TermScope {

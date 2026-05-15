@@ -1733,6 +1733,33 @@ func TestVar_NegativeVar_Filters(t *testing.T) {
 	})
 }
 
+// TestVar_NegativeVar_FreeBindingPanics verifies that a TermNot with a tgtVar that
+// is not bound by any positive term panics at query construction (code: ParseErrUnboundNegativeVar).
+func TestVar_NegativeVar_FreeBindingPanics(t *testing.T) {
+	w := flecs.New()
+	var fooID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		fooID = fw.NewEntity()
+		w.SetName(fooID, "Foo1645fp")
+		e := fw.NewEntity()
+		flecs.AddID(fw, e, fooID)
+	})
+	// With(fooID) provides the TermAnd anchor so the query is valid overall,
+	// but Without(fooID).TgtVar("freeVar") introduces freeVar only in a TermNot
+	// — freeVar is never bound by a positive term, so construction must panic.
+	w.Read(func(_ *flecs.Reader) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for unbound negative-var tgtVar, got nil")
+			}
+		}()
+		_ = flecs.NewQueryFromTerms(w,
+			flecs.With(fooID),
+			flecs.Without(fooID).TgtVar("freeVar"),
+		)
+	})
+}
+
 // TestVar_NegativeVar_OptimizerInteraction verifies a query with a negative-var term
 // executes correctly: only entity without the filtered pair survives.
 func TestVar_NegativeVar_OptimizerInteraction(t *testing.T) {
