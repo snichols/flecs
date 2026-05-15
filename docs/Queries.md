@@ -1545,11 +1545,24 @@ See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for full details.
 
 ## REST Query DSL
 
-Queries can also be expressed as strings via the `GET /query?expr=` REST endpoint (v0.95.0).
-The endpoint parses a Flecs Query Language v1 subset, executes the query, and returns
-matched entities with typed field values as JSON.
+Queries can also be expressed as strings via the `GET /query?expr=` REST endpoint.
+As of v0.96.0 (Phase 16.41), the endpoint parses a Flecs Query Language **v2** expression
+and supports the full query surface:
 
-See [QueryDSL.md](QueryDSL.md) for the full grammar and token reference, and
+| DSL feature | Example |
+|-------------|---------|
+| AND, NOT | `Position, !Disabled` |
+| OR | `Position \|\| Velocity` |
+| Negated scope group | `!(Position, Velocity)` |
+| Optional term | `?Velocity` |
+| Traversal Up / SelfUp | `Position.Up`, `Position.SelfUp(IsA)` |
+| Source binding | `Position(hero)` |
+| Query variable | `(ChildOf, $parent)` |
+| Equality predicates | `$this == hero`, `$this ~ "unit"` |
+| Type-list operators | `AndFrom(prefab)` |
+
+See [QueryDSL.md](QueryDSL.md) for the full v2 BNF grammar, operator precedence table,
+error-code reference, and worked examples. See
 [FlecsRemoteApi.md § GET /query](FlecsRemoteApi.md#get-query) for the HTTP interface.
 
 ---
@@ -1562,4 +1575,4 @@ See [QueryDSL.md](QueryDSL.md) for the full grammar and token reference, and
 - [Relationships.md](Relationships.md) — pair traversal terms and relationship queries.
 - [ComponentTraits](ComponentTraits.md) — CanToggle, Exclusive, and other trait customisation.
 - [Manual](Manual.md) — top-level reference hub with world lifecycle, concurrency model, and concept map.
-- [QueryDSL.md](QueryDSL.md) — Flecs Query Language v1 subset parser reference.
+- [QueryDSL.md](QueryDSL.md) — Flecs Query Language v2 reference: full BNF grammar, precedence, error codes, examples.

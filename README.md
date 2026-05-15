@@ -116,6 +116,7 @@ within a table.
 - `Each1`/`Each2`/`Each3`/`Each4` — ergonomic lambda iteration for 1–4 components.
 - `NewQuery` + `Iter` + `Field[T]` — pull-style iteration for dynamic AND-only term lists.
 - `NewQueryFromTerms` — structured terms with `With`, `Without`, `Maybe`, `Or`, `WithoutScope`, `IsEntity`, `NotEntity`, `NameMatches`, `AndFrom`, `OrFrom`, `NotFrom` (NOT / Optional / OR / scope / equality / name-match / type-list expansion support).
+- **`GET /query?expr=`** — REST endpoint accepts Flecs Query Language v2 strings (v0.96.0): AND/OR/NOT, scope groups, optional terms, traversal (`.Up`/`.SelfUp`/`.Cascade`), source binding, query variables, equality predicates, `AndFrom`/`OrFrom`/`NotFrom`. See [docs/QueryDSL.md](docs/QueryDSL.md).
 - `NewCachedQuery` / `NewCachedQueryFromTerms` — persistent queries that incrementally track new tables.
 
 #### Cascade for parent-before-child systems

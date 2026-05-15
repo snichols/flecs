@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.96.0 — 2026-05-15 — Phase 16.41: Query DSL v2 parser
+
+Extends the FQL parser (`query_dsl.go`) from v1 to v2, exposing the full query-language
+surface at the `GET /query?expr=` REST endpoint. All new constructs are parsed and
+dispatched to their corresponding `Term` constructors; no new engine functionality is
+required.
+
+### New query language features
+
+| Feature | Syntax | Example |
+|---------|--------|---------|
+| OR operator | `A \|\| B` | `Position \|\| Velocity` |
+| Negated scope groups | `!(...)` | `!(Position, Velocity)` |
+| Optional terms | `?T` | `?Velocity` |
+| Traversal postfixes | `.Up` / `.SelfUp` / `.Cascade` | `Position.Up`, `(ChildOf,root).SelfUp(IsA)` |
+| Source binding | `T(entity)` | `Position(hero)` |
+| Query variables | `$varName` in pair target | `(ChildOf, $parent)` |
+| Equality predicates | `$this == e` / `$this != e` / `$this ~ "pat"` | `$this ~ "unit"` |
+| Type-list operators | `AndFrom(e)` / `OrFrom(e)` / `NotFrom(e)` | `AndFrom(prefab)` |
+
+### New error infrastructure
+
+`ParseQueryError` gains a `Code ParseErrorCode` field with 8 enum values
+(`ErrCodeUnknown`, `ErrCodeExpectedIdent`, `ErrCodeUnclosedParen`, `ErrCodeUnboundVar`,
+`ErrCodeCycle`, `ErrCodeUnknownIdent`, `ErrCodeBadModifier`, `ErrCodeBadCombination`).
+
+### REST handler improvements
+
+`restBuildExecSets` synthesises valid engine execution sets for anchor-free queries:
+
+- **OR-only**: one sub-query per OR member (member promoted to `TermAnd`); results
+  unioned by entity ID via `seen map[ID]bool`.
+- **Pure-predicate** (`$this == e`, `$this ~ "pat"`): synthetic `With(nameID)` anchor
+  prepended so the engine iterates named entities.
+- **`*From`-only**: passed through unchanged (engine handles via `allFromInput` bypass).
+
+### Tests
+
+28 new parser tests in `query_dsl_test.go`; 10 new REST integration tests in
+`rest_query_test.go`. 95.0% statement coverage; `go vet`, `golangci-lint`,
+`-race -count=3` all clean.
+
+### Documentation
+
+`docs/QueryDSL.md` replaced with a full v2 reference: BNF grammar, operator precedence
+table, all new feature sections, error-code table, and expanded examples.
+
 ## v0.95.0 — 2026-05-15 — Phase 16.40: Query DSL REST endpoint
 
 Ships `GET /query?expr=<flecs-query-expression>` — the last outstanding REST endpoint from
