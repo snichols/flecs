@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"runtime"
 	"unsafe"
@@ -73,8 +74,14 @@ func (w *World) TakeSnapshotContext(ctx context.Context) (*Snapshot, error) {
 	default:
 	}
 	s := &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w)))}
-	var partial bool
-	s.blob, partial = snapshotSerializeContext(ctx, w)
+	var buf bytes.Buffer
+	bw := &binWriter{w: &buf}
+	partial := snapshotWritePayloadContext(ctx, bw, w)
+	if bw.err != nil {
+		s.Partial = true
+		return s, bw.err
+	}
+	s.blob = buf.Bytes()
 	if partial {
 		s.Partial = true
 		return s, ctx.Err()
@@ -126,13 +133,14 @@ func (w *World) RestoreSnapshotContext(ctx context.Context, s *Snapshot) error {
 // Bytes serializes s to a self-contained byte slice for disk storage.
 // The first 16 bytes are the file header (magic + version BE + world-identity
 // token LE); the remainder is the snapshot payload.
+//
+// For large snapshots, prefer [(*Snapshot).WriteTo] to avoid materializing a
+// second copy of the payload.
 func (s *Snapshot) Bytes() []byte {
-	out := make([]byte, 16+len(s.blob))
-	copy(out[:4], snapshotMagic[:])
-	binary.BigEndian.PutUint32(out[4:8], snapshotFormatVersion)
-	binary.LittleEndian.PutUint64(out[8:16], s.worldID)
-	copy(out[16:], s.blob)
-	return out
+	var buf bytes.Buffer
+	buf.Grow(16 + len(s.blob))
+	_, _ = s.WriteTo(&buf)
+	return buf.Bytes()
 }
 
 // LoadSnapshot deserializes a [Snapshot] from b (as produced by
@@ -160,22 +168,57 @@ func LoadSnapshot(b []byte) (*Snapshot, error) {
 
 // ─── Binary-format helpers ────────────────────────────────────────────────────
 
-// binWriter wraps a bytes.Buffer with convenience write methods (all LE).
-type binWriter struct{ buf *bytes.Buffer }
+// binWriter wraps an io.Writer with convenience write methods (all LE).
+// Writes accumulate in n; the first error is stored in err and subsequent
+// writes become no-ops. This lets callers call many write methods and check
+// bw.err once at the end.
+type binWriter struct {
+	w   io.Writer
+	n   int64
+	err error
+}
 
-func (bw *binWriter) u8(v uint8) { bw.buf.WriteByte(v) }
+func (bw *binWriter) u8(v uint8) {
+	if bw.err != nil {
+		return
+	}
+	nn, err := bw.w.Write([]byte{v})
+	bw.n += int64(nn)
+	bw.err = err
+}
+
 func (bw *binWriter) u32(v uint32) {
+	if bw.err != nil {
+		return
+	}
 	var b [4]byte
 	binary.LittleEndian.PutUint32(b[:], v)
-	bw.buf.Write(b[:])
+	nn, err := bw.w.Write(b[:])
+	bw.n += int64(nn)
+	bw.err = err
 }
+
 func (bw *binWriter) u64(v uint64) {
+	if bw.err != nil {
+		return
+	}
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], v)
-	bw.buf.Write(b[:])
+	nn, err := bw.w.Write(b[:])
+	bw.n += int64(nn)
+	bw.err = err
 }
-func (bw *binWriter) id(v ID)      { bw.u64(uint64(v)) }
-func (bw *binWriter) raw(p []byte) { bw.buf.Write(p) }
+
+func (bw *binWriter) id(v ID) { bw.u64(uint64(v)) }
+
+func (bw *binWriter) raw(p []byte) {
+	if bw.err != nil {
+		return
+	}
+	nn, err := bw.w.Write(p)
+	bw.n += int64(nn)
+	bw.err = err
+}
 
 // binReader is a cursor over a []byte with convenience read methods (all LE).
 type binReader struct {
@@ -237,66 +280,95 @@ func (br *binReader) raw(n int) ([]byte, error) {
 //  9. Ordered children
 // 10. Unit defs     (user-registered unit definitions)
 
-func snapshotSerializeContext(ctx context.Context, w *World) (blob []byte, partial bool) {
-	bw := &binWriter{buf: &bytes.Buffer{}}
+// snapshotWritePayloadContext writes the 10-section snapshot payload to bw,
+// checking ctx between each section. Returns true if cancelled mid-write.
+// bw.err captures any underlying write error.
+func snapshotWritePayloadContext(ctx context.Context, bw *binWriter, w *World) (partial bool) {
 	serializeComponents(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeEntityIndex(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	if p := serializeTablesContext(ctx, bw, w); p {
-		return bw.buf.Bytes(), true
+		return true
+	}
+	if bw.err != nil {
+		return false
 	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeEmptyTableUserEnts(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeSparseData(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeUnionState(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeEntityRange(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializePolicies(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeOrderedChildren(bw, w)
+	if bw.err != nil {
+		return false
+	}
 	select {
 	case <-ctx.Done():
-		return bw.buf.Bytes(), true
+		return true
 	default:
 	}
 	serializeUnitDefs(bw, w)
-	return bw.buf.Bytes(), false
+	return false
 }
 
 // ─── serializeComponents ──────────────────────────────────────────────────────

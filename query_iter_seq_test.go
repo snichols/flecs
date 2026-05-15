@@ -749,3 +749,1067 @@ func TestPair_NilOnMissingOptional(t *testing.T) {
 	// to a later phase. This test serves as a placeholder.
 	t.Skip("Maybe variants land in a later phase")
 }
+
+// ── Break-from-range coverage ────────────────────────────────────────────────
+
+func TestCachedQueryAll_BreakHonored(t *testing.T) {
+	w := flecs.New()
+	var posID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+		}
+	})
+	cq := flecs.NewCachedQuery(w, posID)
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for range flecs.CachedQueryAll(cq, r) {
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 entity before break, got %d", count)
+	}
+}
+
+func TestQueryAllContext_BreakHonored(t *testing.T) {
+	w := flecs.New()
+	var posID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+		}
+	})
+	q := flecs.NewQuery(w, posID)
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for _, err := range flecs.QueryAllContext(context.Background(), q, r) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 entity before break, got %d", count)
+	}
+}
+
+func TestCachedQueryAllContext_BreakHonored(t *testing.T) {
+	w := flecs.New()
+	var posID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+		}
+	})
+	cq := flecs.NewCachedQuery(w, posID)
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for _, err := range flecs.CachedQueryAllContext(context.Background(), cq, r) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 entity before break, got %d", count)
+	}
+}
+
+// ── All1 break in shared (inherited) path ────────────────────────────────────
+
+func TestAll1_SharedBreak(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var prefab, inst1, inst2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 99})
+		inst1 = fw.NewEntity()
+		inst2 = fw.NewEntity()
+		flecs.AddID(fw, inst1, flecs.MakePair(w.IsA(), prefab))
+		flecs.AddID(fw, inst2, flecs.MakePair(w.IsA(), prefab))
+	})
+	_ = inst2
+
+	var visited int
+	w.Read(func(r *flecs.Reader) {
+		// Return true for the first entity (prefab, normal path) so iteration
+		// advances to the inst table (shared path), then return false for the
+		// first inst entity to cover the !yield(e, aShared) → return path.
+		seq := flecs.All1[seqPos](r)
+		seq(func(e flecs.ID, p *seqPos) bool {
+			if p.X != 99 {
+				t.Errorf("expected X=99, got %v", p.X)
+			}
+			_ = e
+			visited++
+			return visited < 2 // true for prefab (normal path), false for first inst (shared path)
+		})
+	})
+	if visited != 2 {
+		t.Errorf("expected 2 visits (prefab + first inst), got %d", visited)
+	}
+}
+
+// ── All2 normal-case break and toggle ────────────────────────────────────────
+
+func TestAll2_BreakHonored_NormalCase(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	w.Write(func(fw *flecs.Writer) {
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+			flecs.Set(fw, e, seqVel{1})
+		}
+	})
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for _, p := range flecs.All2[seqPos, seqVel](r) {
+			_ = p
+			count++
+			break // triggers the normal-case !yield(...) → return path
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before break, got %d", count)
+	}
+}
+
+func TestAll2_ToggleContinue_NormalCase(t *testing.T) {
+	// Both A and B have CanToggle; disable A on one entity → that entity
+	// is skipped by the toggle-continue branch in the normal (non-shared) path.
+	w := flecs.New()
+	var posID, velID flecs.ID
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		velID = flecs.RegisterComponent[seqVel](w)
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e1, seqPos{1})
+		flecs.Set(fw, e1, seqVel{1})
+		flecs.Set(fw, e2, seqPos{2})
+		flecs.Set(fw, e2, seqVel{2})
+	})
+	flecs.SetCanToggle(w, posID)
+	flecs.SetCanToggle(w, velID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, e1, posID) // disables e1's pos → toggle-continue fires
+	})
+
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All2[seqPos, seqVel](r) {
+			visited[e] = true
+		}
+	})
+	if visited[e1] {
+		t.Error("e1 (pos disabled) should be skipped by toggle-continue")
+	}
+	if !visited[e2] {
+		t.Error("e2 should be visited")
+	}
+}
+
+// ── All2 shared (inherited-component) paths ──────────────────────────────────
+
+// TestAll2_SharedPath_AInherited: A (seqPos) is inheritable; B (seqVel) is local.
+// Exercises the "some shared" branch where aShared != nil, bShared == nil.
+func TestAll2_SharedPath_AInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 10})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqVel{DX: 5})
+	})
+	_ = prefab
+
+	var gotPos *seqPos
+	var gotVel *seqVel
+	w.Read(func(r *flecs.Reader) {
+		for e, p := range flecs.All2[seqPos, seqVel](r) {
+			if e == inst {
+				gotPos = p.A
+				gotVel = p.B
+			}
+		}
+	})
+	if gotPos == nil {
+		t.Fatal("inst: seqPos missing")
+	}
+	if gotVel == nil {
+		t.Fatal("inst: seqVel missing")
+	}
+	if gotPos.X != 10 {
+		t.Errorf("seqPos.X: want 10, got %v", gotPos.X)
+	}
+	if gotVel.DX != 5 {
+		t.Errorf("seqVel.VX: want 5, got %v", gotVel.DX)
+	}
+}
+
+// TestAll2_SharedPath_BInherited: B (seqVel) is inheritable; A (seqPos) is local.
+// Exercises the branch where aShared == nil, bShared != nil, covering the
+// colA = Field[A] and a = &colA[i] paths.
+func TestAll2_SharedPath_BInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.SetInheritable[seqVel](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqVel{DX: 7})
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 3})
+	})
+	_ = prefab
+
+	var gotPos *seqPos
+	var gotVel *seqVel
+	w.Read(func(r *flecs.Reader) {
+		for e, p := range flecs.All2[seqPos, seqVel](r) {
+			if e == inst {
+				gotPos = p.A
+				gotVel = p.B
+			}
+		}
+	})
+	if gotPos == nil {
+		t.Fatal("inst: seqPos missing")
+	}
+	if gotVel == nil {
+		t.Fatal("inst: seqVel missing")
+	}
+	if gotPos.X != 3 {
+		t.Errorf("seqPos.X: want 3, got %v", gotPos.X)
+	}
+	if gotVel.DX != 7 {
+		t.Errorf("seqVel.VX: want 7, got %v", gotVel.DX)
+	}
+}
+
+// TestAll2_SharedPath_Break: break from the shared-component inner loop.
+func TestAll2_SharedPath_Break(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.SetInheritable[seqPos](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		for range 5 {
+			inst := fw.NewEntity()
+			flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+			flecs.Set(fw, inst, seqVel{DX: 1})
+		}
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for range flecs.All2[seqPos, seqVel](r) {
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before break, got %d", count)
+	}
+}
+
+// TestAll2_SharedPath_Toggle: toggle-continue in the shared-component inner loop.
+func TestAll2_SharedPath_Toggle(t *testing.T) {
+	w := flecs.New()
+	var velID flecs.ID
+	flecs.RegisterComponent[seqPos](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var prefab, inst1, inst2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = flecs.RegisterComponent[seqVel](w)
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		inst1 = fw.NewEntity()
+		inst2 = fw.NewEntity()
+		flecs.AddID(fw, inst1, flecs.MakePair(w.IsA(), prefab))
+		flecs.AddID(fw, inst2, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst1, seqVel{DX: 1})
+		flecs.Set(fw, inst2, seqVel{DX: 2})
+	})
+	flecs.SetCanToggle(w, velID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, inst1, velID)
+	})
+
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All2[seqPos, seqVel](r) {
+			visited[e] = true
+		}
+	})
+	if visited[inst1] {
+		t.Error("inst1 (vel disabled) should be skipped")
+	}
+	if !visited[inst2] {
+		t.Error("inst2 should be visited")
+	}
+	_ = prefab
+}
+
+// ── All3 shared (inherited-component) paths ──────────────────────────────────
+
+func TestAll3_SharedPath_AInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 11})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqVel{DX: 2})
+		flecs.Set(fw, inst, seqMass{V: 3})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, tr := range flecs.All3[seqPos, seqVel, seqMass](r) {
+			if e == inst {
+				found = true
+				if tr.A.X != 11 {
+					t.Errorf("seqPos.X: want 11, got %v", tr.A.X)
+				}
+				if tr.B.DX != 2 {
+					t.Errorf("seqVel.VX: want 2, got %v", tr.B.DX)
+				}
+				if tr.C.V != 3 {
+					t.Errorf("seqMass.V: want 3, got %v", tr.C.V)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All3 iteration")
+	}
+}
+
+func TestAll3_SharedPath_BInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.SetInheritable[seqVel](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqVel{DX: 8})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 4})
+		flecs.Set(fw, inst, seqMass{V: 5})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, tr := range flecs.All3[seqPos, seqVel, seqMass](r) {
+			if e == inst {
+				found = true
+				if tr.A.X != 4 {
+					t.Errorf("seqPos.X: want 4, got %v", tr.A.X)
+				}
+				if tr.B.DX != 8 {
+					t.Errorf("seqVel.VX: want 8, got %v", tr.B.DX)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All3 BInherited iteration")
+	}
+}
+
+func TestAll3_SharedPath_CInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.SetInheritable[seqMass](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqMass{V: 9})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 6})
+		flecs.Set(fw, inst, seqVel{DX: 7})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, tr := range flecs.All3[seqPos, seqVel, seqMass](r) {
+			if e == inst {
+				found = true
+				if tr.C.V != 9 {
+					t.Errorf("seqMass.V: want 9, got %v", tr.C.V)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All3 CInherited iteration")
+	}
+}
+
+func TestAll3_SharedPath_Break(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.SetInheritable[seqPos](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		for range 3 {
+			inst := fw.NewEntity()
+			flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+			flecs.Set(fw, inst, seqVel{DX: 1})
+			flecs.Set(fw, inst, seqMass{V: 1})
+		}
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for range flecs.All3[seqPos, seqVel, seqMass](r) {
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before break, got %d", count)
+	}
+}
+
+func TestAll3_SharedPath_Toggle(t *testing.T) {
+	w := flecs.New()
+	var velID flecs.ID
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var inst1, inst2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = flecs.RegisterComponent[seqVel](w)
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		inst1 = fw.NewEntity()
+		inst2 = fw.NewEntity()
+		for _, inst := range []flecs.ID{inst1, inst2} {
+			flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+			flecs.Set(fw, inst, seqVel{DX: 1})
+			flecs.Set(fw, inst, seqMass{V: 1})
+		}
+	})
+	flecs.SetCanToggle(w, velID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, inst1, velID)
+	})
+
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All3[seqPos, seqVel, seqMass](r) {
+			visited[e] = true
+		}
+	})
+	if visited[inst1] {
+		t.Error("inst1 (vel disabled) should be skipped")
+	}
+	if !visited[inst2] {
+		t.Error("inst2 should be visited")
+	}
+}
+
+// ── All4 shared (inherited-component) paths ──────────────────────────────────
+
+func TestAll4_SharedPath_AInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 12})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqVel{DX: 2})
+		flecs.Set(fw, inst, seqMass{V: 3})
+		flecs.Set(fw, inst, seqHealth{HP: 100})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, q := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			if e == inst {
+				found = true
+				if q.A.X != 12 {
+					t.Errorf("seqPos.X: want 12, got %v", q.A.X)
+				}
+				if q.B.DX != 2 {
+					t.Errorf("seqVel.VX: want 2, got %v", q.B.DX)
+				}
+				if q.C.V != 3 {
+					t.Errorf("seqMass.V: want 3, got %v", q.C.V)
+				}
+				if q.D.HP != 100 {
+					t.Errorf("seqHP.Points: want 100, got %v", q.D.HP)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All4 AInherited iteration")
+	}
+}
+
+func TestAll4_SharedPath_BInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqVel](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqVel{DX: 9})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 4})
+		flecs.Set(fw, inst, seqMass{V: 5})
+		flecs.Set(fw, inst, seqHealth{HP: 50})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, q := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			if e == inst {
+				found = true
+				if q.B.DX != 9 {
+					t.Errorf("seqVel.VX: want 9, got %v", q.B.DX)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All4 BInherited iteration")
+	}
+}
+
+func TestAll4_SharedPath_CInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqMass](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqMass{V: 15})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 6})
+		flecs.Set(fw, inst, seqVel{DX: 7})
+		flecs.Set(fw, inst, seqHealth{HP: 75})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, q := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			if e == inst {
+				found = true
+				if q.C.V != 15 {
+					t.Errorf("seqMass.V: want 15, got %v", q.C.V)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All4 CInherited iteration")
+	}
+}
+
+func TestAll4_SharedPath_DInherited(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqHealth](w)
+
+	var prefab, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, seqHealth{HP: 200})
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+		flecs.Set(fw, inst, seqPos{X: 8})
+		flecs.Set(fw, inst, seqVel{DX: 9})
+		flecs.Set(fw, inst, seqMass{V: 10})
+	})
+	_ = prefab
+
+	var found bool
+	w.Read(func(r *flecs.Reader) {
+		for e, q := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			if e == inst {
+				found = true
+				if q.D.HP != 200 {
+					t.Errorf("seqHP.Points: want 200, got %v", q.D.HP)
+				}
+			}
+		}
+	})
+	if !found {
+		t.Fatal("inst not found in All4 DInherited iteration")
+	}
+}
+
+func TestAll4_SharedPath_Break(t *testing.T) {
+	w := flecs.New()
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqVel](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqPos](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		for range 3 {
+			inst := fw.NewEntity()
+			flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+			flecs.Set(fw, inst, seqVel{DX: 1})
+			flecs.Set(fw, inst, seqMass{V: 1})
+			flecs.Set(fw, inst, seqHealth{HP: 1})
+		}
+	})
+
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		for range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			count++
+			break
+		}
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before break, got %d", count)
+	}
+}
+
+func TestAll4_SharedPath_Toggle(t *testing.T) {
+	w := flecs.New()
+	var velID flecs.ID
+	flecs.RegisterComponent[seqPos](w)
+	flecs.RegisterComponent[seqMass](w)
+	flecs.RegisterComponent[seqHealth](w)
+	flecs.SetInheritable[seqPos](w)
+
+	var inst1, inst2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		velID = flecs.RegisterComponent[seqVel](w)
+		prefab := fw.NewEntity()
+		flecs.Set(fw, prefab, seqPos{X: 1})
+		inst1 = fw.NewEntity()
+		inst2 = fw.NewEntity()
+		for _, inst := range []flecs.ID{inst1, inst2} {
+			flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), prefab))
+			flecs.Set(fw, inst, seqVel{DX: 1})
+			flecs.Set(fw, inst, seqMass{V: 1})
+			flecs.Set(fw, inst, seqHealth{HP: 1})
+		}
+	})
+	flecs.SetCanToggle(w, velID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, inst1, velID)
+	})
+
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			visited[e] = true
+		}
+	})
+	if visited[inst1] {
+		t.Error("inst1 (vel disabled) should be skipped")
+	}
+	if !visited[inst2] {
+		t.Error("inst2 should be visited")
+	}
+}
+
+// ── All3 normal-path break and toggle ────────────────────────────────────────
+
+func TestAll3_BreakHonored_NormalCase(t *testing.T) {
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+			flecs.Set(fw, e, seqVel{1})
+			flecs.Set(fw, e, seqMass{V: 1})
+		}
+	})
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		seq := flecs.All3[seqPos, seqVel, seqMass](r)
+		seq(func(_ flecs.ID, _ flecs.Triple[seqPos, seqVel, seqMass]) bool {
+			count++
+			return false
+		})
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before stop, got %d", count)
+	}
+}
+
+func TestAll3_ToggleC_NormalCase(t *testing.T) {
+	w := flecs.New()
+	var massID flecs.ID
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RegisterComponent[seqPos](w)
+		flecs.RegisterComponent[seqVel](w)
+		massID = flecs.RegisterComponent[seqMass](w)
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, seqPos{1})
+		flecs.Set(fw, e1, seqVel{1})
+		flecs.Set(fw, e1, seqMass{V: 1})
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, seqPos{2})
+		flecs.Set(fw, e2, seqVel{2})
+		flecs.Set(fw, e2, seqMass{V: 2})
+	})
+	flecs.SetCanToggle(w, massID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, e1, massID)
+	})
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All3[seqPos, seqVel, seqMass](r) {
+			visited[e] = true
+		}
+	})
+	if visited[e1] {
+		t.Error("e1 (mass disabled) should be skipped by toggleC continue")
+	}
+	if !visited[e2] {
+		t.Error("e2 should be visited")
+	}
+}
+
+// ── All4 normal-path break and toggle ────────────────────────────────────────
+
+func TestAll4_BreakHonored_NormalCase(t *testing.T) {
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{1})
+			flecs.Set(fw, e, seqVel{1})
+			flecs.Set(fw, e, seqMass{V: 1})
+			flecs.Set(fw, e, seqHealth{HP: 1})
+		}
+	})
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		seq := flecs.All4[seqPos, seqVel, seqMass, seqHealth](r)
+		seq(func(_ flecs.ID, _ flecs.Quad[seqPos, seqVel, seqMass, seqHealth]) bool {
+			count++
+			return false
+		})
+	})
+	if count != 1 {
+		t.Errorf("expected 1 before stop, got %d", count)
+	}
+}
+
+func TestAll4_ToggleD_NormalCase(t *testing.T) {
+	w := flecs.New()
+	var healthID flecs.ID
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RegisterComponent[seqPos](w)
+		flecs.RegisterComponent[seqVel](w)
+		flecs.RegisterComponent[seqMass](w)
+		healthID = flecs.RegisterComponent[seqHealth](w)
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, seqPos{1})
+		flecs.Set(fw, e1, seqVel{1})
+		flecs.Set(fw, e1, seqMass{V: 1})
+		flecs.Set(fw, e1, seqHealth{HP: 1})
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e2, seqPos{2})
+		flecs.Set(fw, e2, seqVel{2})
+		flecs.Set(fw, e2, seqMass{V: 2})
+		flecs.Set(fw, e2, seqHealth{HP: 2})
+	})
+	flecs.SetCanToggle(w, healthID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.DisableID(fw, e1, healthID)
+	})
+	visited := map[flecs.ID]bool{}
+	w.Read(func(r *flecs.Reader) {
+		for e := range flecs.All4[seqPos, seqVel, seqMass, seqHealth](r) {
+			visited[e] = true
+		}
+	})
+	if visited[e1] {
+		t.Error("e1 (health disabled) should be skipped by toggleD continue")
+	}
+	if !visited[e2] {
+		t.Error("e2 should be visited")
+	}
+}
+
+// ── QueryAllContext / CachedQueryAllContext mid-loop ctx-cancel ───────────────
+
+// TestQueryAllContext_MidLoopCtxCancel creates 1025 entities each in a unique
+// archetype (one seqPos + unique pair tag) so the iterator walks 1025 tables
+// and the ctxCheckInterval=1024 path fires. The context is cancelled inside the
+// first yield; after 1024 tables the select sees the done channel.
+func TestQueryAllContext_MidLoopCtxCancel(t *testing.T) {
+	const numTables = 1025
+	w := flecs.New()
+	var posID, relID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		relID = fw.NewEntity()
+		for i := range numTables {
+			tgt := fw.NewEntity()
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{float64(i)})
+			flecs.AddID(fw, e, flecs.MakePair(relID, tgt))
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := flecs.NewQuery(w, posID)
+	var gotErr error
+	yielded := 0
+	w.Read(func(r *flecs.Reader) {
+		for _, err := range flecs.QueryAllContext(ctx, q, r) {
+			if err != nil {
+				gotErr = err
+				break
+			}
+			yielded++
+			if yielded == 1 {
+				cancel()
+			}
+		}
+	})
+
+	if gotErr == nil {
+		t.Fatal("expected context error from mid-loop ctx check, got nil")
+	}
+	if !errors.Is(gotErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", gotErr)
+	}
+}
+
+// TestCachedQueryAllContext_MidLoopCtxCancel mirrors the above for CachedQuery.
+func TestCachedQueryAllContext_MidLoopCtxCancel(t *testing.T) {
+	const numTables = 1025
+	w := flecs.New()
+	var posID, relID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		relID = fw.NewEntity()
+		for i := range numTables {
+			tgt := fw.NewEntity()
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{float64(i)})
+			flecs.AddID(fw, e, flecs.MakePair(relID, tgt))
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cq := flecs.NewCachedQuery(w, posID)
+	var gotErr error
+	yielded := 0
+	w.Read(func(r *flecs.Reader) {
+		for _, err := range flecs.CachedQueryAllContext(ctx, cq, r) {
+			if err != nil {
+				gotErr = err
+				break
+			}
+			yielded++
+			if yielded == 1 {
+				cancel()
+			}
+		}
+	})
+
+	if gotErr == nil {
+		t.Fatal("expected context error from mid-loop ctx check, got nil")
+	}
+	if !errors.Is(gotErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", gotErr)
+	}
+}
+
+// ── CachedQuery.EachContext ctx-cancel coverage ───────────────────────────────
+
+// TestCachedQuery_EachContext_OuterCancel covers the pre-cancel check at
+// cached_query.go:687: ctx is already done before EachContext is called, so it
+// returns immediately without iterating any tables.
+func TestCachedQuery_EachContext_OuterCancel(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[seqPos](w)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, seqPos{1})
+	})
+	cq := flecs.NewCachedQuery(w, posID)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := cq.EachContext(ctx, func(it *flecs.QueryIter) {
+		t.Error("fn must not be called on pre-cancelled context")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// TestCachedQuery_EachContext_MidLoopCancel creates 1025 unique-archetype tables
+// matching a CachedQuery and cancels the context inside the first fn call. After
+// ctxCheckInterval=1024 iterations the mid-loop select fires and returns ctx.Err().
+func TestCachedQuery_EachContext_MidLoopCancel(t *testing.T) {
+	const numTables = 1025
+	w := flecs.New()
+	var posID, relID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		relID = fw.NewEntity()
+		for i := range numTables {
+			tgt := fw.NewEntity()
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{float64(i)})
+			flecs.AddID(fw, e, flecs.MakePair(relID, tgt))
+		}
+	})
+	cq := flecs.NewCachedQuery(w, posID)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	iters := 0
+	err := cq.EachContext(ctx, func(it *flecs.QueryIter) {
+		iters++
+		if iters == 1 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from mid-loop check, got %v", err)
+	}
+}
+
+// TestQuery_EachContext_MidLoopCancel mirrors TestCachedQuery_EachContext_MidLoopCancel
+// for Query.EachContext, covering the ctxCheckInterval path in query.go:1832.
+func TestQuery_EachContext_MidLoopCancel(t *testing.T) {
+	const numTables = 1025
+	w := flecs.New()
+	var posID, relID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		relID = fw.NewEntity()
+		for i := range numTables {
+			tgt := fw.NewEntity()
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{float64(i)})
+			flecs.AddID(fw, e, flecs.MakePair(relID, tgt))
+		}
+	})
+	q := flecs.NewQuery(w, posID)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	iters := 0
+	err := q.EachContext(ctx, func(it *flecs.QueryIter) {
+		iters++
+		if iters == 1 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from mid-loop check, got %v", err)
+	}
+}
+
+// TestCachedQuery_TryMatchTable_AfterClose covers the cq.removed guard in
+// tryMatchTable (cached_query.go:787): after Close() the CQ stays in the
+// world's list but the guard returns early for any new table.
+func TestCachedQuery_TryMatchTable_AfterClose(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[seqPos](w)
+	cq := flecs.NewCachedQuery(w, posID)
+	cq.Close()
+	// Creating a new entity triggers world.notifyTableCreated →
+	// cq.tryMatchTable with cq.removed=true → guard fires and returns early.
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, seqPos{42})
+	})
+	if !cq.IsClosed() {
+		t.Error("CachedQuery should remain closed")
+	}
+}

@@ -206,3 +206,125 @@ if err != nil {
 }
 flecs.RestoreSnapshot(w, s2)
 ```
+
+## Streaming snapshots _(v0.108.0)_
+
+For large worlds (100 MB+ payloads), the default `TakeSnapshot` / `Bytes`
+path materializes the full snapshot in memory. The streaming API eliminates
+this by writing or reading data through an `io.Writer` / `io.Reader` directly,
+composing naturally with `gzip.NewWriter`, `net.Conn`, `*os.File`, encrypted
+writers, and any other I/O primitive.
+
+### API surface
+
+```go
+// Streaming write — already-captured snapshot.
+n, err := snap.WriteTo(w io.Writer)         // satisfies io.WriterTo
+
+// Streaming write — live world (no intermediate *Snapshot).
+n, err := w.TakeSnapshotTo(out io.Writer)
+n, err := w.TakeSnapshotToContext(ctx, out io.Writer)
+
+// Streaming read — materializes *Snapshot from reader.
+snap, err := flecs.ReadSnapshotFrom(r io.Reader)
+
+// Streaming read + restore in one step.
+err := w.RestoreSnapshotFrom(r io.Reader)
+err := w.RestoreSnapshotFromContext(ctx, r io.Reader)
+```
+
+All existing APIs (`TakeSnapshot`, `RestoreSnapshot`, `Bytes`, `LoadSnapshot`,
+and the `*Context` variants) are unchanged.
+
+### Format compatibility
+
+`WriteTo` and `Bytes` produce byte-for-byte identical output — the binary
+format is the same 16-byte header plus payload that `LoadSnapshot` already
+reads. There is no format v2; streaming is a pure I/O refactor.
+
+`Bytes` is now a thin wrapper around `WriteTo(&bytes.Buffer{})`.
+
+### Memory bounds
+
+`(*Snapshot).WriteTo` streams the already-captured blob with zero extra
+allocation — it writes the header and then the blob slice directly to the
+underlying writer. No second copy of the payload is created.
+
+`TakeSnapshotTo` serializes world state directly to the `io.Writer`, bypassing
+the intermediate `*Snapshot` allocation entirely. For a 100 MB world, peak
+in-flight memory during `TakeSnapshotTo` is bounded by the largest single
+column block (typically a few kilobytes), rather than the full 100 MB.
+
+`ReadSnapshotFrom` still materializes the full payload in a `[]byte` because
+the restore path (`RestoreSnapshot`) consumes a complete blob. Streaming
+restore is out of scope for this phase.
+
+### Lock semantics
+
+`TakeSnapshotTo` and `TakeSnapshotToContext` hold `w`'s read lock for the
+entire duration of the write. For very large worlds this can block writers
+for an extended period. If this is a concern, take a `*Snapshot` first
+(which holds the lock only briefly) and then stream from the snapshot:
+
+```go
+// Option A: stream directly — holds read lock for full write duration.
+w.TakeSnapshotTo(gz)
+
+// Option B: capture quickly, then stream outside the lock.
+snap := flecs.TakeSnapshot(w)          // lock held briefly
+snap.WriteTo(gz)                       // no world lock
+```
+
+### Example: gzip-compressed file
+
+```go
+import (
+    "compress/gzip"
+    "os"
+    "github.com/snichols/flecs"
+)
+
+// Write: world → gzip → file.
+f, _ := os.Create("world.snap.gz")
+gz := gzip.NewWriter(f)
+w.TakeSnapshotTo(gz)
+gz.Close()
+f.Close()
+
+// Read: file → gzip → restore.
+f2, _ := os.Open("world.snap.gz")
+gr, _ := gzip.NewReader(f2)
+w.RestoreSnapshotFrom(gr)
+gr.Close()
+f2.Close()
+```
+
+### Example: network transfer via net.Pipe
+
+```go
+server, client := net.Pipe()
+
+// Sender goroutine.
+go func() {
+    w.TakeSnapshotTo(server)
+    server.Close()
+}()
+
+// Receiver.
+snap, _ := flecs.ReadSnapshotFrom(client)
+client.Close()
+flecs.RestoreSnapshot(remoteWorld, snap)
+```
+
+### Example: context-aware streaming
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+n, err := w.TakeSnapshotToContext(ctx, gz)
+if err != nil {
+    // n bytes were written before cancellation; stream is incomplete.
+    log.Printf("snapshot write interrupted after %d bytes: %v", n, err)
+}
+```

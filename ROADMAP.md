@@ -1,9 +1,10 @@
 # Roadmap
 
-## Shipped (through v0.107.0)
+## Shipped (through v0.108.0)
 
 The following features are available in the current release:
 
+- **Streaming snapshot I/O _(v0.108.0)_** — `(*Snapshot).WriteTo(io.Writer)` satisfies `io.WriterTo`; `TakeSnapshotTo`/`TakeSnapshotToContext` serialize directly to any writer without materializing a `*Snapshot`; `ReadSnapshotFrom`/`RestoreSnapshotFrom`/`RestoreSnapshotFromContext` read from any `io.Reader`. Composes with `gzip.NewWriter`, `net.Conn`, `*os.File`. Format unchanged; `Bytes()` is now a thin wrapper around `WriteTo`. See [docs/Snapshots.md](docs/Snapshots.md).
 - **Range-over-func iteration _(v0.107.0)_** — `All1`/`All2`/`All3`/`All4` return `iter.Seq2[ID, *T]` (or `Pair`/`Triple`/`Quad` structs) for idiomatic `for … range` loops with full break support; `QueryAll`/`CachedQueryAll` for bare entity-ID iteration; `QueryAllContext`/`CachedQueryAllContext` for cancellation-aware variants. Inheritable and CanToggle semantics preserved.
 - **Archetype-based storage** — entities sharing the same component set are grouped into structure-of-arrays tables; no pointer chasing during iteration.
 - **Raw-ID API** — `AddID`, `RemoveID`, `HasID`, `OwnsID` for tag and pair manipulation without type parameters.
@@ -109,7 +110,7 @@ The following features are available in the current release:
 - **Per-stage queues for parallel-batch dispatch** _(v0.105.0, Phase 16.50)_ — extends Phase 12.1's per-stage queue architecture from within-system (multi-threaded) to between-system (parallel-batched) parallelism. Previously, all parallel-batch systems fell through to `stages[0].queue` — a latent data race on `cmdQueue.append` (concurrent slice growth + map writes). Now: the parallel-batch dispatcher groups systems into sequential waves of at most `WorkerCount`; within each wave, system `wavePos` exclusively owns `stages[wavePos+1]`. Wave-level `wg.Wait()` prevents cross-wave stage sharing. After all waves, `mergeWorkerStages(N)` flushes stages 1..N in ascending ID order, then stage 0. Pre/post merge hooks fire once per batch boundary. `RunSystemWorker` mutex retained for the out-of-pipeline user API (documented in-source). No new public API; `go test ./... -race -count=10` clean. This closes the last remaining item under ROADMAP Future Work / Concurrency.
 - **Go-idiomatic `context.Context` cancellation** _(v0.106.0, Phase 16.51)_ — first post-port-completion phase. Adds cooperative cancellation to every long-running ECS operation: `ProgressContext`, `RunSystemContext`, `TakeSnapshotContext`, `RestoreSnapshotContext`, `(*Query).EachContext`, `(*CachedQuery).EachContext`, `MarshalJSONContext`. REST endpoints honour `r.Context()` and write HTTP 499 on client disconnect. `Snapshot.Partial bool` field for mid-walk detection. `context.Background()` callers pay zero overhead. All original functions delegate to their `…Context` siblings — no breaking changes. See [docs/Cancellation.md](docs/Cancellation.md).
 
-**All ROADMAP items shipped** — with Phase 16.51, the Go-flecs feature set is complete and every long-running operation is cancellable. The Go-flecs roadmap is complete.
+**All ROADMAP items shipped** — with Phase 16.53, the Go-flecs feature set is complete. Every long-running operation is cancellable, every query result is range-iterable, and every snapshot is streaming-capable. The Go-flecs roadmap is complete.
 
 ## Documentation
 
