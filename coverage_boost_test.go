@@ -1862,3 +1862,717 @@ func TestCovObserver_LoggerPath(t *testing.T) {
 		t.Fatal("ObserveID with logger returned nil")
 	}
 }
+
+// ── Phase 16.45: coverage boost for new variable-query API ───────────────────
+
+// covPos16b and covVel16b are local component types for coverage boost tests.
+type covPos16b struct{ X, Y float32 }
+type covVel16b struct{ V float32 }
+
+// TestCovWithVarKind_EmptyNamePanic covers WithVarKind panic when name is empty.
+func TestCovWithVarKind_EmptyNamePanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for empty name")
+		}
+	}()
+	_ = flecs.WithVarKind("", flecs.VarEntity)
+}
+
+// TestCovWithVarKind_VarAnyPanic covers WithVarKind panic when kind is VarAny.
+func TestCovWithVarKind_VarAnyPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for VarAny")
+		}
+	}()
+	_ = flecs.WithVarKind("x", flecs.VarAny)
+}
+
+// TestCovWithVarKind_Normal covers the normal WithVarKind return path.
+func TestCovWithVarKind_Normal(t *testing.T) {
+	term := flecs.WithVarKind("myVar", flecs.VarEntity)
+	_ = term // just verify it returns without panic
+}
+
+// TestCovWithTableVar_EmptyPanic covers WithTableVar panic when name is empty.
+func TestCovWithTableVar_EmptyPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for empty name")
+		}
+	}()
+	_ = flecs.WithTableVar("")
+}
+
+// TestCovWithPairRelVar_Panics covers WithPairRelVar panic paths.
+func TestCovWithPairRelVar_Panics(t *testing.T) {
+	t.Run("empty varName", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for empty varName")
+			}
+		}()
+		_ = flecs.WithPairRelVar("", flecs.ID(42))
+	})
+	t.Run("zero target", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for zero target")
+			}
+		}()
+		_ = flecs.WithPairRelVar("R", 0)
+	})
+}
+
+// TestCovWithPairBothVar_Panics covers WithPairBothVar panic paths.
+func TestCovWithPairBothVar_Panics(t *testing.T) {
+	t.Run("empty relVarName", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for empty relVarName")
+			}
+		}()
+		_ = flecs.WithPairBothVar("", "T")
+	})
+	t.Run("empty tgtVarName", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for empty tgtVarName")
+			}
+		}()
+		_ = flecs.WithPairBothVar("R", "")
+	})
+}
+
+// TestCovRelVar_Panics covers Term.RelVar panic paths.
+func TestCovRelVar_Panics(t *testing.T) {
+	w := flecs.New()
+	var aID, bID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		aID = fw.NewEntity()
+		bID = fw.NewEntity()
+	})
+	t.Run("empty name", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for empty name")
+			}
+		}()
+		_ = flecs.With(aID).RelVar("")
+	})
+	t.Run("pair ID", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for pair ID")
+			}
+		}()
+		_ = flecs.With(flecs.MakePair(aID, bID)).RelVar("R")
+	})
+}
+
+// TestCovScopeBuilderSource_Panics covers ScopeBuilder.Source panic paths.
+func TestCovScopeBuilderSource_Panics(t *testing.T) {
+	w := flecs.New()
+	var aID flecs.ID
+	w.Write(func(fw *flecs.Writer) { aID = fw.NewEntity() })
+
+	t.Run("no terms", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic when no term to apply source to")
+			}
+		}()
+		// WithoutScope panics if buildFn panics; the defer above catches it.
+		_ = flecs.WithoutScope(func(b *flecs.ScopeBuilder) {
+			b.Source(aID) // no terms yet — panic
+		})
+	})
+
+	t.Run("zero src", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic for zero src")
+			}
+		}()
+		_ = flecs.WithoutScope(func(b *flecs.ScopeBuilder) {
+			b.With(aID)
+			b.Source(0) // zero src — panic
+		})
+	})
+}
+
+// TestCovVarTable_Panics covers QueryIter.VarTable panic and nil return paths.
+func TestCovVarTable_Panics(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[covPos16b](w)
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, covPos16b{X: 1})
+	})
+
+	t.Run("no variables query panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic: no variables in query")
+			}
+		}()
+		w.Read(func(_ *flecs.Reader) {
+			q := flecs.NewQueryFromTerms(w, flecs.With(posID))
+			it := q.Iter()
+			it.Next()
+			it.VarTable("T") // no variables → panic
+		})
+	})
+
+	t.Run("undefined variable panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic: undefined variable")
+			}
+		}()
+		w.Read(func(_ *flecs.Reader) {
+			q := flecs.NewQueryFromTerms(w,
+				flecs.WithTableVar("T"),
+				flecs.With(posID),
+			)
+			it := q.Iter()
+			it.Next()
+			it.VarTable("notDefined") // variable not in query → panic
+		})
+	})
+
+	t.Run("entity-kind var returns nil", func(t *testing.T) {
+		w.Read(func(_ *flecs.Reader) {
+			q := flecs.NewQueryFromTerms(w,
+				flecs.WithPairTgtVar(posID, "planet"),
+			)
+			it := q.Iter()
+			// VarTable on entity-kind variable should return nil
+			// (We must call Next() first to position the iterator)
+			for it.Next() {
+				result := it.VarTable("planet")
+				if result != nil {
+					t.Errorf("VarTable on entity-kind var: want nil, got %v", result)
+				}
+			}
+		})
+	})
+
+	t.Run("table-kind var before Next panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected panic: not positioned")
+			}
+		}()
+		w.Read(func(_ *flecs.Reader) {
+			q := flecs.NewQueryFromTerms(w,
+				flecs.WithTableVar("T"),
+				flecs.With(posID),
+			)
+			it := q.Iter()
+			it.VarTable("T") // not positioned yet → panic
+		})
+	})
+}
+
+// TestCovOptimizer_TableKindVar exercises estimateTableKindDomain via a 2-variable
+// query where one variable is VarTable. Having ≥2 variables triggers selectOptimalDriver
+// which calls estimateVarDomain → estimateTableKindDomain for the table-kind var.
+func TestCovOptimizer_TableKindVar(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[covPos16b](w)
+	velID := flecs.RegisterComponent[covVel16b](w)
+	w.Write(func(fw *flecs.Writer) {
+		e := fw.NewEntity()
+		flecs.Set(fw, e, covPos16b{X: 1})
+		flecs.Set(fw, e, covVel16b{V: 2})
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		// 2 variables: T (VarTable) and V (entity). selectOptimalDriver is called.
+		// estimateTableKindDomain is invoked for T; estimateSrcVarDomain for V.
+		// TermVarDecl for T triggers the "Kind != TermAnd → continue" in estimateVarDomain.
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithTableVar("T"),
+			flecs.With(posID),
+			flecs.WithVar(velID, "V"),
+		)
+		it := q.Iter()
+		count := 0
+		for it.Next() {
+			count += len(it.Entities())
+		}
+		if count == 0 {
+			t.Error("expected at least one entity from table-kind+entity-var query")
+		}
+	})
+}
+
+// TestCovOptimizer_RelVarDomain exercises estimateRelVarDomain via a 2-variable
+// query with WithPairRelVar and actual pairs in the world.
+func TestCovOptimizer_RelVarDomain(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[covPos16b](w)
+	var heroID, likesID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		heroID = fw.NewEntity()
+		likesID = fw.NewEntity()
+		// entity with posID and (likesID, heroID) pair — supplies pairs for sampling
+		e := fw.NewEntity()
+		flecs.Set(fw, e, covPos16b{X: 1})
+		flecs.AddID(fw, e, flecs.MakePair(likesID, heroID))
+	})
+
+	w.Read(func(_ *flecs.Reader) {
+		// 2 variables: R (relVar with fixed target heroID) and P (entity with posID).
+		// selectOptimalDriver calls estimateRelVarDomain for R.
+		// The world has (likesID, heroID) pairs → sampling loop exercises the full path.
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithPairRelVar("R", heroID),
+			flecs.WithVar(posID, "P"),
+		)
+		_ = q
+	})
+
+	// Exercise the "no matches" path in estimateRelVarDomain: target not in any pair.
+	// A fresh world with a registered component but no pairs pointing to orphanTarget.
+	w2 := flecs.New()
+	pos2ID := flecs.RegisterComponent[covPos16b](w2)
+	var orphanTarget flecs.ID
+	w2.Write(func(fw *flecs.Writer) {
+		orphanTarget = fw.NewEntity() // nothing points to this as a pair target
+	})
+	w2.Read(func(_ *flecs.Reader) {
+		// estimateRelVarDomain iterates tables, finds nothing, returns math.MaxInt.
+		q2 := flecs.NewQueryFromTerms(w2,
+			flecs.WithPairRelVar("R", orphanTarget),
+			flecs.WithVar(pos2ID, "P"),
+		)
+		_ = q2
+	})
+}
+
+// TestCovOptimizer_TgtVarFixedSource exercises the estimateTgtVarDomain fixed-source
+// path (returns 1). Needs a tgtVar term with Src != 0 and a second variable.
+func TestCovOptimizer_TgtVarFixedSource(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[covPos16b](w)
+	var relID, srcEnt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		srcEnt = fw.NewEntity()
+		tgtID := fw.NewEntity()
+		flecs.AddID(fw, srcEnt, flecs.MakePair(relID, tgtID))
+	})
+	w.Read(func(_ *flecs.Reader) {
+		// WithPairTgtVar(relID, "V").Source(srcEnt) creates t.tgtVar="V", t.Src=srcEnt.
+		// WithVar(posID, "P") is the second variable.
+		// estimateTgtVarDomain(t) with t.Src != 0 → returns 1.
+		q := flecs.NewQueryFromTerms(w,
+			flecs.WithPairTgtVar(relID, "V").Source(srcEnt),
+			flecs.WithVar(posID, "P"),
+		)
+		_ = q
+	})
+}
+
+// TestCovAndYieldExisting covers ObserverOptions.AndYieldExisting (0% branch).
+func TestCovAndYieldExisting(t *testing.T) {
+	w := flecs.New()
+	type covTagYE struct{ V int }
+	compID := flecs.RegisterComponent[covTagYE](w)
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, covTagYE{V: 1})
+	})
+	// ObserveIDWithOptions with AndYieldExisting() exercises the 0% branch.
+	fired := 0
+	opts := flecs.WithQuery(flecs.With(compID)).AndYieldExisting()
+	flecs.ObserveIDWithOptions(w, compID, opts, []flecs.EventKind{flecs.EventOnAdd},
+		func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) { fired++ },
+	)
+	if fired == 0 {
+		t.Error("AndYieldExisting: expected at least one retroactive fire, got 0")
+	}
+}
+
+// TestCovEachPrefab covers EachPrefab on an instance entity that has IsA prefab links.
+func TestCovEachPrefab(t *testing.T) {
+	w := flecs.New()
+	type covPrefabComp struct{ V int }
+	compID := flecs.RegisterComponent[covPrefabComp](w)
+	var pfb, inst flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		pfb = fw.NewEntity()
+		flecs.Set(fw, pfb, covPrefabComp{V: 7})
+		flecs.MarkPrefab(fw, pfb)
+
+		inst = fw.NewEntity()
+		flecs.AddID(fw, inst, flecs.MakePair(w.IsA(), pfb)) // inst IsA pfb
+	})
+	count := 0
+	w.Read(func(r *flecs.Reader) {
+		// EachPrefab on inst iterates its (IsA, *) pairs.
+		r.EachPrefab(inst, func(prefabID flecs.ID) bool {
+			if prefabID == pfb {
+				count++
+			}
+			return true
+		})
+		// Also call with a non-existent entity to cover the early-return path.
+		r.EachPrefab(flecs.ID(999999), func(_ flecs.ID) bool { return true })
+	})
+	if count == 0 {
+		t.Error("EachPrefab: expected to find prefab for instance")
+	}
+	_ = compID
+}
+
+// TestCovTermKindString covers TermScope/TermOrFrom/TermNotFrom String() paths.
+func TestCovTermKindString(t *testing.T) {
+	cases := []struct {
+		k    flecs.TermKind
+		want string
+	}{
+		{flecs.TermScope, "Scope"},
+		{flecs.TermOrFrom, "OrFrom"},
+		{flecs.TermNotFrom, "NotFrom"},
+	}
+	for _, c := range cases {
+		got := c.k.String()
+		if got != c.want {
+			t.Errorf("TermKind(%d).String() = %q, want %q", int(c.k), got, c.want)
+		}
+	}
+}
+
+// TestCovCachedQuery_VariableOrder_Nil covers CachedQuery.VariableOrder returning nil
+// when the cached query has no variables.
+func TestCovCachedQuery_VariableOrder_Nil(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[covPos16b](w)
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID))
+	if order := cq.VariableOrder(); order != nil {
+		t.Errorf("VariableOrder with no variables: want nil, got %v", order)
+	}
+}
+
+// ── Coverage boost batch 2 ───────────────────────────────────────────────────
+
+// TestCovDeferredPolicyTags covers the deferred AddID dispatch paths in
+// cmd_queue.go (batchForEntity pass-1) for 6 policy trait tags: Exclusive,
+// Symmetric, Acyclic, Traversable, OrderedChildren, Sparse.
+// Each entity gets 2 commands so batchForEntity is triggered (c.nextForEntity < 0).
+// Note: WriteOnce is excluded because RegisterComponent entities lack rec.Table.
+func TestCovDeferredPolicyTags(t *testing.T) {
+	w := flecs.New()
+	var neutralTag, relExcl, relSym, relAcyc, relTrav, relOC, compSparse flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		neutralTag = fw.NewEntity()
+		relExcl = fw.NewEntity()
+		relSym = fw.NewEntity()
+		relAcyc = fw.NewEntity()
+		relTrav = fw.NewEntity()
+		relOC = fw.NewEntity()
+		compSparse = fw.NewEntity()
+	})
+	// Two commands per entity triggers batchForEntity, which executes the
+	// policy dispatch branches in cmd_queue.go's pass-1 loop.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, relExcl, w.Exclusive()); flecs.AddID(fw, relExcl, neutralTag)
+		flecs.AddID(fw, relSym, w.Symmetric()); flecs.AddID(fw, relSym, neutralTag)
+		flecs.AddID(fw, relAcyc, w.Acyclic()); flecs.AddID(fw, relAcyc, neutralTag)
+		flecs.AddID(fw, relTrav, w.Traversable()); flecs.AddID(fw, relTrav, neutralTag)
+		flecs.AddID(fw, relOC, w.OrderedChildren()); flecs.AddID(fw, relOC, neutralTag)
+		flecs.AddID(fw, compSparse, w.Sparse()); flecs.AddID(fw, compSparse, neutralTag)
+	})
+	// Verify at least one policy was applied.
+	w.Read(func(r *flecs.Reader) {
+		if !r.HasID(relExcl, w.Exclusive()) {
+			t.Error("Exclusive policy not applied")
+		}
+	})
+}
+
+// TestCovDeferredPolicyWith covers the bare With no-op branch in cmd_queue.go
+// batchForEntity pass-1 (the _ = entity stmt). w.With() has the Relationship
+// trait, so checkUsageConstraints panics immediately after; we recover it.
+func TestCovDeferredPolicyWith(t *testing.T) {
+	w := flecs.New()
+	var relWith, neutralTag flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		neutralTag = fw.NewEntity()
+		relWith = fw.NewEntity()
+	})
+	defer func() { _ = recover() }()
+	// Two commands for relWith triggers batchForEntity; the With no-op branch
+	// (_ = entity) executes, then checkUsageConstraints panics.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, relWith, w.With())
+		flecs.AddID(fw, relWith, neutralTag)
+	})
+}
+
+// TestCovAlwaysFalseCachedQuery covers NewCachedQueryFromTerms returning
+// alwaysFalse=true (via OrFrom with empty source) and CachedQuery.Iter()
+// returning the zero iterator for that case.
+func TestCovAlwaysFalseCachedQuery(t *testing.T) {
+	w := flecs.New()
+	var emptyEnt flecs.ID
+	w.Write(func(fw *flecs.Writer) { emptyEnt = fw.NewEntity() })
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.OrFrom(emptyEnt))
+	it := cq.Iter()
+	if it.Next() {
+		t.Error("expected zero results from alwaysFalse query")
+	}
+}
+
+// TestCovSetByIDInHook covers the SetByID deferDepth==0 immediate path,
+// which is reached when SetByID is called from within an OnAdd hook
+// (the hook fires during queue dispatch where deferDepth==0).
+func TestCovSetByIDInHook(t *testing.T) {
+	w := flecs.New()
+	type covHookA struct{ V int }
+	type covHookB struct{ V int }
+	bID := flecs.RegisterComponent[covHookB](w)
+	hookFired := false
+	flecs.OnAdd[covHookA](w, func(fw *flecs.Writer, e flecs.ID, v covHookA) {
+		hookFired = true
+		fw.SetByID(e, bID, covHookB{V: 42})
+	})
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, covHookA{V: 1})
+	})
+	if !hookFired {
+		t.Error("OnAdd hook did not fire")
+	}
+	w.Read(func(r *flecs.Reader) {
+		if v, ok := flecs.Get[covHookB](r, e1); !ok || v.V != 42 {
+			t.Errorf("SetByID in hook: got %v %v", v, ok)
+		}
+	})
+}
+
+// TestCovUnionPairBatchRemove covers the union-pair remove in batchForEntity
+// (cmd_queue.go:222) by queuing two commands for the same entity, one of
+// which is a union-pair RemoveID.
+func TestCovUnionPairBatchRemove(t *testing.T) {
+	w := flecs.New()
+	type covUnionTag struct{}
+	var rel, tgt, e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
+		e1 = fw.NewEntity()
+	})
+	flecs.SetUnion(w, rel)
+	// Add union pair immediately so the entity has it.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e1, flecs.MakePair(rel, tgt))
+	})
+	type covExtraTag struct{}
+	extraID := flecs.RegisterComponent[covExtraTag](w)
+	// Two commands for e1: AddID(extraTag) + RemoveID(unionPair).
+	// Having two commands triggers batchForEntity, which hits the union-pair break.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e1, extraID)
+		flecs.RemoveID(fw, e1, flecs.MakePair(rel, tgt))
+	})
+	w.Read(func(r *flecs.Reader) {
+		if r.HasID(e1, flecs.MakePair(rel, tgt)) {
+			t.Error("union pair should be removed")
+		}
+	})
+}
+
+// TestCovTableObserverTermNot covers tableMatchesTerms TermNot branch
+// (observer_table.go:245) by registering a WithYieldExisting OnTableFill
+// observer with a TermNot filter for a component that exists in a table.
+func TestCovTableObserverTermNot(t *testing.T) {
+	w := flecs.New()
+	type covObsA struct{ V int }
+	type covObsB struct{ V int }
+	aID := flecs.RegisterComponent[covObsA](w)
+	bID := flecs.RegisterComponent[covObsB](w)
+	// Create entity with A first (so the A table exists).
+	var e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, covObsA{V: 1})
+		flecs.Set(fw, e1, covObsB{V: 2})
+	})
+	// Register observer with TermNot(A) and yieldExisting.
+	// Tables that have A will fail the TermNot check (covering the return path).
+	callCount := 0
+	flecs.OnTableFillWithOptions(w,
+		flecs.WithQuery(flecs.Without(aID)).AndYieldExisting(),
+		func(fw *flecs.Writer, tbl *flecs.Table) { callCount++ },
+	)
+	_ = bID
+	_ = e1
+	// callCount may be 0 or >0 depending on what tables exist; we just need the code to run.
+}
+
+// TestCovCachedQueryPrefabSkip covers tryMatchTable's skipPrefab early-return
+// (cached_query.go:737) by creating a CachedQuery and then adding a Prefab entity.
+func TestCovCachedQueryPrefabSkip(t *testing.T) {
+	w := flecs.New()
+	type covPrefSkip struct{ V int }
+	posID := flecs.RegisterComponent[covPrefSkip](w)
+	// CachedQuery with skipPrefab=true (default).
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(posID))
+	// Create a Prefab entity — this triggers tryMatchTable on cq with a Prefab table.
+	var pfb flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		pfb = fw.NewEntity()
+		flecs.MarkPrefab(fw, pfb)
+		flecs.Set(fw, pfb, covPrefSkip{V: 1})
+	})
+	count := 0
+	it := cq.Iter()
+	for it.Next() {
+		count++
+	}
+	// Prefab should not appear in results.
+	if count != 0 {
+		t.Errorf("expected 0 non-prefab results, got %d", count)
+	}
+	_ = pfb
+}
+
+// TestCovSparseBatchRemove covers two coverage gaps:
+// 1. cmd_queue.go:226 (sparse/DontFragment remove break in batchForEntity)
+//    - triggered when two commands for the same entity include Remove[Sparse]
+// 2. scope.go:692 (sparse remove returns false when entity lacks component)
+//    - triggered by calling Remove[Sparse] on an entity without the component
+func TestCovSparseBatchRemove(t *testing.T) {
+	w := flecs.New()
+	type covSparseRm struct{ V int }
+	cID := flecs.RegisterComponent[covSparseRm](w)
+	flecs.SetSparse(w, cID)
+	type covExtraRm struct{}
+	extraID := flecs.RegisterComponent[covExtraRm](w)
+	var e1, e2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e1 = fw.NewEntity()
+		e2 = fw.NewEntity()
+		flecs.Set(fw, e1, covSparseRm{V: 5})
+	})
+	// Two commands for e1: AddID(extra) + Remove[Sparse].
+	// batchForEntity sees the sparse Remove and hits cmd_queue.go:226.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e1, extraID)
+		flecs.Remove[covSparseRm](fw, e1)
+	})
+	// Remove sparse from e2 which doesn't have it → scope.go:692 return false.
+	removed := false
+	w.Write(func(fw *flecs.Writer) {
+		removed = flecs.Remove[covSparseRm](fw, e2)
+	})
+	if removed {
+		t.Error("expected Remove to return false for entity without sparse component")
+	}
+}
+
+// TestCovDeadEntityCalls covers three early-return paths for dead/nil entities:
+// scope.go:149 (OwnsID), scope.go:511 (GetPairTarget), scope.go:258 (EntityComponents).
+func TestCovDeadEntityCalls(t *testing.T) {
+	w := flecs.New()
+	type covDeadComp struct{ V int }
+	relID := flecs.RegisterComponent[covDeadComp](w)
+	var deadID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		deadID = fw.NewEntity()
+		fw.Delete(deadID)
+	})
+	w.Read(func(r *flecs.Reader) {
+		// OwnsID on dead entity → scope.go:149 return false.
+		if r.OwnsID(deadID, relID) {
+			t.Error("OwnsID should return false for dead entity")
+		}
+		// GetPairTarget on dead entity → scope.go:511 return 0,false.
+		if tgt, ok := flecs.GetPairTarget(r, deadID, relID); ok || tgt != 0 {
+			t.Errorf("GetPairTarget should return 0,false for dead entity, got %v %v", tgt, ok)
+		}
+		// EntityComponents on dead entity → scope.go:258 return nil.
+		if comps := r.EntityComponents(deadID); comps != nil {
+			t.Errorf("EntityComponents should return nil for dead entity, got %v", comps)
+		}
+	})
+}
+
+// TestCovWriterMethodWrappers covers the fw.MakeAlive and fw.SetVersion
+// method wrappers (scope.go:404 and :407). Both panic in deferred scope,
+// so each is called in a separate immediately-invoked closure with recover.
+func TestCovWriterMethodWrappers(t *testing.T) {
+	w := flecs.New()
+	// Cover scope.go:404 — MakeAlive wrapper; panics in deferred scope.
+	func() {
+		defer func() { _ = recover() }()
+		w.Write(func(fw *flecs.Writer) { fw.MakeAlive(flecs.ID(9999)) })
+	}()
+	// Cover scope.go:407 — SetVersion wrapper; panics in deferred scope.
+	func() {
+		defer func() { _ = recover() }()
+		w.Write(func(fw *flecs.Writer) { fw.SetVersion(flecs.ID(1)) })
+	}()
+}
+
+// TestCovEachSystemPipelineDirty covers the pipelineDirty rebuild path
+// in Reader.EachSystem (scope.go:340).
+func TestCovEachSystemPipelineDirty(t *testing.T) {
+	w := flecs.New()
+	// NewPhase + DependsOn sets pipelineDirty=true; anchoring avoids rebuild panic.
+	phase := flecs.NewPhase(w, "covTestPhase")
+	phase.DependsOn(w.OnUpdate())
+	// EachSystem with a dirty pipeline triggers rebuildPipeline() (scope.go:341).
+	w.Read(func(r *flecs.Reader) {
+		count := 0
+		r.EachSystem(phase, func(s *flecs.System) bool {
+			count++
+			return true
+		})
+		_ = count
+	})
+}
+
+// TestCovRelVarIntersection covers the intersection branch in collectVarDomainFor
+// (query.go:1101) by creating a query with two terms sharing the same relVar.
+func TestCovRelVarIntersection(t *testing.T) {
+	w := flecs.New()
+	type covRVI struct{ V int }
+	posID := flecs.RegisterComponent[covRVI](w)
+	var tgt1, tgt2, e1 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tgt1 = fw.NewEntity()
+		tgt2 = fw.NewEntity()
+		e1 = fw.NewEntity()
+		flecs.Set(fw, e1, covRVI{V: 1})
+	})
+	// Create a relationship rel that has pairs with both tgt1 and tgt2.
+	var rel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		flecs.AddID(fw, e1, flecs.MakePair(rel, tgt1))
+		flecs.AddID(fw, e1, flecs.MakePair(rel, tgt2))
+	})
+	_ = rel
+	// Two terms with the same relVar "R" — first builds the domain set,
+	// second hits the else/intersection branch (query.go:1101).
+	q := flecs.NewQueryFromTerms(w,
+		flecs.WithPairRelVar("R", tgt1),
+		flecs.WithPairRelVar("R", tgt2),
+		flecs.WithVar(posID, "E"),
+	)
+	w.Read(func(_ *flecs.Reader) {
+		it := q.Iter()
+		for it.Next() {
+			_ = it
+		}
+	})
+}

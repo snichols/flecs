@@ -1231,3 +1231,37 @@ func TestParse_TableVarSyntax(t *testing.T) {
 		t.Errorf("want 1 TermAnd (Position), got %d", andCount)
 	}
 }
+
+// TestCovDSL_DollarNoIdent covers parsePrimaryTerm when $ is followed by a
+// non-identifier character (query_dsl.go:658.10,661.4, 2 stmts).
+func TestCovDSL_DollarNoIdent(t *testing.T) {
+	w := New()
+	_, err := parseQueryExpr("$!", w)
+	if err == nil {
+		t.Error("expected error for $! expression")
+	}
+	var pe *ParseQueryError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *ParseQueryError, got %T: %v", err, err)
+	}
+	if pe.Code != ErrCodeExpectedIdent {
+		t.Errorf("want ErrCodeExpectedIdent, got %v", pe.Code)
+	}
+}
+
+// TestCovDSL_TableKindNoComponent covers parsePrimaryTerm when $Var: has no
+// component name following the colon (query_dsl.go:669.12,671.5, 1 stmt).
+func TestCovDSL_TableKindNoComponent(t *testing.T) {
+	w := New()
+	_, err := parseQueryExpr("$T:", w)
+	if err == nil {
+		t.Error("expected error for $T: expression without component name")
+	}
+	var pe *ParseQueryError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *ParseQueryError, got %T: %v", err, err)
+	}
+	if pe.Code != ErrCodeExpectedIdent {
+		t.Errorf("want ErrCodeExpectedIdent, got %v", pe.Code)
+	}
+}
