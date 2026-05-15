@@ -1208,6 +1208,10 @@ func deleteImmediate(w *World, e ID) bool {
 	stack := []ID{e}
 	var toDelete []ID
 	seen := make(map[ID]struct{})
+	// psRemoveOps collects (src, rel, tgt) triples for parent-storage RemoveAction.
+	// Applied after all deletions so we don't mutate tables mid-scan.
+	type removeOp struct{ src, rel, tgt ID }
+	var psRemoveOps []removeOp
 	for len(stack) > 0 {
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -1219,7 +1223,7 @@ func deleteImmediate(w *World, e ID) bool {
 
 		// Apply OnDeleteTarget policies for each relationship that has one.
 		for relID, flags := range w.cleanupPolicies {
-			if flags&(policyOnDeleteTargetDelete|policyOnDeleteTargetPanic) == 0 {
+			if flags&(policyOnDeleteTargetDelete|policyOnDeleteTargetPanic|policyOnDeleteTargetRemove) == 0 {
 				continue
 			}
 			relKey := ID(relID.Index())
@@ -1232,16 +1236,30 @@ func deleteImmediate(w *World, e ID) bool {
 			if w.parentStoragePolicies[relKey] {
 				marker := MakePair(relID, w.anyID)
 				nodeIdx := node.Index()
+				var psSrcs []ID
 				w.compIndex.Each(marker, func(t *table.Table) bool {
 					col := t.GetParentCol(relKey)
 					ents := t.Entities()
 					for i, src := range ents {
 						if col != nil && i < len(col) && col[i].Index() == nodeIdx && w.index.IsAlive(src) {
-							stack = append(stack, src)
+							psSrcs = append(psSrcs, src)
 						}
 					}
 					return true
 				})
+				if flags&policyOnDeleteTargetPanic != 0 && len(psSrcs) > 0 {
+					panic(fmt.Sprintf("flecs: cannot delete entity %v: it is a target of relationship %v (source entity: %v) which has OnDeleteTarget+Panic policy", node, relID, psSrcs[0]))
+				}
+				if flags&policyOnDeleteTargetRemove != 0 {
+					for _, src := range psSrcs {
+						psRemoveOps = append(psRemoveOps, removeOp{src, relID, node})
+					}
+				} else {
+					// policyOnDeleteTargetDelete: cascade-delete parent-storage sources.
+					for _, src := range psSrcs {
+						stack = append(stack, src)
+					}
+				}
 				if len(tables) == 0 {
 					continue
 				}
@@ -1289,6 +1307,12 @@ func deleteImmediate(w *World, e ID) bool {
 	// Delete in post-order: deepest descendants first, root last.
 	for i := len(toDelete) - 1; i >= 0; i-- {
 		w.deleteOne(toDelete[i])
+	}
+	// Apply parent-storage RemoveAction: remove pairs from surviving source entities.
+	for _, op := range psRemoveOps {
+		if w.index.IsAlive(op.src) {
+			w.removeParentStoragePair(op.src, op.rel, op.tgt)
+		}
 	}
 	return true
 }
