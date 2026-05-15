@@ -1,4 +1,0 @@
-## iterate iteration 1 (2026-05-15)
-
-Phase 16.39 depth-N type-info recursion implemented and shipped as v0.94.0. New rest_type_walk.go provides walkTypeForJSON with cycle detection, primitiveTypeNode for precise type mapping, parseWalkDepth for ?depth=N validation. Handler extended to use old schema for explicit ?depth=1 (byte-identical v0.87.0 back-compat) and new schema (typeInfoResponseV2 with id/kind fields) for all other depths. 32 tests total (17 new + 4 updated existing); 95.0% coverage; go vet, golangci-lint, -race -count=3 all clean. Docs updated: FlecsRemoteApi.md (full /type_info section rewrite with depth table, response shapes, cycle detection semantics), docs/README.md (lines 90 and 181 flipped to shipped), CHANGELOG.md (v0.94.0 entry), ROADMAP.md (bumped heading, added Phase 16.39 row), README.md (REST API row updated).
-
