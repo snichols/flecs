@@ -196,6 +196,11 @@ type World struct {
 	statsAggPipeSec   pipelineAggWindows
 	statsAggPipeMin   pipelineAggWindows
 	statsAggPipeHour  pipelineAggWindows
+	// builtinByName maps canonical built-in entity names (e.g. "ChildOf", "Disabled")
+	// to their entity IDs. Checked by LookupChild before the component scan so that
+	// built-in entities are DSL-resolvable without holding a Name component (which
+	// would create an extra table and affect yield-existing observers).
+	builtinByName map[string]ID
 }
 
 // New initializes and returns an empty World.
@@ -718,6 +723,17 @@ func New() *World {
 	w.writeCapability.Reader.world = w
 	w.writeCapability.stage = s0
 	w.readCapability.world = w
+	// Register canonical names for built-in entities in a lightweight index so
+	// they are resolvable via w.Lookup without adding a Name component (which
+	// would create a table and affect yield-existing observers).
+	w.builtinByName = map[string]ID{
+		"ChildOf":  w.childOfID,
+		"IsA":      w.isAID,
+		"Disabled": w.disabledID,
+		"Prefab":   w.prefabID,
+		"Wildcard": w.wildcardID,
+		"Any":      w.anyID,
+	}
 	return w
 }
 

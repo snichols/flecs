@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.95.0 — 2026-05-15 — Phase 16.40: Query DSL REST endpoint
+
+Ships `GET /query?expr=<flecs-query-expression>` — the last outstanding REST endpoint from
+the Phase 14.9 gap list. The handler parses a Flecs Query Language v1 subset into
+structured `Term`s, runs the query inside a `World.Read` scope, and returns matched
+entities with optional typed-component field values as JSON.
+
+### New endpoint
+
+`GET /query?expr=<urlencoded-expression>` — required; missing or blank → 400.
+
+#### Query parameters
+
+| Parameter | Default | Constraints |
+|-----------|---------|-------------|
+| `expr` | — | Required. URL-encoded FQL v1 expression. |
+| `limit` | `256` | Max `4096`; non-integer or negative → 400. |
+| `offset` | `0` | Non-integer or negative → 400. |
+| `fields` | `true` | `true` or `false`; other values → 400. |
+
+#### Response shape (200 OK)
+
+```json
+{
+  "expr": "Position, !Disabled",
+  "count": 42,
+  "limit": 256,
+  "offset": 0,
+  "results": [
+    {
+      "entity": 1234,
+      "path": "units.archer",
+      "fields": {
+        "Position": {"X": 1.0, "Y": 2.0}
+      }
+    }
+  ]
+}
+```
+
+`count` is the total number of matched entities (ignores `limit`/`offset`).
+`fields` contains typed components named in TermAnd terms — tags, NOT-terms, and
+dynamic components without a marshaler are omitted. Pair fields are keyed as `"R~T"`.
+
+### New files
+
+- **`query_dsl.go`** — `parseQueryExpr`, `ParseQueryError`, `queryParser` recursive-descent parser.
+- **`rest_query.go`** — `restQuery` HTTP handler, `marshalComponentForQuery`.
+- **`docs/QueryDSL.md`** — full v1 DSL reference: BNF grammar, supported tokens, deferred v2 features, error semantics.
+
+### Tests
+
+21 new tests in `query_dsl_test.go`, `rest_query_test.go`, and `rest_query_internal_test.go`.
+95.0% statement coverage; `go vet`, `golangci-lint`, `-race -count=3` all clean.
+
 ## v0.94.0 — 2026-05-15 — Phase 16.39: Depth-N type-info recursion
 
 Extends `GET /type_info/{path}` (Phase 16.32 / v0.87.0) from a depth-1 reflect walk to

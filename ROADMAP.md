@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.94.0)
+## Shipped (through v0.95.0)
 
 The following features are available in the current release:
 
@@ -95,6 +95,7 @@ The following features are available in the current release:
 - **REST GET /component endpoint** _(v0.92.0, Phase 16.37)_ — `GET /component/{entity}/{component}` reads the live value of a single component on a single entity and returns it as JSON. Mirrors `MarshalJSON` serialization rules: typed → `json.Marshal(value)`; dynamic with marshaler → marshaler output; dynamic without marshaler → base64-encoded raw bytes (JSON string); tag → `{}`. `Cache-Control: no-store`. `400` malformed path; `404` missing entity/component/holder; `503` panic recovery. Reuses `resolveComponentPaths` (Phase 16.34). Closes the `GET /component` portion of `docs/README.md` gap line 90 (Phase 16.34 partial-closure note); query DSL remains outstanding. See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#get-componententitycomponent).
 - **Multi-period stats aggregation** _(v0.93.0, Phase 16.38)_ — `?period=second|minute|hour` on `GET /stats/world` and `GET /stats/pipeline`; ring-buffer cascade (second→minute→hour every 60/3600 ticks); `MetricGauge`/`MetricCounter`/`StatsWindow`/`StatsPeriod` types; `WorldStatsAggregated`/`PipelineStatsAggregated`; `WorldStatsWindow`/`PipelineStatsWindow`/`StatsTick` API. Back-compat: absent `?period=` returns instant (legacy) snapshot unchanged. See [docs/Stats.md](docs/Stats.md) and [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md).
 - **Depth-N type-info recursion** _(v0.94.0, Phase 16.39)_ — `?depth=N` on `GET /type_info/{path}` (default 8, max 16); depth-N struct expansion; cycle detection (`recursive: true` on path re-entry; siblings independently expand); precise primitive-type annotations (named types emit `underlying`); slice/array/map/pointer handling; `kind` discriminator on every node; `?depth=1` back-compat byte-identical to v0.87.0; `?depth=0` header-only. New file `rest_type_walk.go`. Closes `docs/README.md` gap line 181. See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#get-type_infopath).
+- **Query DSL REST endpoint** _(v0.95.0, Phase 16.40)_ — `GET /query?expr=<expression>` parses a Flecs Query Language v1 subset (bare components, `,` AND, `!` NOT, `(R, T)` pairs, `*`/`_` wildcards) into `Term`s, executes the query inside `World.Read`, and returns matched entities with typed-component field values as JSON. `?limit` (default 256, max 4096), `?offset`, `?fields=true|false`. Error responses carry character offset and 5-rune context window. New files `query_dsl.go`, `rest_query.go`, `docs/QueryDSL.md`. Closes Phase 14.9 gap `GET /query`. See [docs/FlecsRemoteApi.md § GET /query](docs/FlecsRemoteApi.md#get-query) and [docs/QueryDSL.md](docs/QueryDSL.md).
 
 ## Documentation
 

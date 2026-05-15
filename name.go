@@ -51,6 +51,13 @@ func (w *World) RemoveName(e ID) bool {
 // Behavior is undefined when sibling names collide; do not rely on ordering.
 func (w *World) LookupChild(parent ID, name string) (ID, bool) {
 	w.checkExclusiveAccessRead()
+	// For root-scope lookups, check the built-in name index first. This makes
+	// "ChildOf", "IsA", "Disabled", etc. resolvable without a Name component.
+	if parent == 0 {
+		if id, ok := w.builtinByName[name]; ok {
+			return id, true
+		}
+	}
 	if parent != 0 {
 		var found ID
 		w.EachChild(parent, func(child ID) bool {

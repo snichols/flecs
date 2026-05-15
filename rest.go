@@ -45,6 +45,7 @@ import (
 //	GET /entities/{id}                       — entity detail (200 or 404)
 //	GET /snapshot                            — full world MarshalJSON output (200 or 500)
 //	PUT /snapshot                            — replace world state; body is MarshalJSON output (204, 400)
+//	GET /query                               — execute query DSL expression; ?expr=required (200, 400, 405, 503)
 //	GET /type_info/{path}                    — reflection schema for a named component (200, 404)
 //	PUT /entity                              — create or claim entity; JSON body {id?,name?,parent?} (200, 400, 404, 409, 503)
 //	DELETE /entity/{path...}                 — delete entity by dot-separated path (200, 400, 404, 503)
@@ -64,6 +65,7 @@ func NewRESTHandler(w *World) http.Handler {
 	mux.HandleFunc("GET /entities/{id}", restEntityByID(w))
 	mux.HandleFunc("GET /snapshot", restSnapshotGet(w))
 	mux.HandleFunc("PUT /snapshot", restSnapshotPut(w))
+	mux.HandleFunc("GET /query", restQuery(w))
 	mux.HandleFunc("GET /type_info/{path...}", restTypeInfo(w))
 	// writeMu serializes concurrent w.Write calls; w.Write is not goroutine-safe
 	// when called from multiple goroutines simultaneously (pre-existing inMerge race).

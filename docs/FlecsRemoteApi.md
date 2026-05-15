@@ -98,6 +98,7 @@ the world API.
 | GET | `/snapshot` | Full world snapshot (JSON) |
 | PUT | `/snapshot` | Load a world snapshot |
 | GET | `/type_info/{path}` | Reflection schema for a named component; `Cache-Control: max-age=300` |
+| GET | `/query` | Query DSL: evaluate FQL v1 expression; returns matched entities + fields |
 | PUT | `/entity` | Create or claim an entity (JSON body); returns `{ id, name }` |
 | DELETE | `/entity/{path...}` | Delete an entity by dot-separated path |
 
@@ -667,6 +668,132 @@ if resp.StatusCode != http.StatusNoContent {
 
 ---
 
+## GET /query
+
+Evaluates a Flecs Query Language v1 expression and returns matched entities with optional
+typed-component field values as JSON (v0.95.0). See [QueryDSL.md](QueryDSL.md) for the
+full grammar reference.
+
+```
+GET /query?expr=<urlencoded-expression>[&limit=N][&offset=N][&fields=true|false]
+→ 200 OK           application/json
+→ 400 Bad Request  (missing/blank expr, parse error, invalid limit/offset/fields)
+→ 503 Service Unavailable  (world exclusively locked by another goroutine)
+```
+
+### Query parameters
+
+| Parameter | Default | Constraints |
+|-----------|---------|-------------|
+| `expr` | — | **Required.** URL-encoded FQL v1 expression. |
+| `limit` | `256` | Max `4096`. Non-integer or negative → 400. |
+| `offset` | `0` | Non-integer or negative → 400. |
+| `fields` | `true` | `true` or `false`. Other values → 400. |
+
+### Response shape
+
+```json
+{
+  "expr": "Position, !Disabled",
+  "count": 42,
+  "limit": 256,
+  "offset": 0,
+  "results": [
+    {
+      "entity": 1234,
+      "path": "units.archer",
+      "fields": {
+        "Position": {"X": 1.0, "Y": 2.0},
+        "Velocity": {"DX": 3.0, "DY": 0.0}
+      }
+    }
+  ]
+}
+```
+
+`count` is the total number of matched entities (always reflects the full result set,
+not the windowed `results` array). `path` is the dot-separated entity path or an empty
+string for unnamed entities.
+
+**`fields` map rules** — mirrors the marshaling rules from `GET /component`:
+
+| Component kind | Field value |
+|----------------|-------------|
+| Typed (Go struct) | `json.Marshal(value)` |
+| Dynamic + custom marshaler | Marshaler output |
+| Dynamic without marshaler | Omitted (not included) |
+| Tag (zero-size) | Omitted (not included) |
+| NOT-term | Omitted (excluded by query) |
+| Wildcard pair | Omitted (concrete target unknown statically) |
+
+Pair component keys use `~` as the separator: `"ChildOf~parent"` (consistent with the
+`PUT /component` and `GET /component` pair encoding from Phase 16.34).
+
+### Curl
+
+```bash
+# Simple component query
+curl "http://localhost:8080/query?expr=Position"
+
+# AND query with NOT
+curl "http://localhost:8080/query?expr=Position%2C%20!Disabled"
+
+# Pair query with pagination
+curl "http://localhost:8080/query?expr=(ChildOf%2C%20scene)&limit=20&offset=40"
+
+# Field values suppressed
+curl "http://localhost:8080/query?expr=Position&fields=false"
+```
+
+### Go client
+
+```go
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "net/url"
+)
+
+type QueryResult struct {
+    Expr    string `json:"expr"`
+    Count   int    `json:"count"`
+    Limit   int    `json:"limit"`
+    Offset  int    `json:"offset"`
+    Results []struct {
+        Entity int64                      `json:"entity"`
+        Path   string                     `json:"path"`
+        Fields map[string]json.RawMessage `json:"fields,omitempty"`
+    } `json:"results"`
+}
+
+func queryEntities(base, expr string, limit, offset int) (*QueryResult, error) {
+    u := fmt.Sprintf("%s/query?expr=%s&limit=%d&offset=%d",
+        base, url.QueryEscape(expr), limit, offset)
+    resp, err := http.Get(u)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    var result QueryResult
+    return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+```
+
+### Error response for parse failures
+
+```json
+{
+  "error": "query parse error at position 9 (near \"XYZ\"): unknown identifier \"XYZ\""
+}
+```
+
+The `position` field in the error message is the 0-based rune offset where the parser
+detected the error. The FlecsExplorer UI uses this to place an inline error marker in
+the query input box.
+
+---
+
 ## GET /type_info/{path}
 
 Returns the reflection schema for a named component as JSON (v0.94.0). The path is a
@@ -1145,11 +1272,12 @@ response body saves a follow-up read and tells the client the new state directly
 
 ### Query execution endpoint
 
-> **Not yet ported in Go flecs.** `GET /query?expr=<expr>` evaluates a Flecs Query
-> Language expression and streams matched entities with their field values. This requires
-> the FlecsQueryLanguage DSL and `ecs_iter_to_json`, neither of which is ported to Go
-> flecs. Go queries are constructed with type parameters (`flecs.NewQuery`,
-> `flecs.NewCachedQuery`) rather than a string DSL.
+> **Ported in Go flecs (v0.95.0, Phase 16.40).** `GET /query?expr=<expr>` is fully
+> implemented — see [`## GET /query`](#get-query) above. The Go implementation parses a
+> Flecs Query Language v1 subset (bare components, `,` AND, `!` NOT, `(R,T)` pairs,
+> `*`/`_` wildcards) and returns matched entities with typed field values. Streaming
+> (`chunked transfer`) and the full upstream FQL feature set are deferred to v2; see
+> [QueryDSL.md § Deferred features](QueryDSL.md#deferred-features-v2).
 
 ### World dump endpoint
 
@@ -1216,7 +1344,7 @@ response body saves a follow-up read and tells the client the new state directly
 
 ## Feature gaps discovered in Phase 14.9 (FlecsRemoteApi port)
 
-- **Query execution endpoint** (`GET /query?expr=`) — requires FlecsQueryLanguage DSL; not ported to Go flecs.
+- **Query execution endpoint** (`GET /query?expr=`) — ✅ shipped in v0.95.0 (Phase 16.40). See [`## GET /query`](#get-query) and [QueryDSL.md](QueryDSL.md).
 - **Entity mutation endpoints** (`PUT /entity`, `DELETE /entity/{path...}`) — ✅ shipped in v0.88.0. See [`## PUT /entity`](#put-entity) and [`## DELETE /entity/{path...}`](#delete-entitypath).
 - **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — ✅ mutation shipped in v0.89.0. See [`## PUT /component/{entity}/{component}`](#put-componententitycomponent) and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent). `GET /component` (value read) not yet ported.
 - **Toggle endpoint** (`PUT /toggle`) — ✅ shipped in v0.90.0. See [`### Toggle endpoint`](#toggle-endpoint) above.
