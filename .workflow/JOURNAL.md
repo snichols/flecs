@@ -14,3 +14,7 @@ Added ParentStorage trait section to docs/Relationships.md — new subsection un
 
 Fixed stale reference on docs/README.md line 109: updated "Join-order optimization deferred to Phase 16.27" to "shipped in v0.99.0 (Phase 16.44)".
 
+## iterate iteration 5 (2026-05-15)
+
+Added non-fragmenting parent storage row to root README.md feature table (line 218), citing SetParentStorage, IsParentStorage, v0.102.0, and O(1) reparenting — the sole gap flagged by the verify gate.
+
