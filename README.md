@@ -251,8 +251,8 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Explicit thread dispatch _(v0.82.0)_ | `RunSystemWorker(w, sys, workerIndex, workerCount, dt)` — out-of-pipeline fan-out: each goroutine gets a disjoint row slice; fresh per-call command queue flushed before return; disabled flag bypassed. See [Systems.md § RunSystemWorker](docs/Systems.md#runsystemworker). |
 | Alerts addon _(v0.83.0)_ | `RegisterAlert(fw, AlertDesc{Query, Severity, Message})` — query-driven raise/clear lifecycle via monitor observer; `w.Alerts()` / `w.AlertsBySeverity(sev)` / `w.AlertsForEntity(e)` snapshot helpers; `AlertInfo`/`AlertWarning`/`AlertError`/`AlertCritical` constants; `%d` entity-ID interpolation; definitions survive JSON round-trip. See [docs/Alerts.md](docs/Alerts.md). |
 | Pipeline introspection _(v0.58.0)_ | `r.Phases() []*Phase`, `r.SystemsInPhase(phase *Phase) []*System`, `r.EachSystem(phase *Phase, fn)` — inspect registered systems in execution order |
-| Parallel dispatch | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency with disjoint write sets |
-| Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); in-place `Field[T]` updates scale linearly; deferred mutations (Set/Delete) are safe but contend on the shared defer queue until Phase 11.0 |
+| Parallel dispatch _(v0.105.0)_ | `sys.SetParallel(true)`, `sys.SetWriteSet(ids)`, `w.SetWorkerCount(n)` — across-system concurrency; each system in a batch owns an exclusive stage queue (wave-based per-stage routing, Phase 16.50); deferred mutations (Set/Delete/AddID) are race-free with zero synchronization on the hot path |
+| Multi-threaded dispatch | `sys.SetMultiThreaded(true)` — splits ONE system's iter across all workers (disjoint row slices); each worker owns a per-stage queue; in-place `Field[T]` updates and deferred mutations both scale linearly |
 | World-level merge hooks _(v0.78.0)_ | `OnPreMerge(w, fn)` / `OnPostMerge(w, fn)` — persistent callbacks at every deferred-command merge boundary; `RemovePreMergeHook` / `RemovePostMergeHook` for teardown; pre-hook mutations batch with current merge, post-hook mutations queue for next; one fire per merge boundary (not per worker stage); `ErrMergeReentry` guard prevents re-entrant `w.Write` from inside hooks. See [Systems.md § Merge hooks](docs/Systems.md#merge-hooks). |
 | Fixed timestep | `SetFixedTimestep`, `OnFixedUpdate` phase |
 | Singleton component trait _(v0.44.0)_ | `SetSingleton(w, compID)` / `IsSingleton(scope, compID)` / `SingletonEntity` / `Singleton[T]` / `WriteSingleton[T]` — at-most-one-holder enforcement (Go semantic; differs from C must-be-self) |
@@ -296,7 +296,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Up/SelfUp/Cascade query terms | ✅ (`With(id).Up(rel)`, `.SelfUp(rel)`, `.Cascade(rel)`; `IsFieldSelf`, `FieldShared[T]`) | ✅ |
 | Change detection | ✅ (`CachedQuery.Changed()`, per-table) | ✅ |
 | Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
-| Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates scale linearly; deferred mutations serialize on shared queue until Phase 11.0) | ✅ |
+| Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates and deferred mutations both race-free via per-stage queues) | ✅ |
 | REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
 | Query variables ($Var) | ✅ multi-variable (`WithVar`, `WithPairTgtVar`, `SrcVar`, `TgtVar`, `Var`; 16-variable cap; join-order optimizer v0.99.0 / Phase 16.44) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |

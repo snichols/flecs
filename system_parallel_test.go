@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,4 +230,788 @@ func TestMultiThreadedSystemWithDeferredMutations(t *testing.T) {
 			t.Fatalf("entity %v should be dead after deferred Delete from multi-threaded worker", e)
 		}
 	}
+}
+
+// --- Phase 16.50: per-stage parallel-batch tests ---
+
+// parallelTag types for per-stage tests (distinct from types used above).
+type psTagA struct{}
+type psTagB struct{}
+type psTagC struct{}
+type psTagD struct{}
+
+// TestParallelSystems_DeferredMutationsCorrect verifies that N parallel systems
+// each enqueue distinct structural mutations (Delete) and all are applied after
+// Progress with per-stage routing.
+func TestParallelSystems_DeferredMutationsCorrect(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(4)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+	dID := flecs.RegisterComponent[psTagD](w)
+
+	const n = 50
+	var asEnt, bsEnt, csEnt, dsEnt []flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			asEnt = append(asEnt, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+			bsEnt = append(bsEnt, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, cID)
+			csEnt = append(csEnt, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, dID)
+			dsEnt = append(dsEnt, e)
+		}
+	})
+
+	makeDeleter := func(ids []flecs.ID, cq *flecs.CachedQuery) func(float32, *flecs.QueryIter) {
+		return func(_ float32, it *flecs.QueryIter) {
+			fw := it.Writer()
+			for _, e := range ids {
+				fw.Delete(e)
+			}
+		}
+	}
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	cqB := flecs.NewCachedQuery(w, bID)
+	cqC := flecs.NewCachedQuery(w, cID)
+	cqD := flecs.NewCachedQuery(w, dID)
+
+	sA := flecs.NewSystem(w, cqA, makeDeleter(asEnt, cqA))
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	sB := flecs.NewSystem(w, cqB, makeDeleter(bsEnt, cqB))
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	sC := flecs.NewSystem(w, cqC, makeDeleter(csEnt, cqC))
+	sC.SetParallel(true)
+	sC.SetWriteSet([]flecs.ID{cID})
+
+	sD := flecs.NewSystem(w, cqD, makeDeleter(dsEnt, cqD))
+	sD.SetParallel(true)
+	sD.SetWriteSet([]flecs.ID{dID})
+
+	w.Progress(0)
+
+	for i, e := range asEnt {
+		if w.IsAlive(e) {
+			t.Fatalf("asEnt[%d] still alive after parallel Delete", i)
+		}
+	}
+	for i, e := range bsEnt {
+		if w.IsAlive(e) {
+			t.Fatalf("bsEnt[%d] still alive after parallel Delete", i)
+		}
+	}
+	for i, e := range csEnt {
+		if w.IsAlive(e) {
+			t.Fatalf("csEnt[%d] still alive after parallel Delete", i)
+		}
+	}
+	for i, e := range dsEnt {
+		if w.IsAlive(e) {
+			t.Fatalf("dsEnt[%d] still alive after parallel Delete", i)
+		}
+	}
+}
+
+// TestParallelSystems_NoDataRace exercises the per-stage routing under the race
+// detector. Run with go test -race -count=10 to catch concurrent access.
+// The test creates 4 parallel systems that all perform deferred mutations;
+// with the old shared-stage path this triggered concurrent map/slice writes.
+func TestParallelSystems_NoDataRace(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(4)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+	dID := flecs.RegisterComponent[psTagD](w)
+
+	const n = 100
+	w.Write(func(fw *flecs.Writer) {
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, cID)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, dID)
+		}
+	})
+
+	mutate := func(otherID flecs.ID) func(float32, *flecs.QueryIter) {
+		return func(_ float32, it *flecs.QueryIter) {
+			fw := it.Writer()
+			for it.Next() {
+				for _, e := range it.Entities() {
+					fw.AddID(e, otherID)
+				}
+			}
+		}
+	}
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	cqB := flecs.NewCachedQuery(w, bID)
+	cqC := flecs.NewCachedQuery(w, cID)
+	cqD := flecs.NewCachedQuery(w, dID)
+
+	// Each system adds a tag from its own ID namespace; write sets are disjoint.
+	sA := flecs.NewSystem(w, cqA, mutate(bID))
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	sB := flecs.NewSystem(w, cqB, mutate(cID))
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	sC := flecs.NewSystem(w, cqC, mutate(dID))
+	sC.SetParallel(true)
+	sC.SetWriteSet([]flecs.ID{cID})
+
+	sD := flecs.NewSystem(w, cqD, mutate(aID))
+	sD.SetParallel(true)
+	sD.SetWriteSet([]flecs.ID{dID})
+
+	// Run multiple ticks; the race detector catches concurrent stage-0 access.
+	for range 5 {
+		w.Progress(0)
+	}
+}
+
+// TestParallelSystems_CoalescingPreserved verifies that within a parallel
+// system's stage, per-entity FIFO coalescing still folds repeated AddID
+// commands into a single archetype migration.
+func TestParallelSystems_CoalescingPreserved(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	const n = 10
+	entities := make([]flecs.ID, n)
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			entities[i] = e
+		}
+	})
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	sys := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range entities {
+			// Queue 20 AddID(bID) commands for the same entity — coalescer
+			// must fold them into a single archetype migration.
+			for range 20 {
+				fw.AddID(e, bID)
+			}
+		}
+	})
+	sys.SetParallel(true)
+	sys.SetWriteSet([]flecs.ID{aID})
+
+	w.Progress(0)
+
+	// After coalescing, every entity should have both aID and bID.
+	for i, e := range entities {
+		if !w.IsAlive(e) {
+			t.Fatalf("entities[%d] not alive after Progress", i)
+		}
+		w.Read(func(r *flecs.Reader) {
+			if !flecs.HasID(r, e, bID) {
+				t.Errorf("entities[%d] missing bID after deferred AddID coalescing", i)
+			}
+		})
+	}
+}
+
+// TestParallelSystems_BatchLargerThanWorkerCount verifies that when a parallel
+// batch has more systems than workers, stage slots wrap around (modulo) and all
+// mutations are still applied correctly.
+func TestParallelSystems_BatchLargerThanWorkerCount(t *testing.T) {
+	// 2 workers, 4 parallel systems — stages 1 and 2 each serve 2 systems serially.
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+	dID := flecs.RegisterComponent[psTagD](w)
+
+	const n = 20
+	var as, bs, cs, ds []flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			as = append(as, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+			bs = append(bs, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, cID)
+			cs = append(cs, e)
+		}
+		for range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, dID)
+			ds = append(ds, e)
+		}
+	})
+
+	del := func(ents []flecs.ID) func(float32, *flecs.QueryIter) {
+		return func(_ float32, it *flecs.QueryIter) {
+			fw := it.Writer()
+			for _, e := range ents {
+				fw.Delete(e)
+			}
+		}
+	}
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	cqB := flecs.NewCachedQuery(w, bID)
+	cqC := flecs.NewCachedQuery(w, cID)
+	cqD := flecs.NewCachedQuery(w, dID)
+
+	sA := flecs.NewSystem(w, cqA, del(as))
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	sB := flecs.NewSystem(w, cqB, del(bs))
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	sC := flecs.NewSystem(w, cqC, del(cs))
+	sC.SetParallel(true)
+	sC.SetWriteSet([]flecs.ID{cID})
+
+	sD := flecs.NewSystem(w, cqD, del(ds))
+	sD.SetParallel(true)
+	sD.SetWriteSet([]flecs.ID{dID})
+
+	w.Progress(0)
+
+	allEnts := append(append(append(as, bs...), cs...), ds...)
+	for i, e := range allEnts {
+		if w.IsAlive(e) {
+			t.Fatalf("entity[%d] still alive after parallel Delete (batch > worker count)", i)
+		}
+	}
+}
+
+// TestParallelSystems_OnPreMergeFiresOnce verifies that a pre-merge hook fires
+// exactly once per parallel batch merge boundary (not once per worker stage).
+//
+// With 4 workers and 2 parallel systems in OnUpdate, the expected fire count is:
+//   - 1 from mergeWorkerStages (batch merge in OnUpdate)
+//   - 3 from deferScope end-of-phase (PreUpdate + OnUpdate + PostUpdate)
+//   - Total: 4
+//
+// A wrong implementation that fired once per worker stage (N=4) would produce 7.
+// Testing for exactly 4 verifies "once per batch boundary."
+func TestParallelSystems_OnPreMergeFiresOnce(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(4)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+		}
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+		}
+	})
+
+	var preFires atomic.Int32
+	flecs.OnPreMerge(w, func(_ *flecs.Writer) {
+		preFires.Add(1)
+	})
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, _ *flecs.QueryIter) {})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, _ *flecs.QueryIter) {})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	// 3 phases run (PreUpdate, OnUpdate, PostUpdate; OnFixedUpdate skipped),
+	// each ending with a deferScope flush = 3 fires. Plus 1 from mergeWorkerStages
+	// for the 2-system batch = 4 total. A wrong per-stage impl (4 stages) = 7.
+	const want = 4
+	if got := preFires.Load(); got != want {
+		t.Fatalf("OnPreMerge fired %d times, want %d (once per batch boundary + once per phase-end)", got, want)
+	}
+}
+
+// TestParallelSystems_OnPostMergeFiresOnce verifies that a post-merge hook fires
+// exactly once per parallel batch merge boundary (not once per worker stage).
+// See TestParallelSystems_OnPreMergeFiresOnce for the expected-count rationale.
+func TestParallelSystems_OnPostMergeFiresOnce(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(4)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+		}
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+		}
+	})
+
+	var postFires atomic.Int32
+	flecs.OnPostMerge(w, func(_ *flecs.Writer) {
+		postFires.Add(1)
+	})
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, _ *flecs.QueryIter) {})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, _ *flecs.QueryIter) {})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	const want = 4 // 3 phase-end deferScope flushes + 1 batch mergeWorkerStages
+	if got := postFires.Load(); got != want {
+		t.Fatalf("OnPostMerge fired %d times, want %d (once per batch boundary + once per phase-end)", got, want)
+	}
+}
+
+// TestParallelSystems_PhaseBoundaries verifies that parallel systems in different
+// phases are dispatched correctly and that merge happens at each phase boundary.
+func TestParallelSystems_PhaseBoundaries(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	var aEnts, bEnts []flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			aEnts = append(aEnts, e)
+		}
+		for range 10 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+			bEnts = append(bEnts, e)
+		}
+	})
+
+	// System in PreUpdate phase.
+	prePhase := w.PreUpdate()
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystemInPhase(w, prePhase, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range aEnts {
+			fw.Delete(e)
+		}
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// System in OnUpdate phase (different phase from sA).
+	onUpdatePhase := w.OnUpdate()
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystemInPhase(w, onUpdatePhase, cqB, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range bEnts {
+			fw.Delete(e)
+		}
+	})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	for i, e := range aEnts {
+		if w.IsAlive(e) {
+			t.Fatalf("aEnts[%d] still alive after PreUpdate parallel Delete", i)
+		}
+	}
+	for i, e := range bEnts {
+		if w.IsAlive(e) {
+			t.Fatalf("bEnts[%d] still alive after OnUpdate parallel Delete", i)
+		}
+	}
+}
+
+// TestParallelSystems_WithSerialSystem verifies that a serial system following a
+// parallel batch observes the merged state from the batch's deferred mutations.
+// The batch must have 2+ parallel systems so mergeWorkerStages fires before the
+// serial system runs (single-system "batches" run without a mid-phase merge).
+func TestParallelSystems_WithSerialSystem(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+
+	const n = 20
+	aEnts := make([]flecs.ID, n)
+	cEnts := make([]flecs.ID, n)
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			aEnts[i] = e
+		}
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, cID)
+			cEnts[i] = e
+		}
+	})
+
+	// Parallel system A: adds bID to all aID entities via deferred writer.
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range aEnts {
+			fw.AddID(e, bID)
+		}
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// Parallel system C: no-op, just needed to form a 2-system batch so
+	// mergeWorkerStages fires before the serial system below.
+	cqC := flecs.NewCachedQuery(w, cID)
+	sC := flecs.NewSystem(w, cqC, func(_ float32, _ *flecs.QueryIter) {})
+	sC.SetParallel(true)
+	sC.SetWriteSet([]flecs.ID{cID})
+
+	// Serial system: runs after the batch is merged; must see bID entities.
+	var serialSawCount int
+	cqB := flecs.NewCachedQuery(w, bID)
+	sSerial := flecs.NewSystem(w, cqB, func(_ float32, it *flecs.QueryIter) {
+		for it.Next() {
+			serialSawCount += it.Count()
+		}
+	})
+	_ = sSerial
+
+	w.Progress(0)
+
+	if serialSawCount != n {
+		t.Fatalf("serial system saw %d entities with bID, want %d (parallel batch merge must precede serial execution)", serialSawCount, n)
+	}
+}
+
+// TestParallelSystems_UserWriteFromOutsideSystem verifies that world.Write(fn)
+// from the main goroutine works correctly between Progress calls when parallel
+// systems are registered.
+func TestParallelSystems_UserWriteFromOutsideSystem(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, aID)
+	})
+
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, _ *flecs.QueryIter) {})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	w.Progress(0)
+
+	// Write from main goroutine between Progress calls — must succeed.
+	w.Write(func(fw *flecs.Writer) {
+		fw.AddID(e, bID)
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, bID) {
+			t.Fatal("entity missing bID after World.Write between Progress calls")
+		}
+	})
+}
+
+// TestParallelSystems_SnapshotRestore verifies that TakeSnapshot / RestoreSnapshot
+// between Progress calls produces a clean state with per-stage parallel dispatch.
+func TestParallelSystems_SnapshotRestore(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	const n = 10
+	aEnts := make([]flecs.ID, n)
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			aEnts[i] = e
+		}
+	})
+
+	snap := flecs.TakeSnapshot(w)
+
+	// Parallel system: adds bID to all aID entities.
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range aEnts {
+			fw.AddID(e, bID)
+		}
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	w.Progress(0)
+
+	// Restore snapshot; entities should be back to original state (no bID).
+	flecs.RestoreSnapshot(w, snap)
+
+	for i, e := range aEnts {
+		w.Read(func(r *flecs.Reader) {
+			if !w.IsAlive(e) {
+				t.Errorf("aEnts[%d] not alive after RestoreSnapshot", i)
+				return
+			}
+			if flecs.HasID(r, e, bID) {
+				t.Errorf("aEnts[%d] has bID after RestoreSnapshot (should be absent)", i)
+			}
+		})
+	}
+}
+
+// TestParallelSystems_DuringReclamation exercises the per-stage routing while
+// table reclamation is active. The combination must not produce use-after-free
+// or missed EventOnTableDelete events.
+func TestParallelSystems_DuringReclamation(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+	w.SetTableReclamationThreshold(1) // reclaim after 1 empty tick
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	const n = 20
+	aEnts := make([]flecs.ID, n)
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+			aEnts[i] = e
+		}
+	})
+
+	// Parallel system: deletes all aID entities via deferred queue.
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		for _, e := range aEnts {
+			fw.Delete(e)
+		}
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// Second parallel system runs in same batch — exercises multi-stage reclamation path.
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, _ *flecs.QueryIter) {})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	// First tick deletes aID entities; reclamation fires on second tick.
+	w.Progress(0)
+	w.Progress(0) // triggers table reclamation sweep
+
+	for i, e := range aEnts {
+		if w.IsAlive(e) {
+			t.Fatalf("aEnts[%d] still alive after Delete + reclamation tick", i)
+		}
+	}
+}
+
+// TestParallelSystems_OrderingPreserved verifies two ordering invariants:
+//  1. Within a single parallel system (single stage), commands are applied in
+//     FIFO submission order. System A submits AddID(eA, cID) then AddID(eB, cID);
+//     the OnAdd hook must fire for eA before eB (cmds[0] before cmds[1]).
+//  2. Across parallel systems in a batch, stages are merged in ascending id
+//     order (wavePos 0 → stage 1 before wavePos 1 → stage 2): eC (stage 2)
+//     fires after both eA and eB (stage 1) in the OnAdd sequence.
+func TestParallelSystems_OrderingPreserved(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+
+	// eA, eB belong to system A's write set (aID); neither has cID yet.
+	// eC belongs to system B's write set (bID); no cID yet.
+	var eA, eB, eC flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		eA = fw.NewEntity()
+		flecs.AddID(fw, eA, aID)
+		eB = fw.NewEntity()
+		flecs.AddID(fw, eB, aID)
+		eC = fw.NewEntity()
+		flecs.AddID(fw, eC, bID)
+	})
+
+	// OnAdd[cID] records the order in which entities receive cID during
+	// mergeWorkerStages. Fires on the main goroutine sequentially — no mutex needed.
+	var addOrder []flecs.ID
+	flecs.OnAdd[psTagC](w, func(_ *flecs.Writer, e flecs.ID, _ psTagC) {
+		addOrder = append(addOrder, e)
+	})
+
+	// System A (wavePos 0 → stage 1): submit eA first, eB second.
+	// FIFO: flush processes cmds[0]=AddID(eA,cID) before cmds[1]=AddID(eB,cID).
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		fw.AddID(eA, cID) // submitted first — cmds[0]
+		fw.AddID(eB, cID) // submitted second — cmds[1]
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// System B (wavePos 1 → stage 2): stage merges after stage 1.
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, it *flecs.QueryIter) {
+		it.Writer().AddID(eC, cID)
+	})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	// Within-stage FIFO: eA at [0], eB at [1].
+	// Across-stage: eC (stage 2) at [2], after both stage-1 entries.
+	if len(addOrder) != 3 {
+		t.Fatalf("expected 3 OnAdd(cID) callbacks, got %d", len(addOrder))
+	}
+	if addOrder[0] != eA {
+		t.Errorf("FIFO violation within stage: expected eA first, got entity %v", addOrder[0])
+	}
+	if addOrder[1] != eB {
+		t.Errorf("FIFO violation within stage: expected eB second, got entity %v", addOrder[1])
+	}
+	if addOrder[2] != eC {
+		t.Errorf("stage-id order violation: expected eC (stage 2) last, got entity %v", addOrder[2])
+	}
+}
+
+// TestParallelSystems_NestedScopesBlocked verifies that existing scope guards
+// (stage.deferDepth > 0) still reject structural operations that cannot run
+// inside a deferred scope when triggered from a worker goroutine inside a
+// parallel system. Two parallel systems form a batch so the first system
+// actually executes in a worker goroutine rather than on the main goroutine.
+func TestParallelSystems_NestedScopesBlocked(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+		}
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+		}
+	})
+
+	var scopePanicCount atomic.Int32
+
+	// System A: attempts RangeSet inside a deferred scope — must panic.
+	// The recover captures the panic so the worker goroutine does not crash.
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		defer func() {
+			if recover() != nil {
+				scopePanicCount.Add(1)
+			}
+		}()
+		fw := it.Writer()
+		// RangeSet checks fw.stage.deferDepth > 0 and panics in a deferred
+		// scope. Worker stages are initialized with deferDepth=1 so the guard
+		// fires regardless of whether this runs on the main goroutine or a
+		// worker goroutine.
+		flecs.RangeSet(fw, flecs.ID(1000), flecs.ID(2000))
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// System B: no-op; required so sA runs in a worker goroutine (single-system
+	// batches execute synchronously on the main goroutine).
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, _ *flecs.QueryIter) {})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	if scopePanicCount.Load() == 0 {
+		t.Fatal("scope guard did not fire: RangeSet should panic when called inside a parallel system (stage.deferDepth > 0)")
+	}
+	_ = sB
 }

@@ -512,11 +512,15 @@ Passing an empty slice marks the system as read-only and allows it to batch with
 
 ### Deferred mutations in parallel systems
 
-While `Progress` is running the world is in a deferred state. Structural mutations — `Set`, `Remove`, `Delete`, `AddID` — are enqueued as commands and applied after the phase completes. Each parallel worker writes to its own command queue, so there is no lock contention for deferred ops.
+While `Progress` is running the world is in a deferred state. Structural mutations — `Set`, `Remove`, `Delete`, `AddID` — are enqueued as commands and applied after the phase completes.
 
-Direct in-place mutation of component data via `Field[T]` slices is safe: workers' entity rows within a batch never overlap.
+**Per-stage routing (Phase 16.50):** within a parallel batch, each system is assigned an exclusive stage slot (a pre-allocated command queue). The dispatcher groups systems into sequential waves of at most `WorkerCount`; within each wave, system position `wavePos` owns stage `(wavePos+1)`. Because wave positions are disjoint within a wave and waves execute sequentially (via `wg.Wait()`), deferred mutations from concurrent goroutines never share a queue — zero synchronization on the hot path.
 
-> **Cross-link:** Per-stage worker command queues were introduced in Phase 12.1. See [CHANGELOG.md](../CHANGELOG.md) for the v0.16 implementation details.
+After all waves complete, stages are merged into the world in ascending ID order (stage 0 last). Pre/post merge hooks fire once per batch merge boundary.
+
+Direct in-place mutation of component data via `Field[T]` slices is safe: within a batch, write-set checks guarantee disjoint component ownership across systems.
+
+> **Cross-link:** Per-stage routing for multi-threaded systems was introduced in Phase 12.1; the parallel-batch extension shipped in Phase 16.50. See [CHANGELOG.md](../CHANGELOG.md) for implementation details.
 
 ---
 
