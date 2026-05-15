@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.94.0 — 2026-05-15 — Phase 16.39: Depth-N type-info recursion
+
+Extends `GET /type_info/{path}` (Phase 16.32 / v0.87.0) from a depth-1 reflect walk to
+full depth-N recursion with cycle detection and precise primitive-type annotations.
+
+### New query parameter
+
+- **`?depth=N`** on `GET /type_info/{path}` — controls struct-nesting expansion depth
+  (default 8; max 16; `?depth=1` preserves byte-identical v0.87.0 back-compat schema;
+  `?depth=0` returns header-only; invalid values → 400).
+
+### New response schema (depth ≠ 1)
+
+Top-level response gains `id` (component entity ID) and `kind` (`"struct"` / `"dynamic"`).
+Field nodes are now typed objects with a `kind` discriminator:
+
+- **`"primitive"`** — scalar Go type; `type` carries the kind string (e.g. `"float32"`,
+  `"int32"`). Named user-defined primitives (e.g. `type Score int32`) emit `type:
+  "pkg.Score"` and `underlying: "int32"`.
+- **`"struct"`** — nested struct; `type` carries the qualified Go type name; `fields`
+  contains sub-fields (absent at depth limit).
+- **`"slice"` / `"array"` / `"pointer"`** — `element` carries the element type node;
+  array also emits `length`.
+- **`"map"`** — `key` and `value` carry the key/value type nodes.
+- **`"interface"` / `"chan"` / `"func"`** — opaque; no recursion.
+- **`"dynamic"`** — dynamic component with no Go type; no fields.
+
+### Cycle detection
+
+A `seen` set tracks struct types along the **current path**. A re-encountered type emits
+`{"kind": "struct", "type": "...", "recursive": true}` rather than recursing infinitely.
+Sibling fields each receive the same parent `seen` set, so two siblings that reference the
+same type both expand fully (path-vs-tree distinction is the load-bearing contract).
+
+### New file
+
+- **`rest_type_walk.go`** — `walkTypeForJSON`, `primitiveTypeNode`, `parseWalkDepth`,
+  `typeNodeJSON`, `typeInfoResponseV2`.
+
+### Back-compat
+
+Explicit `?depth=1` is byte-identical to the v0.87.0 response (`typeInfoResponse` with
+`typeInfoFieldResponse` — name/type/offset per field, opaque flag for dynamic components).
+
+### Tests
+
+17 new tests in `rest_type_info_test.go`; 4 existing tests updated for new default schema.
+95.0% statement coverage; `go vet`, `golangci-lint`, `-race -count=3` all clean.
+
 ## v0.93.0 — 2026-05-15 — Phase 16.38: Multi-period stats aggregation
 
 Extends the Stats addon (Phase 16.29 / v0.84.0) with ring-buffer aggregation that
