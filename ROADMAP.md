@@ -1,9 +1,10 @@
 # Roadmap
 
-## Shipped (through v0.108.0)
+## Shipped (through v0.109.0)
 
 The following features are available in the current release:
 
+- **Traversal iter.Seq adapters _(v0.109.0)_** — `(*Reader).Entities()`/`Children(parent)`/`Prefabs(e)`/`Systems(phase)` return `iter.Seq[ID]` / `iter.Seq[*System]`; `Union(s, relID)`/`Sparse[T](s)`/`ByID(s, id)` return `iter.Seq2` for payload-bearing traversals; `EntitiesContext(ctx)` and `ByIDContext(ctx, s, id)` for cancellation-aware `iter.Seq2[ID, error]`. Full break support throughout. See `iter_seq_traversal.go`.
 - **Streaming snapshot I/O _(v0.108.0)_** — `(*Snapshot).WriteTo(io.Writer)` satisfies `io.WriterTo`; `TakeSnapshotTo`/`TakeSnapshotToContext` serialize directly to any writer without materializing a `*Snapshot`; `ReadSnapshotFrom`/`RestoreSnapshotFrom`/`RestoreSnapshotFromContext` read from any `io.Reader`. Composes with `gzip.NewWriter`, `net.Conn`, `*os.File`. Format unchanged; `Bytes()` is now a thin wrapper around `WriteTo`. See [docs/Snapshots.md](docs/Snapshots.md).
 - **Range-over-func iteration _(v0.107.0)_** — `All1`/`All2`/`All3`/`All4` return `iter.Seq2[ID, *T]` (or `Pair`/`Triple`/`Quad` structs) for idiomatic `for … range` loops with full break support; `QueryAll`/`CachedQueryAll` for bare entity-ID iteration; `QueryAllContext`/`CachedQueryAllContext` for cancellation-aware variants. Inheritable and CanToggle semantics preserved.
 - **Archetype-based storage** — entities sharing the same component set are grouped into structure-of-arrays tables; no pointer chasing during iteration.

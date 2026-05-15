@@ -60,6 +60,28 @@
 // valid only within the yield call body. Dereference and stack-copy the value
 // before any structural mutation (Add/Remove/Set on a new component).
 //
+// Traversal adapters wrap the Reader-level Each* methods and the package-level
+// EachUnion/EachSparse/EachByID functions:
+//
+//   - [(*Reader).Entities] / [(*Reader).EntitiesContext] — alive entity IDs
+//   - [(*Reader).Children] — direct children of a parent
+//   - [(*Reader).Prefabs] — direct IsA prefabs of an entity
+//   - [(*Reader).Systems] — systems in a pipeline phase
+//   - [Union] — (entity, target) pairs for a union relationship
+//   - [Sparse] — (entity, *T) pairs for a Sparse component
+//   - [ByID] / [ByIDContext] — (entity, ptr) or (entity, err) for any component ID
+//
+// Example:
+//
+//	w.Read(func(r *flecs.Reader) {
+//	    for child := range r.Children(parentID) {
+//	        fmt.Println(child)
+//	    }
+//	    for e, pos := range flecs.Sparse[Position](r) {
+//	        fmt.Println(e, pos.X, pos.Y)
+//	    }
+//	})
+//
 // # Pipelines and Systems
 //
 // [NewSystem] registers a [System] that runs on every [World.Progress] call in

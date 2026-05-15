@@ -241,6 +241,17 @@ w.Read(func(r *flecs.Reader) {
 
 `EachPrefab` is **direct only** — it does not recurse into the prefab's own IsA chain. To walk the full chain, call `EachPrefab` recursively on each yielded prefab.
 
+**Range-over-func (v0.109.0):** `(*Reader).Prefabs` returns an `iter.Seq[ID]` adapter
+with identical semantics and full `break` support:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for p := range r.Prefabs(inst) {
+        _ = p // direct prefab
+    }
+})
+```
+
 ### GetUp with IsA
 
 `GetUp[T]` explicitly retrieves the component value from the first entity in a traversal chain (self or ancestor) that locally owns it. Passing `w.IsA()` as the traversal relationship is the IsA-aware equivalent of the implicit `Get` chain walk, and makes the traversal relationship explicit:

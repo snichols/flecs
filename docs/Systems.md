@@ -457,6 +457,17 @@ w.Read(func(r *flecs.Reader) {
 
 Both `SystemsInPhase` and `EachSystem` include disabled systems. The pipeline executor applies the `enabled` filter at dispatch time; introspection sees the complete registered set.
 
+**Range-over-func (v0.109.0):** `(*Reader).Systems(phase)` returns an `iter.Seq[*System]`
+adapter with identical semantics and full `break` support:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for sys := range r.Systems(w.OnUpdate()) {
+        fmt.Println("system enabled:", sys.IsEnabled())
+    }
+})
+```
+
 ---
 
 ## Parallel Systems

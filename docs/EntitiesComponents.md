@@ -440,7 +440,26 @@ Tags added to component entities customize their storage and query behaviour. Th
 
 The `CanToggle` trait (shipped v0.35.0) allows individual entities to have a component temporarily disabled without removing it. See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for the full API.
 
-The `Sparse` trait (shipped v0.51.0, storage path) stores a component in a per-component sparse-set rather than the archetype tables, giving pointer-stable addresses and no archetype transition on add/remove. Use `SetSparse(w, compID)` before first use. See the [ComponentTraits manual § Sparse](ComponentTraits.md#sparse) for the full API. Note: query integration is deferred to Phase 15.20 — use `EachSparse[T]` for bulk iteration in the meantime.
+The `Sparse` trait (shipped v0.51.0, storage path) stores a component in a per-component sparse-set rather than the archetype tables, giving pointer-stable addresses and no archetype transition on add/remove. Use `SetSparse(w, compID)` before first use. See the [ComponentTraits manual § Sparse](ComponentTraits.md#sparse) for the full API.
+
+Use `EachSparse[T]` for callback-based iteration, or the **range-over-func adapter** `Sparse[T](s) iter.Seq2[ID, *T]` (v0.109.0):
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for e, pos := range flecs.Sparse[Position](r) {
+        fmt.Println(e, pos.X, pos.Y) // pointer is stable; valid indefinitely
+    }
+})
+```
+
+For alive-entity enumeration, `(*Reader).Entities()` (v0.109.0) returns an `iter.Seq[ID]`:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for e := range r.Entities() {
+        fmt.Println(e)
+    }
+})
 
 ### Registration
 
@@ -626,6 +645,30 @@ w.Read(func(fr *flecs.Reader) {
         v := (*Vec3)(ptr) // ptr valid only for the duration of this call
         _ = v
     })
+})
+```
+
+**Range-over-func (v0.109.0):** `ByID` returns an `iter.Seq2[ID, unsafe.Pointer]`
+adapter with identical semantics and full `break` support:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for e, ptr := range flecs.ByID(r, posID) {
+        v := (*Vec3)(ptr) // ptr valid only within yield
+        _ = e
+        _ = v
+    }
+})
+```
+
+For context-aware iteration use `ByIDContext(ctx, r, posID) iter.Seq2[ID, error]`:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for id, err := range flecs.ByIDContext(ctx, r, posID) {
+        if err != nil { return err }
+        // use id; payload not available in ctx variant
+    }
 })
 ```
 
