@@ -1,0 +1,4 @@
+## iterate iteration 1 (2026-05-15)
+
+Implemented Phase 16.36 Timer addon (v0.91.0): entity-based Timer and RateFilter components driving shared system tick rates. NewTimer/NewInterval create single-shot and repeating timers; NewRateFilter gates at sub-multiples of another timer. Systems bind via SetTickSource(e) with AND-composition semantics. tickAllTimers/tickAllRateFilters run once per Progress(dt) before phase dispatch; Fired flag is transient and visible after Progress() returns. Subtract-with-loop accumulator: Progress(250ms) with Timeout=100ms fires twice and leaves Elapsed=50ms. 24 tests pass under -race -count=3; coverage 95.1%; go vet and golangci-lint clean. New files: timer_addon.go, timer_addon_test.go, docs/Timer.md. Updated: system.go, world.go, docs/Systems.md, docs/README.md, README.md, CHANGELOG.md, ROADMAP.md, doc.go.
+
