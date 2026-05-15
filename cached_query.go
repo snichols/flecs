@@ -675,10 +675,7 @@ func (cq *CachedQuery) Iter() *QueryIter {
 // *QueryIter passed to fn is already positioned on a matching table; callers
 // must NOT call Next inside fn.
 func (cq *CachedQuery) Each(fn func(*QueryIter)) {
-	it := cq.Iter()
-	for it.Next() {
-		fn(it)
-	}
+	_ = cq.EachContext(context.Background(), fn)
 }
 
 // EachContext iterates all matching tables with cooperative context

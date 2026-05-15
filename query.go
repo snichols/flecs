@@ -1806,10 +1806,7 @@ func (q *Query) Iter() *QueryIter {
 // *QueryIter passed to fn is already positioned on a matching table; callers
 // must NOT call Next inside fn.
 func (q *Query) Each(fn func(*QueryIter)) {
-	it := q.Iter()
-	for it.Next() {
-		fn(it)
-	}
+	_ = q.EachContext(context.Background(), fn)
 }
 
 // ctxCheckInterval is the number of table iterations between ctx.Done() checks

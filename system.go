@@ -753,17 +753,7 @@ func (w *World) mergeWorkerStages(n int) {
 //
 // Panics if s is nil or s is closed (IsClosed() == true).
 func RunSystem(s *System, dt float32) {
-	if s == nil {
-		panic("flecs: RunSystem: system must not be nil")
-	}
-	if s.removed {
-		panic("flecs: RunSystem: system is closed")
-	}
-	s.w.checkExclusiveAccessWrite()
-	s.w.deferScope(func() {
-		it := s.query.Iter()
-		s.fn(dt, it)
-	})
+	_ = RunSystemContext(context.Background(), s, dt)
 }
 
 // RunSystemContext invokes s once synchronously with the given dt, outside the
