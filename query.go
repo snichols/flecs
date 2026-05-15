@@ -693,6 +693,10 @@ type Query struct {
 	// varKinds maps variable names to their VarKind. Nil when no table-kind variables
 	// are declared. VarTable entries drive table-level iteration in buildVarRowsRec.
 	varKinds map[string]VarKind
+	// reffedTables holds a reference to every archetype table that matched this
+	// query at construction time. Each entry has been IncrRef'd; Free() decrements
+	// them so reclamation can proceed once the query is released.
+	reffedTables []*table.Table
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -758,7 +762,9 @@ func NewQuery(w *World, ids ...ID) *Query {
 		applyInheritablePromotion(w, &terms[i])
 	}
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, terms)
-	return &Query{w: w, terms: terms, andIDs: cp, skipDisabled: skipDisabled, skipPrefab: skipPrefab}
+	q := &Query{w: w, terms: terms, andIDs: cp, skipDisabled: skipDisabled, skipPrefab: skipPrefab}
+	q.reffedTables = bumpMatchingTableRefs(w, q)
+	return q
 }
 
 // NewQueryFromTerms constructs a query over w for the given structured terms.
@@ -805,7 +811,9 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 	varOrder := buildVarTopoOrder("flecs: NewQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	return &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder, varKinds: varKinds}
+	q := &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder, varKinds: varKinds}
+	q.reffedTables = bumpMatchingTableRefs(w, q)
+	return q
 }
 
 // Terms returns the sorted TermAnd-only ID list for backward compatibility.
@@ -839,6 +847,48 @@ func (q *Query) VariableOrder() []string {
 	cp := make([]string, len(q.varOrder))
 	copy(cp, q.varOrder)
 	return cp
+}
+
+// bumpMatchingTableRefs scans all current world tables and bumps IncrRef for
+// each table that the query matches. Returns the slice of bumped tables so the
+// caller can store it in q.reffedTables for later Free().
+func bumpMatchingTableRefs(w *World, q *Query) []*table.Table {
+	var refs []*table.Table
+	// Build a minimal scratch iter for matchesTable evaluation.
+	scratch := &QueryIter{
+		q:               q,
+		world:           w,
+		terms:           q.terms,
+		orGroups:        q.orGroups,
+		wildcardTermIdx: -1,
+		wildcardPairPos: -1,
+	}
+	for _, t := range w.tables {
+		if q.skipDisabled && t.HasComponent(w.disabledID) {
+			continue
+		}
+		if q.skipPrefab && t.HasComponent(w.prefabID) {
+			continue
+		}
+		scratch.upSources = nil // reset per-table traversal cache
+		if scratch.matchesTable(t) {
+			t.IncrRef()
+			refs = append(refs, t)
+		}
+	}
+	return refs
+}
+
+// Free releases the reference counts this query holds on matched archetype
+// tables. After Free(), the query should not be used for iteration; doing so
+// returns an empty or partially-populated iterator.
+//
+// Free is idempotent: calling it multiple times is safe.
+func (q *Query) Free() {
+	for _, t := range q.reffedTables {
+		t.DecrRef()
+	}
+	q.reffedTables = nil
 }
 
 // findUpSource locates the nearest ancestor of the entities in table t via

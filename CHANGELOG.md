@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.101.0 — 2026-05-15 — Phase 16.46: Table Reclamation Infrastructure
+
+Long-running worlds with archetype churn no longer leak memory monotonically. Each
+archetype table now tracks how many consecutive `Progress()` ticks it has been empty;
+once the threshold is reached it is freed and removed from all world indexes.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `(*World).SetTableReclamationThreshold(ticks uint32)` | Set empty-tick threshold before a table is reclaimed (0 = disable) |
+| `(*World).TableReclamationThreshold() uint32` | Read the current threshold (default 60) |
+| `(*World).ReclaimedTablesCount() uint64` | Total tables freed since world creation |
+| `(*World).ReclaimNow() int` | Force-reclaim all eligible tables immediately; returns count freed |
+| `(*World).EventOnTableDelete() ID` | Built-in event entity for the OnTableDelete observer |
+| `OnTableDelete(w, fn)` | Register observer fired just before a table is reclaimed |
+| `OnTableDeleteWithOptions(w, opts, fn)` | Same with multi-term filter and options |
+| `(*Table).Pin()` / `(*Table).Unpin()` | Prevent / re-allow reclamation for a specific table |
+| `(*Table).IsPinned() bool` | Check pin state |
+| `(*Table).IncrRef()` / `(*Table).DecrRef()` | Manual reference-count management |
+| `(*Table).RefCount() int32` | Read current reference count |
+| `(*Table).EmptyTicks() uint32` | Consecutive empty ticks accumulated so far |
+| `(*Table).IsDead() bool` | True after the table has been reclaimed |
+
+### Reclamation model
+
+- Sweep runs at the **start** of every `Progress(dt)` before any system phase executes.
+- A table is eligible when `Count() == 0 && !pinned && refCount == 0 && emptyTicks >= threshold`.
+- `OnTableDelete` fires synchronously inside the sweep; handler receives `*Reader` (table mid-destruction, columns not yet freed but row count is 0).
+- `WithYieldExisting()` is a no-op for `OnTableDelete`.
+- `CachedQuery.Close()` and `Query.Free()` decrement refcounts; always call these when done.
+
+### Safety
+
+- Dead-table detection in `migrate()` edge-cache: stale entries pointing to dead tables are discarded and re-resolved.
+- `CacheAddEdge` / `CacheRemoveEdge` silently overwrite stale dead-table entries.
+- Snapshot `RestoreSnapshot` resets `emptyTicks` to 0 for all tables.
+
+### Breaking changes
+
+- `EventOnTableDelete` is now allocated at built-in entity index 75. User-entity IDs now start at index 76 (previously 75). Any code that hard-codes built-in entity indices will need updating; prefer the `w.EventOnTableDelete()` accessor.
+
+---
+
 ## v0.100.0 — 2026-05-15 — Phase 16.45: Extended query variables (centennial release)
 
 Extends the multi-variable query engine with three new variable modes: variable in

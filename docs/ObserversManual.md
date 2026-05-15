@@ -559,7 +559,7 @@ For world-level hooks that fire at every merge boundary regardless of component,
 
 The `*flecs.Table` pointer passed to the handler is the same type exposed by `w.TablesFor(componentID)` — it is the `table.Table` type aliased at `world.go:23`. Fields are accessible via the public methods `t.Type() []flecs.ID` and `t.Count() int`.
 
-`OnTableDelete` (fires when a table is reclaimed) is **not yet ported** — Go-flecs has no table-reclamation path; tables persist for the lifetime of the World. See [Not Yet Ported: OnTableDelete](#on-table-delete-not-ported) below.
+`OnTableDelete` fires when a table is about to be reclaimed by the table-reclamation sweep. See [OnTableDelete](#on-table-delete) below.
 
 ---
 
@@ -1057,11 +1057,46 @@ C flecs fires `OnDelete` when a component entity itself is deleted, and `OnDelet
 
 **Workaround**: Manually call cleanup code before deleting component entities.
 
-### OnTableDelete (not yet ported) {#on-table-delete-not-ported}
+### OnTableDelete {#on-table-delete}
 
-`OnTableCreate` fires when a new archetype table is created — **shipped in v0.62.0** (see [OnTableCreate](#on-table-create) above).
+✅ **Shipped in v0.101.0.**
 
-`OnTableDelete` fires when a table is reclaimed. It is **not yet ported**: Go-flecs has no table-reclamation path (`delete(w.tables, ...)` is never called; tables persist for the lifetime of the World). Wiring `OnTableDelete` requires implementing table reclamation first, which is a substantial independent change deferred to a follow-up phase.
+`OnTableDelete` fires synchronously just before a table is freed by the table-reclamation sweep. It is the counterpart to `OnTableCreate` and the last event an archetype table can produce.
+
+```go
+flecs.OnTableDelete(w, func(fr *flecs.Reader, t *flecs.Table) {
+    fmt.Printf("reclaiming table: %v (had %d rows)\n", t.Type(), t.Count())
+})
+```
+
+The handler receives a `*flecs.Reader` instead of a `*flecs.Writer`. The table is mid-destruction: its row count is already 0, but `t.Type()` is still valid and the columns have not yet been freed. Structural mutations (adding/removing components) must not be issued from this handler; use the reader to inspect world state only.
+
+#### WithYieldExisting is a no-op
+
+`WithYieldExisting()` is silently ignored for `OnTableDelete`. A table cannot retroactively be "already deleted" — deletion is a one-time event; there is nothing to replay at observer registration time.
+
+#### Multi-term filter
+
+Use `OnTableDeleteWithOptions` with `WithQuery(terms...)` to restrict the observer to tables whose component signature satisfies the filter:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+
+flecs.OnTableDeleteWithOptions(w,
+    flecs.WithQuery(flecs.Term{ID: posID, Kind: flecs.TermAnd}),
+    func(fr *flecs.Reader, t *flecs.Table) {
+        fmt.Printf("Position table reclaimed: %v\n", t.Type())
+    },
+)
+```
+
+The filter is evaluated against `t.Type()` at dispatch time. Only tables whose signature satisfies all filter terms will invoke the handler.
+
+#### Handler context rationale
+
+The handler uses `*Reader` (not `*Writer`) because the table is mid-destruction: its columns are about to be freed and the table will be removed from all world indexes. Issuing a `Write` from inside the handler could recreate the same archetype (allocating a fresh table), which is safe — but issuing mutations that reference the dying table itself would produce undefined behavior. The `*Reader` constraint makes the distinction explicit.
+
+See [TableReclamation.md](TableReclamation.md) for the full reclamation model, threshold tuning, and reference-counting semantics.
 
 ### OnTableEmpty / OnTableFill Events {#on-table-empty-and-on-table-fill}
 

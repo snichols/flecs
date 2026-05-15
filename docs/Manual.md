@@ -17,6 +17,7 @@ Start with the [Quickstart](Quickstart.md) for a hands-on walk-through. Then fol
 | Prefabs and prototype inheritance | [PrefabsManual.md](PrefabsManual.md) |
 | Systems and the pipeline | [Systems.md](Systems.md) |
 | Observers and reactive callbacks | [ObserversManual.md](ObserversManual.md) |
+| Table reclamation | [TableReclamation.md](TableReclamation.md) |
 | Component traits | [ComponentTraits.md](ComponentTraits.md) |
 | REST / HTTP inspection | [FlecsRemoteApi.md](FlecsRemoteApi.md) |
 | ECS design patterns | [DesignWithFlecs.md](DesignWithFlecs.md) |

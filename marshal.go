@@ -224,6 +224,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.EventOnTableCreate(): {},
 		w.EventOnTableEmpty():  {},
 		w.EventOnTableFill():   {},
+		w.EventOnTableDelete(): {},
 		w.Event():              {},
 		w.DependsOn():          {},
 		w.EventMonitor():       {},

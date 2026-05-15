@@ -94,6 +94,7 @@ type World struct {
 	eventOnTableEmptyID  ID                              // built-in EventOnTableEmpty event entity (index 44)
 	eventOnTableFillID   ID                              // built-in EventOnTableFill event entity (index 45)
 	eventTagID           ID                              // built-in Event tag entity (index 46)
+	eventOnTableDeleteID ID                              // built-in EventOnTableDelete event entity (index 75)
 	dependsOnID          ID                              // built-in DependsOn relationship entity (index 47)
 	eventMonitorID       ID                              // built-in EventMonitor event entity (index 48)
 	slotOfID             ID                              // built-in SlotOf relationship entity (index 49)
@@ -113,7 +114,7 @@ type World struct {
 	hertzID       ID // built-in Hertz frequency unit entity (index 62, opaque root)
 	radianID      ID // built-in Radian angle unit entity (index 63)
 	degreeID      ID // built-in Degree angle unit entity (index 64)
-	// Built-in compound unit entities (indices 65–74); user entities start at index 75.
+	// Built-in compound unit entities (indices 65–74); EventOnTableDelete at 75; user entities start at index 76.
 	meterPerSecondID        ID // built-in MeterPerSecond velocity unit (index 65)
 	kiloMeterPerHourID      ID // built-in KiloMeterPerHour velocity unit (index 66)
 	meterPerSecondSquaredID ID // built-in MeterPerSecondSquared acceleration unit (index 67)
@@ -215,6 +216,12 @@ type World struct {
 	// built-in entities are DSL-resolvable without holding a Name component (which
 	// would create an extra table and affect yield-existing observers).
 	builtinByName map[string]ID
+	// Table reclamation fields (Phase 16.46).
+	// reclaimThreshold is the number of consecutive empty Progress ticks before a
+	// table is eligible for reclamation. 0 disables reclamation entirely.
+	// reclaimedTablesCount is a monotonic counter of reclaimed tables.
+	reclaimThreshold     uint32
+	reclaimedTablesCount uint64
 }
 
 // New initializes and returns an empty World.
@@ -295,13 +302,15 @@ type World struct {
 //   - Index 72: HertzCompound built-in frequency unit entity (compound: 1/s, Symbol="Hz")
 //   - Index 73: RadianPerSecond built-in angular velocity unit entity (compound: rad/s)
 //   - Index 74: Inverse built-in reciprocal helper entity (opaque marker)
-//   - Index 75+: user entities (NewEntity)
+//   - Index 75: EventOnTableDelete built-in event entity (fires before table reclamation)
+//   - Index 76+: user entities (NewEntity)
 func New() *World {
 	w := &World{
-		index:     entityindex.New(),
-		registry:  component.NewRegistry(),
-		tables:    make(map[string]*table.Table),
-		compIndex: componentindex.New(),
+		index:            entityindex.New(),
+		registry:         component.NewRegistry(),
+		tables:           make(map[string]*table.Table),
+		compIndex:        componentindex.New(),
+		reclaimThreshold: 60, // default: 60 ticks (~1s at 60fps)
 	}
 	w.empty = table.New([]ID{}, []*component.TypeInfo{})
 	w.tables[sigKey(nil)] = w.empty
@@ -602,7 +611,6 @@ func New() *World {
 	rec.Row = uint32(w.empty.Append(slotOf))
 	w.slotOfID = slotOf
 	// Allocate the built-in Units addon entities (indices 50–74).
-	// User entity allocation starts at index 75 after this point.
 	meter := w.index.Alloc()
 	rec = w.index.Get(meter)
 	rec.Table = w.empty
@@ -678,7 +686,7 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(degree))
 	w.degreeID = degree
-	// Allocate the built-in compound unit entities (indices 63–72).
+	// Allocate the built-in compound unit entities (indices 65–74).
 	meterPerSecond := w.index.Alloc()
 	rec = w.index.Get(meterPerSecond)
 	rec.Table = w.empty
@@ -729,6 +737,14 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(inverse))
 	w.inverseID = inverse
+	// Allocate the built-in EventOnTableDelete event entity (gets index 75).
+	// Fires synchronously before a table is unlinked during the reclamation sweep.
+	eventOnTableDelete := w.index.Alloc()
+	rec = w.index.Get(eventOnTableDelete)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnTableDelete))
+	w.eventOnTableDeleteID = eventOnTableDelete
+	// User entity allocation starts at index 76 after this point.
 	// Bootstrap unit addon: populate unitDefs for the 25 built-in unit entities.
 	bootstrapBuiltinUnits(w)
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
@@ -927,6 +943,11 @@ func (w *World) EventOnTableEmpty() ID { return w.eventOnTableEmptyID }
 
 // EventOnTableFill returns the ID of the built-in EventOnTableFill event entity.
 func (w *World) EventOnTableFill() ID { return w.eventOnTableFillID }
+
+// EventOnTableDelete returns the ID of the built-in EventOnTableDelete event entity.
+// This event fires synchronously before a table is unlinked during the
+// reclamation sweep (emptyTicks >= threshold && !pinned && refCount == 0).
+func (w *World) EventOnTableDelete() ID { return w.eventOnTableDeleteID }
 
 // EventMonitor returns the ID of the built-in EventMonitor event entity (index 48).
 // Monitor observers registered via Monitor / MonitorWithOptions subscribe to this
@@ -1532,14 +1553,15 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 
 	// Consult the edge cache BEFORE computing newSig so that cache hits pay
 	// zero allocation cost (no make([]ID, ...) on the fast path).
+	// Dead tables (reclaimed by the sweep) must be treated as cache misses.
 	var newTable *table.Table
 	switch {
 	case removeID != 0 && addID == 0 && oldTable != nil:
-		if dst, ok := oldTable.NextOnRemove(removeID); ok {
+		if dst, ok := oldTable.NextOnRemove(removeID); ok && !dst.IsDead() {
 			newTable = dst
 		}
 	case addID != 0 && removeID == 0 && oldTable != nil:
-		if dst, ok := oldTable.NextOnAdd(addID); ok {
+		if dst, ok := oldTable.NextOnAdd(addID); ok && !dst.IsDead() {
 			newTable = dst
 		}
 	}
@@ -1931,6 +1953,101 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 	if oldTable != nil && oldTable.Count() == 0 {
 		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableEmptyID, oldTable)
 	}
+}
+
+// SetTableReclamationThreshold sets the number of consecutive empty Progress
+// ticks required before a table becomes eligible for reclamation. A threshold
+// of 0 disables reclamation entirely, preserving the pre-v0.101.0 behavior
+// where tables persist for the World lifetime.
+//
+// The default threshold is 60 ticks (approximately 1 second at 60 fps).
+func (w *World) SetTableReclamationThreshold(ticks uint32) {
+	w.reclaimThreshold = ticks
+}
+
+// TableReclamationThreshold returns the current empty-tick threshold.
+// Returns 0 when reclamation is disabled.
+func (w *World) TableReclamationThreshold() uint32 { return w.reclaimThreshold }
+
+// ReclaimedTablesCount returns the total number of tables reclaimed since the
+// World was created.
+func (w *World) ReclaimedTablesCount() uint64 { return w.reclaimedTablesCount }
+
+// ReclaimNow forces an immediate reclamation sweep, ignoring the emptyTicks
+// threshold. Only tables with refCount == 0 and !pinned are considered.
+// Returns the number of tables reclaimed.
+// Intended for use in tests and shutdown sequences.
+func (w *World) ReclaimNow() int {
+	return w.reclaimDeadTablesForced(true)
+}
+
+// reclaimDeadTables runs the reclamation sweep at the start of Progress.
+// It increments emptyTicks for eligible empty tables and reclaims those that
+// have exceeded the threshold (when threshold > 0).
+func (w *World) reclaimDeadTables() {
+	if w.reclaimThreshold == 0 {
+		return
+	}
+	w.reclaimDeadTablesForced(false)
+}
+
+// reclaimDeadTablesForced performs the sweep. When force==true the emptyTicks
+// threshold is ignored and all empty, unref'd, unpinned tables are reclaimed
+// immediately (used by ReclaimNow). Returns the count of reclaimed tables.
+func (w *World) reclaimDeadTablesForced(force bool) int {
+	threshold := w.reclaimThreshold
+
+	// Pass 1: identify tables to reclaim.
+	var toReclaim []*table.Table
+	for _, t := range w.tables {
+		if len(t.Type()) == 0 {
+			continue // never reclaim the empty root table
+		}
+		// Only count empty, unpinned, unreferenced tables toward emptyTicks.
+		// Tables with rows, pins, or live refs do not accumulate empty ticks.
+		if t.Count() != 0 || t.IsPinned() || t.RefCount() != 0 {
+			continue
+		}
+		// Empty, unpinned, unreferenced.
+		t.IncrEmptyTicks()
+		t.SetReclaimEpoch(w.frameCount)
+		if force || (threshold > 0 && t.EmptyTicks() >= threshold) {
+			toReclaim = append(toReclaim, t)
+		}
+	}
+
+	if len(toReclaim) == 0 {
+		return 0
+	}
+
+	// Pass 2: reclaim each scheduled table.
+	for _, t := range toReclaim {
+		// Fire OnTableDelete observers before unlinking.
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableDeleteID, t)
+
+		// Remove from the world table registry.
+		delete(w.tables, sigKey(t.Type()))
+
+		// Remove from the component index for every component in the signature.
+		for _, id := range t.Type() {
+			w.compIndex.RemoveTable(id, t)
+		}
+
+		// Remove from all live cached query table lists.
+		for _, cq := range w.cachedQueries {
+			if !cq.removed {
+				cq.removeTable(t)
+			}
+		}
+
+		// Release column storage and mark dead.
+		t.FreeColumns()
+		t.MarkDead()
+
+		w.reclaimedTablesCount++
+	}
+
+	return len(toReclaim)
 }
 
 // sigKey encodes a sorted []ID as a string map key (allocating copy).

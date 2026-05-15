@@ -31,6 +31,12 @@ const (
 	// EventOnTableFill fires when a table's row count transitions from 0 → 1
 	// (first entity added). Registered via OnTableFill / OnTableFillWithOptions.
 	EventOnTableFill EventKind = 7
+	// EventOnTableDelete fires synchronously before a table is reclaimed by the
+	// sweep pass (emptyTicks >= threshold && refCount == 0 && !pinned). The handler
+	// receives a *Reader (not *Writer) because the table is mid-destruction and
+	// cannot safely accept new rows. Use OnTableDelete / OnTableDeleteWithOptions
+	// to subscribe.
+	EventOnTableDelete EventKind = 8
 )
 
 // String returns a human-readable name for the event kind.
@@ -50,6 +56,8 @@ func (ev EventKind) String() string {
 		return "OnTableEmpty"
 	case EventOnTableFill:
 		return "OnTableFill"
+	case EventOnTableDelete:
+		return "OnTableDelete"
 	default:
 		return "Unknown"
 	}
@@ -96,6 +104,8 @@ func eventKindToEntity(w *World, ev EventKind) ID {
 		return w.eventOnTableEmptyID
 	case EventOnTableFill:
 		return w.eventOnTableFillID
+	case EventOnTableDelete:
+		return w.eventOnTableDeleteID
 	default:
 		return 0
 	}
@@ -267,7 +277,7 @@ func ObserveIDWithOptions(w *World, id ID, opts ObserverOptions, events []EventK
 
 	if opts.source != 0 {
 		for _, ev := range events {
-			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill {
+			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill || ev == EventOnTableDelete {
 				panic("flecs: ObserveIDWithOptions: WithSource is not compatible with table events; tables have no source entity semantics")
 			}
 		}
