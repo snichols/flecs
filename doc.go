@@ -499,6 +499,17 @@
 // hot-path use. [World.SystemCountInPhase] returns the active system count for
 // a specific pipeline phase.
 //
+// [PublishExpvar] registers lazy expvar.Func variables that expose live world
+// stats at the standard Go /debug/vars endpoint (via stdlib expvar; no extra
+// dependencies). The whole-tree var takes a single statsMu.RLock for
+// scrape-consistent reads; individual scalar vars may exhibit minor
+// inter-variable skew within one scrape (documented in docs/Observability.md).
+//
+//	h := flecs.PublishExpvar(w, "myapp")
+//	defer h.Unpublish() // nulls out var values; names stay registered (expvar limitation)
+//	http.Handle("/debug/vars", expvar.Handler())
+//	log.Fatal(http.ListenAndServe(":8080", nil))
+//
 //	stats := w.Stats()
 //	fmt.Printf("entities: %d\n", stats.EntityCount)
 //	fmt.Printf("tables:   %d\n", stats.TableCount)

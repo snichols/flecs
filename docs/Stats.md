@@ -4,6 +4,8 @@ The Stats addon ports the upstream FlecsMonitor/FlecsStats addon to Go as v0.84.
 
 > **Go-side rename**: The upstream C addon is named *Monitor*. To avoid a naming collision with the Phase 16.10 monitor observers in `monitor_observer.go`, the Go surface uses the name **Stats** (`StatsSnapshot`, `stats_addon.go`).
 
+> **Exposing stats via `/debug/vars`**: see [Observability.md](Observability.md) for the expvar integration (`PublishExpvar`, `ExpvarMap`) that publishes these counters to the standard Go introspection endpoint with zero additional dependencies.
+
 ## API
 
 ### `(*World).StatsSnapshot() PipelineStats`

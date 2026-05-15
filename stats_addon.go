@@ -475,11 +475,14 @@ func (w *World) statsCommit(dt float32) {
 	w.statsTotalTime = float64(w.time)
 
 	// Commit per-system tick accumulators and build snapshot.
+	// Also count active (non-removed) systems for expvar.
 	w.statsSystemSnapshot = w.statsSystemSnapshot[:0]
+	systemCount := 0
 	for _, s := range w.systems {
 		if s.removed {
 			continue
 		}
+		systemCount++
 		if s.statsTickDidRun {
 			s.statsInvocations++
 			s.statsTotalDuration += s.statsTickDuration
@@ -501,6 +504,27 @@ func (w *World) statsCommit(dt float32) {
 			TotalSkipped:     s.statsSkipped,
 		})
 	}
+	// Count active (non-removed) observer nodes across all buckets for expvar.
+	observerCount := 0
+	for _, bucket := range w.observers {
+		for _, n := range bucket.anyEntity {
+			if !n.removed {
+				observerCount++
+			}
+		}
+		for _, nodes := range bucket.fixedSource {
+			for _, n := range nodes {
+				if !n.removed {
+					observerCount++
+				}
+			}
+		}
+	}
+	w.statsComponentCount = w.registry.IDCount()
+	w.statsSystemCount = systemCount
+	w.statsObserverCount = observerCount
+	w.statsReclaimedTables = w.reclaimedTablesCount
+	w.statsLastProgressWall = float64(time.Now().UnixNano()) / 1e9
 
 	// Commit per-phase cumulative accumulators and build snapshot.
 	if len(w.statsPhaseSnapshot) != len(w.phaseOrder) {
