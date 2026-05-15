@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.97.0 — 2026-05-15 — Phase 16.42: Compound units
+
+Extends the Units addon (v0.85.0 / Phase 16.30) with compound units — products, quotients,
+and integer powers of existing atomic units — plus 10 new built-in compound unit entities.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `RegisterCompoundUnit(fw, name, num, denom []ID) ID` | Register a product/quotient compound unit |
+| `UnitProduct(fw, name, a, b ID) ID` | Register `a × b` |
+| `UnitQuotient(fw, name, num, denom ID) ID` | Register `num / denom` |
+| `UnitPower(fw, name, base ID, exponent int8) ID` | Register `base^exponent` |
+| `IsCompound(w, unitID) bool` | Reports whether unitID is a compound unit |
+| `UnitFactors(w, unitID) ([]ID, []ID)` | Decompose into numerator / denominator ID lists |
+| `(w *World).UnitSymbol(unitID) string` | Display symbol (override > auto-generated > atomic Symbol) |
+
+### Symbol composition
+
+Auto-generated symbols use `·` (U+00B7) for products and `/` for quotients.
+Exponent 2 → `²`; exponent 3 → `³`; exponent N > 3 → `^N`.
+An explicit `Symbol` set at registration overrides auto-generation.
+
+### `Convert` extended
+
+`Convert(w, value, fromUnit, toUnit)` now supports both atomic and compound units via
+`siCanonical` dimensional analysis: each unit maps to a `(root→exponent)` map and a
+cumulative scale factor. Two units are compatible when their exponent maps are identical.
+
+### Built-in compound units (indices 63–72)
+
+| Index | Accessor | Symbol | Composition |
+|-------|----------|--------|-------------|
+| 63 | `w.MeterPerSecond()` | `m/s` | m/s |
+| 64 | `w.KiloMeterPerHour()` | `km/h` | km/h |
+| 65 | `w.MeterPerSecondSquared()` | `m/s²` | m/s² |
+| 66 | `w.NewtonCompound()` | `N` | kg·m/s² |
+| 67 | `w.JouleCompound()` | `J` | kg·m²/s² |
+| 68 | `w.Watt()` | `W` | kg·m²/s³ |
+| 69 | `w.Pascal()` | `Pa` | kg/(m·s²) |
+| 70 | `w.HertzCompound()` | `Hz` | 1/s |
+| 71 | `w.RadianPerSecond()` | `rad/s` | rad/s |
+| 72 | `w.Inverse()` | `1/x` | opaque marker |
+
+User entity allocation now starts at index 73 (was 63).
+
+### Persistence
+
+User-defined compound units survive `MarshalJSON`/`UnmarshalJSON` (via `num_factors` /
+`denom_factors` fields) and `TakeSnapshot`/`RestoreSnapshot` (binary section 10).
+
+### REST
+
+`GET /type_info/{path}` now emits compound symbols (e.g. `"kg·m/s²"`) in the `unit` field
+instead of the unit entity name.
+
+### Tests
+
+19 new compound unit tests in `units_test.go`; `go vet`, `golangci-lint`, `-race -count=3`
+all clean.
+
 ## v0.96.0 — 2026-05-15 — Phase 16.41: Query DSL v2 parser
 
 Extends the FQL parser (`query_dsl.go`) from v1 to v2, exposing the full query-language

@@ -95,7 +95,7 @@ type World struct {
 	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45)
 	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46)
 	slotOfID             ID                              // built-in SlotOf relationship entity (index 47)
-	// Built-in unit entities (indices 48–62); user entities start at index 63.
+	// Built-in unit entities (indices 48–62); atomic units (Phase 16.30).
 	meterID       ID // built-in Meter length unit entity (index 48)
 	kiloMeterID   ID // built-in KiloMeter length unit entity (index 49)
 	milliMeterID  ID // built-in MilliMeter length unit entity (index 50)
@@ -106,13 +106,25 @@ type World struct {
 	gramID        ID // built-in Gram mass unit entity (index 55)
 	kiloGramID    ID // built-in KiloGram mass unit entity (index 56)
 	megaGramID    ID // built-in MegaGram mass unit entity (index 57)
-	newtonID      ID // built-in Newton force unit entity (index 58)
-	jouleID       ID // built-in Joule energy unit entity (index 59)
-	hertzID       ID // built-in Hertz frequency unit entity (index 60)
+	newtonID      ID // built-in Newton force unit entity (index 58, opaque root)
+	jouleID       ID // built-in Joule energy unit entity (index 59, opaque root)
+	hertzID       ID // built-in Hertz frequency unit entity (index 60, opaque root)
 	radianID      ID // built-in Radian angle unit entity (index 61)
 	degreeID      ID // built-in Degree angle unit entity (index 62)
+	// Built-in compound unit entities (indices 63–72); user entities start at index 73.
+	meterPerSecondID        ID // built-in MeterPerSecond velocity unit (index 63)
+	kiloMeterPerHourID      ID // built-in KiloMeterPerHour velocity unit (index 64)
+	meterPerSecondSquaredID ID // built-in MeterPerSecondSquared acceleration unit (index 65)
+	newtonCompoundID        ID // built-in NewtonCompound force unit kg·m/s² (index 66)
+	jouleCompoundID         ID // built-in JouleCompound energy unit kg·m²/s² (index 67)
+	wattID                  ID // built-in Watt power unit kg·m²/s³ (index 68)
+	pascalID                ID // built-in Pascal pressure unit kg/(m·s²) (index 69)
+	hertzCompoundID         ID // built-in HertzCompound frequency unit 1/s (index 70)
+	radianPerSecondID       ID // built-in RadianPerSecond angular velocity unit (index 71)
+	inverseID               ID // built-in Inverse reciprocal helper entity (index 72)
 	// Units addon state
 	unitDefs             map[ID]Unit                   // unit entity ID → Unit descriptor (built-in + user)
+	compoundDefs         map[ID]*compoundDef           // compound unit entity ID → factor lists
 	componentUnits       map[ID]ID                     // component entity ID → unit entity ID
 	monitors             []*monitorObserver            // all registered monitor observers
 	preUpdate            *Phase                        // built-in PreUpdate pipeline phase
@@ -264,12 +276,22 @@ type World struct {
 //   - Index 55: Gram built-in mass unit entity
 //   - Index 56: KiloGram built-in mass unit entity (Factor=1000, Base=Gram)
 //   - Index 57: MegaGram built-in mass unit entity (Factor=1_000_000, Base=Gram)
-//   - Index 58: Newton built-in force unit entity (opaque root in v1)
-//   - Index 59: Joule built-in energy unit entity (opaque root in v1)
-//   - Index 60: Hertz built-in frequency unit entity (opaque root in v1)
+//   - Index 58: Newton built-in force unit entity (opaque root; compound alias at index 66)
+//   - Index 59: Joule built-in energy unit entity (opaque root; compound alias at index 67)
+//   - Index 60: Hertz built-in frequency unit entity (opaque root; compound alias at index 70)
 //   - Index 61: Radian built-in angle unit entity
 //   - Index 62: Degree built-in angle unit entity (Factor=math.Pi/180, Base=Radian)
-//   - Index 63+: user entities (NewEntity)
+//   - Index 63: MeterPerSecond built-in velocity unit entity (compound: m/s)
+//   - Index 64: KiloMeterPerHour built-in velocity unit entity (compound: km/h)
+//   - Index 65: MeterPerSecondSquared built-in acceleration unit entity (compound: m/s²)
+//   - Index 66: NewtonCompound built-in force unit entity (compound: kg·m/s², Symbol="N")
+//   - Index 67: JouleCompound built-in energy unit entity (compound: kg·m²/s², Symbol="J")
+//   - Index 68: Watt built-in power unit entity (compound: kg·m²/s³, Symbol="W")
+//   - Index 69: Pascal built-in pressure unit entity (compound: kg/(m·s²), Symbol="Pa")
+//   - Index 70: HertzCompound built-in frequency unit entity (compound: 1/s, Symbol="Hz")
+//   - Index 71: RadianPerSecond built-in angular velocity unit entity (compound: rad/s)
+//   - Index 72: Inverse built-in reciprocal helper entity (opaque marker)
+//   - Index 73+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -563,8 +585,8 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(slotOf))
 	w.slotOfID = slotOf
-	// Allocate the built-in Units addon entities (indices 48–62).
-	// User entity allocation starts at index 63 after this point.
+	// Allocate the built-in Units addon entities (indices 48–72).
+	// User entity allocation starts at index 73 after this point.
 	meter := w.index.Alloc()
 	rec = w.index.Get(meter)
 	rec.Table = w.empty
@@ -640,7 +662,58 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(degree))
 	w.degreeID = degree
-	// Bootstrap unit addon: populate unitDefs for the 15 built-in unit entities.
+	// Allocate the built-in compound unit entities (indices 63–72).
+	meterPerSecond := w.index.Alloc()
+	rec = w.index.Get(meterPerSecond)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(meterPerSecond))
+	w.meterPerSecondID = meterPerSecond
+	kiloMeterPerHour := w.index.Alloc()
+	rec = w.index.Get(kiloMeterPerHour)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(kiloMeterPerHour))
+	w.kiloMeterPerHourID = kiloMeterPerHour
+	meterPerSecondSquared := w.index.Alloc()
+	rec = w.index.Get(meterPerSecondSquared)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(meterPerSecondSquared))
+	w.meterPerSecondSquaredID = meterPerSecondSquared
+	newtonCompound := w.index.Alloc()
+	rec = w.index.Get(newtonCompound)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(newtonCompound))
+	w.newtonCompoundID = newtonCompound
+	jouleCompound := w.index.Alloc()
+	rec = w.index.Get(jouleCompound)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(jouleCompound))
+	w.jouleCompoundID = jouleCompound
+	watt := w.index.Alloc()
+	rec = w.index.Get(watt)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(watt))
+	w.wattID = watt
+	pascal := w.index.Alloc()
+	rec = w.index.Get(pascal)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(pascal))
+	w.pascalID = pascal
+	hertzCompound := w.index.Alloc()
+	rec = w.index.Get(hertzCompound)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(hertzCompound))
+	w.hertzCompoundID = hertzCompound
+	radianPerSecond := w.index.Alloc()
+	rec = w.index.Get(radianPerSecond)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(radianPerSecond))
+	w.radianPerSecondID = radianPerSecond
+	inverse := w.index.Alloc()
+	rec = w.index.Get(inverse)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(inverse))
+	w.inverseID = inverse
+	// Bootstrap unit addon: populate unitDefs for the 25 built-in unit entities.
 	bootstrapBuiltinUnits(w)
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
 	// (ChildOf, OnDeleteTarget) = Delete: deleting a parent cascades to all children.
