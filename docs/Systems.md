@@ -650,6 +650,44 @@ For the full `Timer` / `RateFilter` component API, constructor functions, and ch
 
 ---
 
+## Context cancellation
+
+`ProgressContext` is the context-aware sibling of `Progress`. It honours a
+`context.Context` and returns early with `ctx.Err()` if the context is cancelled
+or its deadline expires before the frame completes.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+defer cancel()
+if err := w.ProgressContext(ctx, 1.0/60.0); err != nil {
+    log.Println("frame cancelled:", err) // context.DeadlineExceeded
+}
+```
+
+Cancellation is checked:
+- Before each pipeline phase.
+- After each serial system completes.
+- After each parallel batch wave (with a mandatory `mergeWorkerStages` flush, so
+  deferred mutations from completed waves are preserved).
+
+`Progress` continues to exist and delegates to `ProgressContext(context.Background(), dt)` — all existing code compiles unchanged.
+
+### RunSystemContext
+
+`RunSystemContext` is the context-aware version of `RunSystem` for out-of-pipeline
+single-system invocation:
+
+```go
+err := flecs.RunSystemContext(ctx, sys, dt)
+```
+
+Returns `ctx.Err()` if the context is already cancelled before execution starts.
+
+For the full cancellation API including `TakeSnapshotContext`, `EachContext`, and
+REST endpoint behaviour, see [docs/Cancellation.md](Cancellation.md).
+
+---
+
 ## Features Not Yet Ported
 
 The following features from the upstream C flecs systems API are not yet available in Go flecs. They are listed so you can plan accordingly.

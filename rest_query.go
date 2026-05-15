@@ -83,15 +83,25 @@ func restQuery(w *World) http.HandlerFunc {
 			}
 		}
 
+		ctx := r.Context()
+
 		var (
 			resp     queryResponse
 			parseErr *ParseQueryError
 			panicVal any
+			ctxErr   error
 		)
 
 		func() {
 			defer func() { panicVal = recover() }()
 			w.Read(func(fr *Reader) {
+				select {
+				case <-ctx.Done():
+					ctxErr = ctx.Err()
+					return
+				default:
+				}
+
 				terms, err := parseQueryExpr(expr, w)
 				if err != nil {
 					if pe, ok := err.(*ParseQueryError); ok {
@@ -155,6 +165,8 @@ func restQuery(w *World) http.HandlerFunc {
 					seen = make(map[ID]bool)
 				}
 
+				entityCount := 0
+			execLoop:
 				for _, execTerms := range execSets {
 					q := NewQueryFromTerms(w, execTerms...)
 					it := q.Iter()
@@ -199,8 +211,21 @@ func restQuery(w *World) http.HandlerFunc {
 								results = append(results, entry)
 							}
 							matchIdx++
+							entityCount++
+							if entityCount%ctxCheckInterval == 0 {
+								select {
+								case <-ctx.Done():
+									ctxErr = ctx.Err()
+									break execLoop
+								default:
+								}
+							}
 						}
 					}
+				}
+
+				if ctxErr != nil {
+					return
 				}
 
 				resp = queryResponse{
@@ -218,6 +243,10 @@ func restQuery(w *World) http.HandlerFunc {
 
 		if panicVal != nil {
 			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		if ctxErr != nil {
+			writeClientClosed(rw)
 			return
 		}
 		if parseErr != nil {

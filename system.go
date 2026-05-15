@@ -378,8 +378,27 @@ func (s *System) IsClosed() bool {
 // Compaction of closed systems is NOT done here; it happens lazily in NewSystem
 // and NewSystemInPhase.
 func (w *World) Progress(dt float32) {
+	_ = w.ProgressContext(context.Background(), dt)
+}
+
+// ProgressContext runs all registered systems in pipeline order with
+// cooperative context cancellation. It behaves identically to [Progress] when
+// ctx is context.Background(). With a cancellable or deadline context it:
+//   - Returns ctx.Err() immediately if ctx is already done before dispatch.
+//   - Checks ctx between phases, between serial systems, and after each
+//     parallel-batch wave completes and its deferred mutations are flushed.
+//   - Completes the current in-flight wave before returning; deferred mutations
+//     from completed waves are always flushed before the error is returned.
+//
+// dt must be >= 0; ProgressContext panics on negative dt.
+func (w *World) ProgressContext(ctx context.Context, dt float32) error {
 	if dt < 0 {
-		panic("flecs: Progress: dt must be >= 0")
+		panic("flecs: ProgressContext: dt must be >= 0")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	w.checkExclusiveAccessWrite()
 	if w.pipelineDirty {
@@ -403,7 +422,8 @@ func (w *World) Progress(dt float32) {
 
 	w.lastFramePhases = make([]PhaseStats, len(w.phaseOrder))
 
-	runPhase := func(p *Phase, phaseDT float32) {
+	runPhase := func(p *Phase, phaseDT float32) error {
+		var phaseErr error
 		w.deferScope(func() {
 			active := make([]*System, 0, len(p.orderedSystems))
 			for _, s := range p.orderedSystems {
@@ -455,6 +475,12 @@ func (w *World) Progress(dt float32) {
 					s.fn(phaseDT, it)
 					s.statsTickDuration = time.Since(start)
 					s.statsTickDidRun = true
+					select {
+					case <-ctx.Done():
+						phaseErr = ctx.Err()
+						return
+					default:
+					}
 				}
 				return
 			}
@@ -490,6 +516,12 @@ func (w *World) Progress(dt float32) {
 					s.statsTickDidRun = true
 					w.mergeWorkerStages(n)
 					// stages[0].deferDepth is unchanged (managed by deferScope).
+					select {
+					case <-ctx.Done():
+						phaseErr = ctx.Err()
+						return
+					default:
+					}
 					i++
 					continue
 				}
@@ -499,6 +531,12 @@ func (w *World) Progress(dt float32) {
 					s.fn(phaseDT, it)
 					s.statsTickDuration = time.Since(start)
 					s.statsTickDidRun = true
+					select {
+					case <-ctx.Done():
+						phaseErr = ctx.Err()
+						return
+					default:
+					}
 					i++
 					continue
 				}
@@ -535,6 +573,12 @@ func (w *World) Progress(dt float32) {
 						batch[0].fn(phaseDT, it)
 						batch[0].statsTickDuration = time.Since(start)
 						batch[0].statsTickDidRun = true
+						select {
+						case <-ctx.Done():
+							phaseErr = ctx.Err()
+							return
+						default:
+						}
 					}
 					continue
 				}
@@ -570,6 +614,15 @@ func (w *World) Progress(dt float32) {
 							}
 						}
 						wg.Wait()
+						select {
+						case <-ctx.Done():
+							// Flush this wave's stage mutations before returning so
+							// deferred mutations from completed waves are never lost.
+							w.mergeWorkerStages(batchN)
+							phaseErr = ctx.Err()
+							return
+						default:
+						}
 					}
 				}
 				// Merge per-stage queues in ascending id order, then stage 0.
@@ -577,6 +630,7 @@ func (w *World) Progress(dt float32) {
 				w.mergeWorkerStages(batchN)
 			}
 		})
+		return phaseErr
 	}
 
 	countPhase := func(p *Phase) int {
@@ -590,6 +644,12 @@ func (w *World) Progress(dt float32) {
 	}
 
 	for i, phase := range w.phaseOrder {
+		select {
+		case <-ctx.Done():
+			w.statsCommit(dt)
+			return ctx.Err()
+		default:
+		}
 		w.lastFramePhases[i].Name = phase.name
 		if !phase.enabled {
 			continue
@@ -605,10 +665,19 @@ func (w *World) Progress(dt float32) {
 					step := w.fixedTimestep
 					if count > 0 {
 						start := time.Now()
-						runPhase(phase, step)
+						if err := runPhase(phase, step); err != nil {
+							total += time.Since(start)
+							w.lastFramePhases[i].Duration = total
+							w.statsCommit(dt)
+							return err
+						}
 						total += time.Since(start)
 					} else {
-						runPhase(phase, step)
+						if err := runPhase(phase, step); err != nil {
+							w.lastFramePhases[i].Duration = total
+							w.statsCommit(dt)
+							return err
+						}
 					}
 					w.fixedAccumulator -= step
 				}
@@ -620,13 +689,21 @@ func (w *World) Progress(dt float32) {
 		w.lastFramePhases[i].SystemCount = count
 		if count > 0 {
 			start := time.Now()
-			runPhase(phase, dt)
+			if err := runPhase(phase, dt); err != nil {
+				w.lastFramePhases[i].Duration = time.Since(start)
+				w.statsCommit(dt)
+				return err
+			}
 			w.lastFramePhases[i].Duration = time.Since(start)
 		} else {
-			runPhase(phase, dt)
+			if err := runPhase(phase, dt); err != nil {
+				w.statsCommit(dt)
+				return err
+			}
 		}
 	}
 	w.statsCommit(dt)
+	return nil
 }
 
 // SystemCount returns the number of currently registered (non-closed) systems.
@@ -676,17 +753,34 @@ func (w *World) mergeWorkerStages(n int) {
 //
 // Panics if s is nil or s is closed (IsClosed() == true).
 func RunSystem(s *System, dt float32) {
+	_ = RunSystemContext(context.Background(), s, dt)
+}
+
+// RunSystemContext invokes s once synchronously with the given dt, outside the
+// normal pipeline, with cooperative context cancellation. It returns ctx.Err()
+// immediately if ctx is already done before the system runs; otherwise it runs
+// the system to completion (the system callback controls its own inner loop)
+// and returns nil.
+//
+// Panics follow the same rules as [RunSystem].
+func RunSystemContext(ctx context.Context, s *System, dt float32) error {
 	if s == nil {
-		panic("flecs: RunSystem: system must not be nil")
+		panic("flecs: RunSystemContext: system must not be nil")
 	}
 	if s.removed {
-		panic("flecs: RunSystem: system is closed")
+		panic("flecs: RunSystemContext: system is closed")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	s.w.checkExclusiveAccessWrite()
 	s.w.deferScope(func() {
 		it := s.query.Iter()
 		s.fn(dt, it)
 	})
+	return nil
 }
 
 // RunSystemWorker invokes sys once synchronously for the entity slice owned by

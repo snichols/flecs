@@ -1,6 +1,7 @@
 package flecs
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
@@ -1805,10 +1806,39 @@ func (q *Query) Iter() *QueryIter {
 // *QueryIter passed to fn is already positioned on a matching table; callers
 // must NOT call Next inside fn.
 func (q *Query) Each(fn func(*QueryIter)) {
+	_ = q.EachContext(context.Background(), fn)
+}
+
+// ctxCheckInterval is the number of table iterations between ctx.Done() checks
+// in EachContext variants. N=1024 keeps check overhead well under 1% of
+// inner-loop time for typical table sizes.
+const ctxCheckInterval = 1024
+
+// EachContext iterates all matching tables with cooperative context
+// cancellation. It checks ctx every [ctxCheckInterval] tables; if the context
+// is cancelled, the current table's fn call completes and then ctx.Err() is
+// returned. Returns nil when all tables are exhausted without cancellation.
+func (q *Query) EachContext(ctx context.Context, fn func(*QueryIter)) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	it := q.Iter()
+	n := 0
 	for it.Next() {
 		fn(it)
+		n++
+		if n >= ctxCheckInterval {
+			n = 0
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 	}
+	return nil
 }
 
 // QueryIter is a pull-style iterator over the tables matching a Query or

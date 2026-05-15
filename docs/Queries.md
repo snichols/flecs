@@ -1666,6 +1666,30 @@ See the [ComponentTraits manual](ComponentTraits.md#cantoggle) for full details.
 
 ---
 
+## Context-aware iteration _(v0.106.0)_
+
+`EachContext` is the context-aware sibling of the plain callback iteration pattern.
+It is available on both `*Query` and `*CachedQuery`:
+
+```go
+err := q.EachContext(ctx, func(it *flecs.QueryIter) {
+    for it.Next() {
+        // process entities in this table slice
+    }
+})
+if err != nil {
+    log.Println("iteration cancelled:", err) // context.Canceled or context.DeadlineExceeded
+}
+```
+
+Cancellation is checked every 1024 `it.Next()` advances. The context is also
+checked once at entry before the first iteration — a pre-cancelled context returns
+immediately with `ctx.Err()` and zero iterations.
+
+For the full cancellation API and design rationale, see [docs/Cancellation.md](Cancellation.md).
+
+---
+
 ## REST Query DSL
 
 Queries can also be expressed as strings via the `GET /query?expr=` REST endpoint.

@@ -2,6 +2,7 @@ package flecs
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -29,9 +30,15 @@ const firstSnapUserIndex = uint32(78)
 // opaque; use [Snapshot.Bytes] / [LoadSnapshot] for disk persistence. The
 // binary format has no stability guarantee in v1 — version mismatches on
 // LoadSnapshot return an error.
+//
+// Partial is true when the snapshot was produced by [(*World).TakeSnapshotContext]
+// and the context was cancelled before the walk completed. A partial snapshot
+// must not be passed to RestoreSnapshot or RestoreSnapshotContext; use it only
+// to detect that serialization was interrupted.
 type Snapshot struct {
 	blob    []byte // serialized payload (everything after the 16-byte file header)
 	worldID uint64 // world-identity token captured at take time
+	Partial bool   // true if serialization was cancelled mid-walk
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -41,13 +48,38 @@ type Snapshot struct {
 // Panics if a Write block is currently in progress from another goroutine
 // (detected via TryRLock).
 func TakeSnapshot(w *World) *Snapshot {
+	s, err := w.TakeSnapshotContext(context.Background())
+	if err != nil {
+		panic(fmt.Sprintf("flecs: TakeSnapshot: %v", err))
+	}
+	return s
+}
+
+// TakeSnapshotContext captures a binary snapshot of w's current state with
+// cooperative context cancellation. It checks ctx between tables during the
+// walk; if the context is cancelled, it returns a partial [Snapshot] (with
+// Partial == true) along with ctx.Err(). A partial snapshot must not be
+// restored; inspect Partial to detect interruption.
+//
+// Panics if a Write block is currently in progress.
+func (w *World) TakeSnapshotContext(ctx context.Context) (*Snapshot, error) {
 	if !w.mu.TryRLock() {
-		panic("flecs: TakeSnapshot: cannot take snapshot while a Write block is in progress")
+		panic("flecs: TakeSnapshotContext: cannot take snapshot while a Write block is in progress")
 	}
 	defer w.mu.RUnlock()
+	select {
+	case <-ctx.Done():
+		return &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w))), Partial: true}, ctx.Err()
+	default:
+	}
 	s := &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w)))}
-	s.blob = snapshotSerialize(w)
-	return s
+	var partial bool
+	s.blob, partial = snapshotSerializeContext(ctx, w)
+	if partial {
+		s.Partial = true
+		return s, ctx.Err()
+	}
+	return s, nil
 }
 
 // RestoreSnapshot restores w to the state captured in s, fully replacing all
@@ -63,16 +95,32 @@ func TakeSnapshot(w *World) *Snapshot {
 //   - Archetype *Table pointers cached by user code are invalidated.
 //   - Cached queries are cleared; systems retain their registrations.
 func RestoreSnapshot(w *World, s *Snapshot) {
+	if err := w.RestoreSnapshotContext(context.Background(), s); err != nil {
+		panic(fmt.Sprintf("flecs: RestoreSnapshot: %v", err))
+	}
+}
+
+// RestoreSnapshotContext restores w from s with cooperative context
+// cancellation. It checks ctx between deserialization steps; if the context
+// is cancelled mid-restore the world is left in a partial state — entity-index
+// and component tables may be inconsistent. Callers that require atomicity
+// should take a snapshot before calling this function and re-restore on error.
+//
+// Panics follow the same rules as [RestoreSnapshot].
+func (w *World) RestoreSnapshotContext(ctx context.Context, s *Snapshot) error {
 	if !w.mu.TryLock() {
-		panic("flecs: RestoreSnapshot: cannot restore while a Read or Write block is in progress")
+		panic("flecs: RestoreSnapshotContext: cannot restore while a Read or Write block is in progress")
 	}
 	defer w.mu.Unlock()
 	if s.worldID != uint64(uintptr(unsafe.Pointer(w))) {
-		panic("flecs: RestoreSnapshot: snapshot belongs to a different world; cross-world restore is forbidden")
+		panic("flecs: RestoreSnapshotContext: snapshot belongs to a different world; cross-world restore is forbidden")
 	}
-	if err := snapshotDeserialize(w, s.blob); err != nil {
-		panic(fmt.Sprintf("flecs: RestoreSnapshot: %v", err))
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
+	return snapshotDeserializeContext(ctx, w, s.blob)
 }
 
 // Bytes serializes s to a self-contained byte slice for disk storage.
@@ -189,19 +237,66 @@ func (br *binReader) raw(n int) ([]byte, error) {
 //  9. Ordered children
 // 10. Unit defs     (user-registered unit definitions)
 
-func snapshotSerialize(w *World) []byte {
+func snapshotSerializeContext(ctx context.Context, w *World) (blob []byte, partial bool) {
 	bw := &binWriter{buf: &bytes.Buffer{}}
 	serializeComponents(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeEntityIndex(bw, w)
-	serializeTables(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
+	if p := serializeTablesContext(ctx, bw, w); p {
+		return bw.buf.Bytes(), true
+	}
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeEmptyTableUserEnts(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeSparseData(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeUnionState(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeEntityRange(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializePolicies(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeOrderedChildren(bw, w)
+	select {
+	case <-ctx.Done():
+		return bw.buf.Bytes(), true
+	default:
+	}
 	serializeUnitDefs(bw, w)
-	return bw.buf.Bytes()
+	return bw.buf.Bytes(), false
 }
 
 // ─── serializeComponents ──────────────────────────────────────────────────────
@@ -263,7 +358,9 @@ func serializeEntityIndex(bw *binWriter, w *World) {
 
 // ─── serializeTables ─────────────────────────────────────────────────────────
 
-func serializeTables(bw *binWriter, w *World) {
+// serializeTablesContext serializes tables, checking ctx between each table.
+// Returns true if serialization was cancelled.
+func serializeTablesContext(ctx context.Context, bw *binWriter, w *World) (partial bool) {
 	var userTables []*table.Table
 	for _, t := range w.tables {
 		if len(t.Type()) == 0 {
@@ -274,7 +371,13 @@ func serializeTables(bw *binWriter, w *World) {
 	bw.u32(uint32(len(userTables)))
 	for _, t := range userTables {
 		serializeTable(bw, w, t)
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+		}
 	}
+	return false
 }
 
 func serializeTable(bw *binWriter, w *World, t *table.Table) {
@@ -581,35 +684,84 @@ func serializeOrderedChildren(bw *binWriter, w *World) {
 // 10. Restore ordered children
 // 11. Restore unit defs
 
-func snapshotDeserialize(w *World, blob []byte) error {
+// snapshotDeserializeContext restores world state from blob, checking ctx
+// between major deserialization steps. If ctx is cancelled mid-restore, the
+// world is left in a partial state — callers that require atomicity should
+// snapshot the world before calling this function and re-restore on error.
+func snapshotDeserializeContext(ctx context.Context, w *World, blob []byte) error {
 	br := &binReader{data: blob}
 	if err := deserializeComponents(br, w); err != nil {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	clearUserState(w)
 	if err := deserializeEntityIndex(br, w); err != nil {
 		return err
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if err := deserializeTables(br, w); err != nil {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	if err := deserializeEmptyTableUserEnts(br, w); err != nil {
 		return err
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if err := deserializeSparseData(br, w); err != nil {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	if err := deserializeUnionState(br, w); err != nil {
 		return err
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if err := deserializeEntityRange(br, w); err != nil {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	if err := deserializePolicies(br, w); err != nil {
 		return err
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if err := deserializeOrderedChildren(br, w); err != nil {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	if err := deserializeUnitDefs(br, w); err != nil {
 		return err

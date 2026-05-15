@@ -25,6 +25,46 @@ world access — they must be called **outside** any `w.Write` or `w.Read` block
 Calling `TakeSnapshot` or `RestoreSnapshot` while a write block is active panics
 with `ErrExclusiveAccessViolation`.
 
+## Context-aware variants _(v0.106.0)_
+
+```go
+snap, err := w.TakeSnapshotContext(ctx)
+err = w.RestoreSnapshotContext(ctx, snap)
+```
+
+These variants return early with `ctx.Err()` if the context is cancelled or its
+deadline expires before the operation completes.
+
+### Partial snapshots
+
+`TakeSnapshotContext` sets `snap.Partial = true` when it returns early. A partial
+snapshot **must not be used for restore** — the serialised state is incomplete.
+Always check the flag before using the snapshot:
+
+```go
+snap, err := w.TakeSnapshotContext(ctx)
+if snap.Partial {
+    // context fired mid-walk; snapshot is unusable
+    return err
+}
+// snap is complete — safe to restore or serialise.
+```
+
+`TakeSnapshot` (the non-context variant) never sets `Partial`.
+
+### Restore cancellation
+
+If `RestoreSnapshotContext` is cancelled mid-way, the world is left in a
+partially-restored state. There is no rollback. Callers that need atomicity should
+take a snapshot before calling restore and keep it for recovery:
+
+```go
+backup := flecs.TakeSnapshot(w)
+if err := w.RestoreSnapshotContext(ctx, snap); err != nil {
+    flecs.RestoreSnapshot(w, backup) // roll back to pre-restore state
+}
+```
+
 ## What is captured
 
 `TakeSnapshot` copies:
