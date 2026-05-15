@@ -22,8 +22,9 @@ import (
 // Meter(50), KiloMeter(51), MilliMeter(52), Second(53), MilliSecond(54),
 // Minute(55), Hour(56), Gram(57), KiloGram(58), MegaGram(59), Newton(60),
 // Joule(61), Hertz(62), Radian(63), Degree(64),
-// and compound units MeterPerSecond(65)..Inverse(74), EventOnTableDelete(75).
-const builtinEntityCount = 75
+// compound units MeterPerSecond(65)..Inverse(74), EventOnTableDelete(75),
+// EventOnDelete(76), EventOnDeleteTarget(77).
+const builtinEntityCount = 77
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

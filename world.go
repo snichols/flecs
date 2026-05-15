@@ -38,66 +38,68 @@ type Table = table.Table
 //
 // *World is NOT goroutine-safe; external synchronization is required.
 type World struct {
-	mu                   sync.RWMutex // guards Read/Write scopes
-	writeCapability      Writer       // cached Writer; &writeCapability avoids per-Write allocation
-	readCapability       Reader       // cached Reader; &readCapability avoids per-Read allocation
-	index                *entityindex.Index
-	registry             *component.Registry
-	tables               map[string]*table.Table         // sigKey(sorted []ID) → table
-	empty                *table.Table                    // canonical empty-signature table for new entities
-	compIndex            *componentindex.Index           // reverse map: component ID → tables containing it
-	observers            map[observerKey]*observerBucket // lazily allocated; keyed by (id, event)
-	cachedQueries        []*CachedQuery                  // lazily allocated; notified on new table creation
-	systems              []*System                       // lazily allocated; compacted in NewSystem
-	childOfID            ID                              // built-in ChildOf relationship entity (index 1)
-	isAID                ID                              // built-in IsA relationship entity (index 2)
-	nameID               ID                              // built-in Name component entity (index 3)
-	preUpdateID          ID                              // built-in PreUpdate phase entity (index 4)
-	onUpdateID           ID                              // built-in OnUpdate phase entity (index 5)
-	postUpdateID         ID                              // built-in PostUpdate phase entity (index 6)
-	onFixedUpdateID      ID                              // built-in OnFixedUpdate phase entity (index 7)
-	onInstantiateID      ID                              // built-in OnInstantiate relationship entity (index 8)
-	inheritID            ID                              // built-in Inherit trait entity (index 9)
-	overrideID           ID                              // built-in Override trait entity (index 10)
-	dontInheritID        ID                              // built-in DontInherit trait entity (index 11)
-	onDeleteID           ID                              // built-in OnDelete trait relationship entity (index 12)
-	onDeleteTargetID     ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
-	removeActionID       ID                              // built-in Remove cleanup action entity (index 14)
-	deleteActionID       ID                              // built-in Delete cleanup action entity (index 15)
-	panicActionID        ID                              // built-in Panic cleanup action entity (index 16)
-	exclusiveID          ID                              // built-in Exclusive trait entity (index 17)
-	canToggleID          ID                              // built-in CanToggle trait entity (index 18)
-	symmetricID          ID                              // built-in Symmetric trait entity (index 19)
-	transitiveID         ID                              // built-in Transitive trait entity (index 20)
-	reflexiveID          ID                              // built-in Reflexive trait entity (index 21)
-	acyclicID            ID                              // built-in Acyclic trait entity (index 22)
-	finalID              ID                              // built-in Final trait entity (index 23)
-	oneOfID              ID                              // built-in OneOf trait entity (index 24)
-	singletonID          ID                              // built-in Singleton trait entity (index 25)
-	writeOnceID          ID                              // built-in WriteOnce trait entity (index 26)
-	traversableID        ID                              // built-in Traversable trait entity (index 27)
-	relationshipID       ID                              // built-in Relationship usage-constraint trait entity (index 28)
-	targetID             ID                              // built-in Target usage-constraint trait entity (index 29)
-	traitID              ID                              // built-in Trait usage-constraint trait entity (index 30)
-	pairIsTagID          ID                              // built-in PairIsTag trait entity (index 31)
-	withID               ID                              // built-in With trait entity (index 32)
-	orderedChildrenID    ID                              // built-in OrderedChildren trait entity (index 33)
-	dontFragmentID       ID                              // built-in DontFragment trait entity (index 35)
-	disabledID           ID                              // built-in Disabled tag entity (index 36)
-	prefabID             ID                              // built-in Prefab tag entity (index 37)
-	wildcardID           ID                              // built-in Wildcard query-term sentinel (index 38; *)
-	anyID                ID                              // built-in Any query-term sentinel (index 39; _)
-	eventOnAddID         ID                              // built-in EventOnAdd event entity (index 40)
-	eventOnSetID         ID                              // built-in EventOnSet event entity (index 41)
-	eventOnRemoveID      ID                              // built-in EventOnRemove event entity (index 42)
-	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
-	eventOnTableEmptyID  ID                              // built-in EventOnTableEmpty event entity (index 44)
-	eventOnTableFillID   ID                              // built-in EventOnTableFill event entity (index 45)
-	eventTagID           ID                              // built-in Event tag entity (index 46)
-	eventOnTableDeleteID ID                              // built-in EventOnTableDelete event entity (index 75)
-	dependsOnID          ID                              // built-in DependsOn relationship entity (index 47)
-	eventMonitorID       ID                              // built-in EventMonitor event entity (index 48)
-	slotOfID             ID                              // built-in SlotOf relationship entity (index 49)
+	mu                    sync.RWMutex // guards Read/Write scopes
+	writeCapability       Writer       // cached Writer; &writeCapability avoids per-Write allocation
+	readCapability        Reader       // cached Reader; &readCapability avoids per-Read allocation
+	index                 *entityindex.Index
+	registry              *component.Registry
+	tables                map[string]*table.Table         // sigKey(sorted []ID) → table
+	empty                 *table.Table                    // canonical empty-signature table for new entities
+	compIndex             *componentindex.Index           // reverse map: component ID → tables containing it
+	observers             map[observerKey]*observerBucket // lazily allocated; keyed by (id, event)
+	cachedQueries         []*CachedQuery                  // lazily allocated; notified on new table creation
+	systems               []*System                       // lazily allocated; compacted in NewSystem
+	childOfID             ID                              // built-in ChildOf relationship entity (index 1)
+	isAID                 ID                              // built-in IsA relationship entity (index 2)
+	nameID                ID                              // built-in Name component entity (index 3)
+	preUpdateID           ID                              // built-in PreUpdate phase entity (index 4)
+	onUpdateID            ID                              // built-in OnUpdate phase entity (index 5)
+	postUpdateID          ID                              // built-in PostUpdate phase entity (index 6)
+	onFixedUpdateID       ID                              // built-in OnFixedUpdate phase entity (index 7)
+	onInstantiateID       ID                              // built-in OnInstantiate relationship entity (index 8)
+	inheritID             ID                              // built-in Inherit trait entity (index 9)
+	overrideID            ID                              // built-in Override trait entity (index 10)
+	dontInheritID         ID                              // built-in DontInherit trait entity (index 11)
+	onDeleteID            ID                              // built-in OnDelete trait relationship entity (index 12)
+	onDeleteTargetID      ID                              // built-in OnDeleteTarget trait relationship entity (index 13)
+	removeActionID        ID                              // built-in Remove cleanup action entity (index 14)
+	deleteActionID        ID                              // built-in Delete cleanup action entity (index 15)
+	panicActionID         ID                              // built-in Panic cleanup action entity (index 16)
+	exclusiveID           ID                              // built-in Exclusive trait entity (index 17)
+	canToggleID           ID                              // built-in CanToggle trait entity (index 18)
+	symmetricID           ID                              // built-in Symmetric trait entity (index 19)
+	transitiveID          ID                              // built-in Transitive trait entity (index 20)
+	reflexiveID           ID                              // built-in Reflexive trait entity (index 21)
+	acyclicID             ID                              // built-in Acyclic trait entity (index 22)
+	finalID               ID                              // built-in Final trait entity (index 23)
+	oneOfID               ID                              // built-in OneOf trait entity (index 24)
+	singletonID           ID                              // built-in Singleton trait entity (index 25)
+	writeOnceID           ID                              // built-in WriteOnce trait entity (index 26)
+	traversableID         ID                              // built-in Traversable trait entity (index 27)
+	relationshipID        ID                              // built-in Relationship usage-constraint trait entity (index 28)
+	targetID              ID                              // built-in Target usage-constraint trait entity (index 29)
+	traitID               ID                              // built-in Trait usage-constraint trait entity (index 30)
+	pairIsTagID           ID                              // built-in PairIsTag trait entity (index 31)
+	withID                ID                              // built-in With trait entity (index 32)
+	orderedChildrenID     ID                              // built-in OrderedChildren trait entity (index 33)
+	dontFragmentID        ID                              // built-in DontFragment trait entity (index 35)
+	disabledID            ID                              // built-in Disabled tag entity (index 36)
+	prefabID              ID                              // built-in Prefab tag entity (index 37)
+	wildcardID            ID                              // built-in Wildcard query-term sentinel (index 38; *)
+	anyID                 ID                              // built-in Any query-term sentinel (index 39; _)
+	eventOnAddID          ID                              // built-in EventOnAdd event entity (index 40)
+	eventOnSetID          ID                              // built-in EventOnSet event entity (index 41)
+	eventOnRemoveID       ID                              // built-in EventOnRemove event entity (index 42)
+	eventOnTableCreateID  ID                              // built-in EventOnTableCreate event entity (index 43)
+	eventOnTableEmptyID   ID                              // built-in EventOnTableEmpty event entity (index 44)
+	eventOnTableFillID    ID                              // built-in EventOnTableFill event entity (index 45)
+	eventTagID            ID                              // built-in Event tag entity (index 46)
+	eventOnTableDeleteID  ID                              // built-in EventOnTableDelete event entity (index 75)
+	eventOnDeleteID       ID                              // built-in EventOnDelete event entity (index 76)
+	eventOnDeleteTargetID ID                              // built-in EventOnDeleteTarget event entity (index 77)
+	dependsOnID           ID                              // built-in DependsOn relationship entity (index 47)
+	eventMonitorID        ID                              // built-in EventMonitor event entity (index 48)
+	slotOfID              ID                              // built-in SlotOf relationship entity (index 49)
 	// Built-in unit entities (indices 50–64); atomic units (Phase 16.30).
 	meterID       ID // built-in Meter length unit entity (index 50)
 	kiloMeterID   ID // built-in KiloMeter length unit entity (index 51)
@@ -114,7 +116,7 @@ type World struct {
 	hertzID       ID // built-in Hertz frequency unit entity (index 62, opaque root)
 	radianID      ID // built-in Radian angle unit entity (index 63)
 	degreeID      ID // built-in Degree angle unit entity (index 64)
-	// Built-in compound unit entities (indices 65–74); EventOnTableDelete at 75; user entities start at index 76.
+	// Built-in compound unit entities (indices 65–74); EventOnTableDelete at 75; EventOnDelete at 76; EventOnDeleteTarget at 77; user entities start at index 78.
 	meterPerSecondID        ID // built-in MeterPerSecond velocity unit (index 65)
 	kiloMeterPerHourID      ID // built-in KiloMeterPerHour velocity unit (index 66)
 	meterPerSecondSquaredID ID // built-in MeterPerSecondSquared acceleration unit (index 67)
@@ -309,7 +311,9 @@ type World struct {
 //   - Index 73: RadianPerSecond built-in angular velocity unit entity (compound: rad/s)
 //   - Index 74: Inverse built-in reciprocal helper entity (opaque marker)
 //   - Index 75: EventOnTableDelete built-in event entity (fires before table reclamation)
-//   - Index 76+: user entities (NewEntity)
+//   - Index 76: EventOnDelete built-in event entity (fires before OnRemove on entity delete)
+//   - Index 77: EventOnDeleteTarget built-in event entity (fires per dependent during cleanup-policy cascade)
+//   - Index 78+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:            entityindex.New(),
@@ -750,7 +754,21 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventOnTableDelete))
 	w.eventOnTableDeleteID = eventOnTableDelete
-	// User entity allocation starts at index 76 after this point.
+	// Allocate the built-in EventOnDelete event entity (gets index 76).
+	// Fires synchronously inside deleteOne, before OnRemove hooks.
+	eventOnDelete := w.index.Alloc()
+	rec = w.index.Get(eventOnDelete)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnDelete))
+	w.eventOnDeleteID = eventOnDelete
+	// Allocate the built-in EventOnDeleteTarget event entity (gets index 77).
+	// Fires once per (target, dependent, pairRelID) triple during cleanup-policy cascade.
+	eventOnDeleteTarget := w.index.Alloc()
+	rec = w.index.Get(eventOnDeleteTarget)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnDeleteTarget))
+	w.eventOnDeleteTargetID = eventOnDeleteTarget
+	// User entity allocation starts at index 78 after this point.
 	// Bootstrap unit addon: populate unitDefs for the 25 built-in unit entities.
 	bootstrapBuiltinUnits(w)
 	// Bootstrap the ChildOf cascade-delete policy via the general cleanup mechanism.
@@ -955,6 +973,18 @@ func (w *World) EventOnTableFill() ID { return w.eventOnTableFillID }
 // reclamation sweep (emptyTicks >= threshold && !pinned && refCount == 0).
 func (w *World) EventOnTableDelete() ID { return w.eventOnTableDeleteID }
 
+// EventOnDelete returns the ID of the built-in EventOnDelete event entity.
+// Observers registered via OnDelete / OnDeleteWithOptions subscribe to this event.
+// It fires once per entity about to be deleted, before OnRemove hooks, providing
+// a *Reader window where the entity's components are still intact.
+func (w *World) EventOnDelete() ID { return w.eventOnDeleteID }
+
+// EventOnDeleteTarget returns the ID of the built-in EventOnDeleteTarget event entity.
+// Observers registered via OnDeleteTarget / OnDeleteTargetWithOptions subscribe to this event.
+// It fires once per (target, dependent, pairRelID) triple during cleanup-policy cascade,
+// before the dependent is enqueued for delete-or-remove.
+func (w *World) EventOnDeleteTarget() ID { return w.eventOnDeleteTargetID }
+
 // EventMonitor returns the ID of the built-in EventMonitor event entity (index 48).
 // Monitor observers registered via Monitor / MonitorWithOptions subscribe to this
 // event kind. The entity is exposed for introspection and symmetry with other
@@ -1087,6 +1117,12 @@ func (w *World) deleteOne(e ID) bool {
 	if len(w.monitors) > 0 {
 		w.fireMonitorsOnDelete(e, t)
 	}
+	// Fire EventOnDelete observers before OnRemove hooks; the entity is readable
+	// but must not be mutated — handlers receive *Reader only.
+	w.dispatchOnDeleteObservers(e)
+	// Component-remove cascade: if e is used as a component and its OnDelete
+	// policy is RemoveAction (default), actively remove it from all holder entities.
+	w.applyComponentRemoveCascade(e)
 	if t != nil {
 		for _, id := range t.Type() {
 			// Sparse-only components: data is in sparse-set; sparseHeld path below will
@@ -1248,14 +1284,22 @@ func deleteImmediate(w *World, e ID) bool {
 					return true
 				})
 				if flags&policyOnDeleteTargetPanic != 0 && len(psSrcs) > 0 {
+					// Fire OnDeleteTarget before panicking so handlers can log.
+					for _, src := range psSrcs {
+						w.dispatchOnDeleteTargetObservers(node, src, relID)
+					}
 					panic(fmt.Sprintf("flecs: cannot delete entity %v: it is a target of relationship %v (source entity: %v) which has OnDeleteTarget+Panic policy", node, relID, psSrcs[0]))
 				}
 				if flags&policyOnDeleteTargetRemove != 0 {
 					for _, src := range psSrcs {
+						w.dispatchOnDeleteTargetObservers(node, src, relID)
 						psRemoveOps = append(psRemoveOps, removeOp{src, relID, node})
 					}
 				} else {
 					// policyOnDeleteTargetDelete: cascade-delete parent-storage sources.
+					for _, src := range psSrcs {
+						w.dispatchOnDeleteTargetObservers(node, src, relID)
+					}
 					stack = append(stack, psSrcs...)
 				}
 				if len(tables) == 0 {
@@ -1266,15 +1310,18 @@ func deleteImmediate(w *World, e ID) bool {
 			}
 
 			if flags&policyOnDeleteTargetPanic != 0 {
-				// Identify a source entity for the panic message.
-				var src ID
+				// Identify a source entity for the panic message; fire OnDeleteTarget first.
+				var panicSrc ID
 				for _, t := range tables {
 					if es := t.Entities(); len(es) > 0 {
-						src = es[0]
+						panicSrc = es[0]
 						break
 					}
 				}
-				panic(fmt.Sprintf("flecs: cannot delete entity %v: it is a target of relationship %v (source entity: %v) which has OnDeleteTarget+Panic policy", node, relID, src))
+				if panicSrc != 0 {
+					w.dispatchOnDeleteTargetObservers(node, panicSrc, relID)
+				}
+				panic(fmt.Sprintf("flecs: cannot delete entity %v: it is a target of relationship %v (source entity: %v) which has OnDeleteTarget+Panic policy", node, relID, panicSrc))
 			}
 			// policyOnDeleteTargetDelete: cascade-delete all source entities.
 			for _, t := range tables {
@@ -1282,6 +1329,7 @@ func deleteImmediate(w *World, e ID) bool {
 				entities := append([]ID(nil), t.Entities()...)
 				for _, src := range entities {
 					if w.index.IsAlive(src) {
+						w.dispatchOnDeleteTargetObservers(node, src, relID)
 						stack = append(stack, src)
 					}
 				}

@@ -367,7 +367,7 @@ func TestUserUnit_MultipleBuiltinBases_RoundTrip(t *testing.T) {
 	}
 
 	// Just verify unmarshal succeeds and the entities are alive.
-	// The user units are allocated starting at index 75; IDs differ in w2
+	// The user units are allocated starting at index 78; IDs differ in w2
 	// since they are new entities. Count entities to verify they round-tripped.
 	// Unmarshal would have returned an error on failure; reaching here is success.
 	if w2.Count() < w.Count() {

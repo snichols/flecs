@@ -53,7 +53,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.OrderedChildren(): {}, w.Sparse(): {}, w.DontFragment(): {},
 		w.Disabled(): {}, w.Prefab(): {},
 		w.Wildcard(): {}, w.Any(): {},
-		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.EventOnTableEmpty(): {}, w.EventOnTableFill(): {}, w.EventOnTableDelete(): {}, w.Event(): {},
+		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.EventOnTableEmpty(): {}, w.EventOnTableFill(): {}, w.EventOnTableDelete(): {}, w.EventOnDelete(): {}, w.EventOnDeleteTarget(): {}, w.Event(): {},
 		w.DependsOn(): {}, w.EventMonitor(): {}, w.SlotOf(): {},
 		// Built-in unit entities (indices 48–72).
 		w.Meter(): {}, w.KiloMeter(): {}, w.MilliMeter(): {},

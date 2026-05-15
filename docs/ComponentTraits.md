@@ -288,6 +288,15 @@ action, ok := flecs.GetCleanupPolicy(w, likesID, w.OnDeleteTarget())
 
 `ChildOf` has `(OnDeleteTarget, DeleteAction)` registered at bootstrap — this drives the parent-cascade-delete behavior. `IsA` has **no** default policy (matching C); see [PrefabsManual § Protecting prefabs](PrefabsManual.md) for the opt-in recipe.
 
+#### Observer events for cleanup policies
+
+**Shipped in v0.103.0.** Two built-in observer events fire alongside cleanup-policy execution:
+
+- **`EventOnDelete`** — fires once per entity before it is deleted. Register via `OnDelete(w, fn)`. Handler receives `*Reader` (entity mid-delete).
+- **`EventOnDeleteTarget`** — fires once per `(target, dependent, pairRelID)` triple during the cascade DFS. Register via `OnDeleteTarget(w, fn)`. For `PanicAction`, fires before the panic.
+
+See [ObserversManual.md § OnDelete and OnDeleteTarget](ObserversManual.md#on-delete-and-on-delete-target) for the full API, filtering options, and mutation-safety constraints.
+
 ---
 
 ### WriteOnce

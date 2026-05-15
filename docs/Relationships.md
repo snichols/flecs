@@ -858,6 +858,19 @@ Actions: `DeleteAction` (cascade-delete sources), `PanicAction` (panic if source
 
 `ChildOf` has `(OnDeleteTarget, DeleteAction)` registered by default in bootstrap, which is what drives the parent-cascade-delete behavior. IsA does **not** get a default `OnDeleteTarget` policy (matching C); see `docs/PrefabsManual.md` for the opt-in recipe.
 
+#### Cleanup policy observer events {#cleanup-policy-observer-events}
+
+**Shipped in v0.103.0.** Two built-in observer events fire alongside cleanup-policy execution:
+
+- **`EventOnDelete`** fires once per entity about to be deleted, before `OnRemove` hooks. Register via `OnDelete(w, fn)` / `OnDeleteWithOptions(w, opts, fn)`. Handler receives `*Reader`.
+- **`EventOnDeleteTarget`** fires once per `(target, dependent, pairRelID)` triple during the cleanup-policy DFS, before the dependent is enqueued. Register via `OnDeleteTarget(w, fn)` / `OnDeleteTargetWithOptions(w, opts, fn)`. Handler receives `*Reader`.
+
+For `PanicAction` policies, both events fire **before** the panic, enabling handlers to log or capture state.
+
+**Component-remove cascade**: when a component entity is deleted with `RemoveAction` (the default), all holder entities undergo archetype migration — `OnRemove` fires per entity and no orphaned signatures remain.
+
+See [docs/ObserversManual.md § OnDelete and OnDeleteTarget](ObserversManual.md#on-delete-and-on-delete-target) for the full API reference, filtering options, and mutation-safety constraints.
+
 ```go
 w := flecs.New()
 
