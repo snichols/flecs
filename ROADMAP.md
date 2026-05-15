@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.90.0)
+## Shipped (through v0.91.0)
 
 The following features are available in the current release:
 
@@ -91,6 +91,7 @@ The following features are available in the current release:
 - **REST entity mutation endpoints** _(v0.88.0, Phase 16.33)_ — `PUT /entity` (create or claim; JSON body: `id`, `name`, `parent`; 409 on generation conflict, 404 on unresolvable parent) and `DELETE /entity/{path...}` (delete by dot-separated path; 200 OK on success). Both use `.` as path separator (deliberate C divergence from `/`). Shared `sync.Mutex` serialises concurrent writes. Partial closure of `docs/README.md` gap line 90 (component mutation + toggle + query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#put-entity).
 - **REST component mutation endpoints** _(v0.89.0, Phase 16.34)_ — `PUT /component/{entity}/{component}` (set or add; handles typed, tag, dynamic, and pair components; JSON body; 1 MB cap; `413` on overflow; tag body must be empty) and `DELETE /component/{entity}/{component}` (remove; idempotent — `200 OK` even when component is absent). Pair encoding: `~` separator (deliberate C divergence from URL-encoded parentheses). Shared `sync.Mutex` reused from Phase 16.33. Partial closure of `docs/README.md` gap line 90 (`GET /component` value-read, toggle, and query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#put-componententitycomponent).
 - **REST toggle endpoint** _(v0.90.0, Phase 16.35)_ — `PUT /toggle/{entity}` (toggles the `Disabled` tag; `?enabled=true/false` or omit to flip; `200 OK` with `{"enabled": <bool>}`) and `PUT /toggle/{entity}/{component}` (toggles a `CanToggle` component bit; same `?enabled` semantics; `400` if not CanToggle or entity lacks the component). Shared `sync.Mutex` reused. Partial closure of `docs/README.md` gap line 90 (toggle subset shipped; `GET /component` value-read and query DSL still outstanding). See [docs/FlecsRemoteApi.md](docs/FlecsRemoteApi.md#toggle-endpoint).
+- **Timer addon** _(v0.91.0, Phase 16.36)_ — `NewTimer`/`NewInterval`/`NewRateFilter` entity constructors; `(*System).SetTickSource(e)` gate; `StartTimer`/`StopTimer`/`ResetTimer`/`IsTimerFired`; `GetTimeout`/`GetInterval`; `flecs.SetRate(fw, e, n)` (entity-level, distinct from `(*System).SetRate`); chained RateFilters (Src chain); per-tick loop accumulator (subtract-and-carry); JSON + snapshot round-trip; `tickAllTimers` + `tickAllRateFilters` pre-phase hooks in `Progress`; gate precedence: interval → rate → tickSource (AND-compose; diverges from upstream C which forbids combining). Closes `docs/README.md` gap line 89. See [docs/Timer.md](docs/Timer.md). Cross-reference Phase 16.6 (line 65) which shipped per-system rate gates.
 
 ## Documentation
 

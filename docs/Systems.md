@@ -596,6 +596,56 @@ w.Read(func(r *flecs.Reader) {
 
 ---
 
+## TickSource
+
+`(*System).SetTickSource(e ID)` binds a system to a `Timer` or `RateFilter` entity (created by the Timer addon). The system fires only when that entity's `Fired` flag is true this tick — i.e., only on the ticks where the timer or rate filter fires.
+
+```go
+// Create an interval timer that fires every 100ms.
+intervalE := flecs.NewInterval(fw, 100*time.Millisecond)
+
+// Bind a system to it — the system runs only when the timer fires.
+sys := flecs.NewSystem(w, q, fn)
+sys.SetTickSource(intervalE)
+
+// Read back the binding.
+fmt.Println(sys.TickSource()) // intervalE
+
+// Clear the binding (system runs every tick again).
+sys.SetTickSource(0)
+```
+
+`SetTickSource` returns `*System` for fluent chaining:
+
+```go
+flecs.NewSystem(w, q, fn).SetTickSource(rfE)
+```
+
+### Precedence vs SetInterval and SetRate
+
+The gate evaluation order within each phase is:
+
+1. `enabled` flag — skip if false.
+2. `interval` gate (`(*System).SetInterval`) — skip if not enough time has elapsed.
+3. `rate` gate (`(*System).SetRate`) — skip if the tick-count modulus does not match.
+4. `tickSource` gate (`SetTickSource`) — skip if the bound entity's `Fired` is false.
+
+If any gate skips the system, subsequent gates are not evaluated. All four compose with AND semantics.
+
+**Recommendation:** prefer `SetTickSource` alone without `(*System).SetInterval` or `(*System).SetRate` on the same system. Combining them is legal (AND-compose) but reduces readability. Use the Timer addon's rate filters to express timing relationships between systems instead.
+
+Note: `flecs.SetRate(fw, e, n)` (free function) configures a `RateFilter` entity's `Rate` field. `(*System).SetRate(n)` configures a per-system tick-count gate. These are distinct — see [Timer.md § Naming disambiguation](Timer.md#naming-disambiguation).
+
+### Deleted tick-source entities
+
+If the bound entity is deleted, `getRefOnWorld` returns nil and `Fired` defaults to false. The system simply never fires — no crash, no panic.
+
+### Timer addon reference
+
+For the full `Timer` / `RateFilter` component API, constructor functions, and chaining examples, see [Timer.md](Timer.md).
+
+---
+
 ## Features Not Yet Ported
 
 The following features from the upstream C flecs systems API are not yet available in Go flecs. They are listed so you can plan accordingly.

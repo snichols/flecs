@@ -172,6 +172,9 @@ type World struct {
 	postMergeHooks []func(*Writer) // nil slots are tombstones; slice index = registration ID
 	alertDefs      []*alertDef
 	alertInstances map[alertKey]*AlertInstance
+	// Timer addon fields (Phase 16.36).
+	timerComponentID      ID // lazy-cached; 0 until first NewTimer/NewInterval/etc. call
+	rateFilterComponentID ID // lazy-cached; 0 until first NewRateFilter call
 	// Stats addon fields — protected by statsMu except scratch fields (statsTickDidRun,
 	// statsTickDuration on System) which are only accessed from the Progress goroutine.
 	statsMu             sync.RWMutex

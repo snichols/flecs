@@ -43,6 +43,7 @@ type System struct {
 	intervalAccum time.Duration   // accumulated time since last interval fire
 	rate          int32           // 0 or 1 = no rate gate (every tick)
 	rateCounter   int32           // increments each pipeline visit; fires when counter%rate==0
+	tickSource    ID              // 0 = no tick-source gate; non-zero = fire only when this Timer/RateFilter entity fires
 	// Stats addon fields.
 	statsName          string        // display name; set by SetName or auto-generated
 	statsLastDuration  time.Duration // wall-clock time from the most recent tick this system ran
@@ -211,6 +212,28 @@ func (s *System) SetRate(n int32) {
 // GetRate returns the current rate gate value (0 or 1 = disabled).
 func (s *System) GetRate() int32 { return s.rate }
 
+// SetTickSource binds this system to fire only when the Timer or RateFilter entity e fires this
+// tick. Pass 0 to clear the binding (system runs every tick, subject to its own interval/rate).
+//
+// Precedence: if the system also has an interval or rate gate (SetInterval / (*System).SetRate),
+// those gates are evaluated first. If they skip the system, the tick-source check is not reached.
+// To avoid ambiguity, prefer SetTickSource alone without SetInterval or (*System).SetRate.
+//
+// If the tick-source entity is deleted, getRefOnWorld returns nil and Fired defaults to false,
+// so the system simply never fires — no crash, no panic.
+//
+// Note: the free function flecs.SetRate(fw, e, n) configures a RateFilter entity's Rate field;
+// (*System).SetRate(n) configures this per-system tick-count gate. The two are distinct.
+//
+// Returns s for fluent chaining.
+func (s *System) SetTickSource(e ID) *System {
+	s.tickSource = e
+	return s
+}
+
+// TickSource returns the tick-source entity bound to this system, or 0 if unbound.
+func (s *System) TickSource() ID { return s.tickSource }
+
 // SetParallel sets whether this system is eligible for parallel dispatch.
 // Default is false (serial). When true and the world's WorkerCount is > 0,
 // this system may run concurrently with other parallel systems in the same
@@ -367,6 +390,12 @@ func (w *World) Progress(dt float32) {
 	w.frameCount++
 	w.time += dt
 
+	// Timer addon: advance all Timer and RateFilter entities ONCE per outer Progress,
+	// before any phase runs. OnFixedUpdate sub-steps do NOT re-tick timers.
+	addonDT := time.Duration(float64(dt) * float64(time.Second))
+	tickAllTimers(w, addonDT)
+	tickAllRateFilters(w, addonDT)
+
 	w.lastFramePhases = make([]PhaseStats, len(w.phaseOrder))
 
 	runPhase := func(p *Phase, phaseDT float32) {
@@ -390,6 +419,23 @@ func (w *World) Progress(dt float32) {
 				if s.rate > 1 {
 					s.rateCounter++
 					if s.rateCounter%s.rate != 0 {
+						s.statsSkipped++
+						continue
+					}
+				}
+				if s.tickSource != 0 {
+					var tsFired bool
+					if w.timerComponentID != 0 {
+						if t := getRefOnWorld[Timer](w, s.tickSource); t != nil {
+							tsFired = t.Fired
+						}
+					}
+					if !tsFired && w.rateFilterComponentID != 0 {
+						if rf := getRefOnWorld[RateFilter](w, s.tickSource); rf != nil {
+							tsFired = rf.Fired
+						}
+					}
+					if !tsFired {
 						s.statsSkipped++
 						continue
 					}
