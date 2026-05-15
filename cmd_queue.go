@@ -147,6 +147,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			q.scratch1 = q.scratch1[:0]
 			c.kind = cmdSkip
 		case cmdAddID:
+			// Parent-storage pair: do not modify archetype scratch; dispatch will call
+			// addIDImmediate which routes to the parent-column write path.
+			if c.id.IsPair() && w.parentStoragePolicies[ID(c.id.First().Index())] {
+				break // keep c.kind = cmdAddID; skip scratch1 modification
+			}
 			// Union pair: do not modify archetype; dispatch will call addIDImmediate
 			// which routes to the union store. Union pairs never appear in archetypes.
 			if c.id.IsPair() && w.unionPolicies[ID(c.id.First().Index())] {
@@ -217,6 +222,11 @@ func (q *cmdQueue) batchForEntity(w *World, entity ID) {
 			expandWithIntoScratch(w, c.id, &q.scratch1)
 			c.kind = cmdSkip
 		case cmdRemoveID:
+			// Parent-storage pair: do not modify archetype scratch; dispatch will call
+			// removeIDImmediate which routes to the parent-column clear path.
+			if c.id.IsPair() && w.parentStoragePolicies[ID(c.id.First().Index())] {
+				break // keep c.kind = cmdRemoveID
+			}
 			// Union pair: do not modify archetype; dispatch will call removeIDImmediate
 			// which routes to the union store. Union pairs never appear in archetypes.
 			if c.id.IsPair() && w.unionPolicies[ID(c.id.First().Index())] {

@@ -372,11 +372,80 @@ flecs.WithinScope(fw, parent, func(fw *flecs.Writer) {
 
 ---
 
-## Not yet ported
+## Parent storage
 
-The following upstream C features are not yet implemented in Go flecs:
+By default, every distinct `(ChildOf, target)` pair produces its own archetype table
+(fragmenting mode). For hierarchies with many parents and children that share the same
+other components, this can create thousands of tables and hurt cache efficiency.
 
-- **`Parent` hierarchy storage** — C flecs provides a second, non-fragmenting storage for small structured hierarchies where children of multiple parents can share the same archetype table. Not yet ported in Go flecs; all Go flecs hierarchies use the ChildOf (fragmenting archetype) storage.
+**Parent storage** is an opt-in mode that collapses all children of any parent — as
+long as their other components are identical — into **one** archetype table. The
+concrete parent is stored in a per-row column rather than the pair signature.
+
+### Enabling parent storage
+
+Parent storage is supported on any relationship that is declared both `Exclusive` and
+`Relationship`. The built-in `ChildOf` satisfies both:
+
+```go
+// Enable for a custom relationship:
+flecs.SetRelationship(w, MyRel)
+flecs.SetExclusive(w, MyRel)
+flecs.SetParentStorage(w, MyRel)
+
+// Enable for the built-in ChildOf:
+flecs.SetParentStorage(w, w.ChildOf())
+```
+
+`SetParentStorage` panics if the relationship is not Exclusive, not a Relationship, or
+if any entity currently carries a `(relID, *)` pair (must be called before entities are
+added).
+
+### Reparenting is O(1)
+
+Changing the parent of an entity is a single column write — no archetype migration:
+
+```go
+// With parent storage active, this is O(1):
+flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), newParent))
+```
+
+### Querying parent-storage hierarchies
+
+All query APIs work transparently. For specific-target terms the query engine switches
+to per-entity mixed mode, checking the parent column per row:
+
+```go
+// Specific parent — mixed-mode per-entity filter:
+q := flecs.NewQueryFromTerms(w,
+    flecs.With[Position](),
+    flecs.WithPair(w.ChildOf(), parentA),
+)
+
+// Wildcard — matches all children regardless of parent:
+q2 := flecs.NewQueryFromTerms(w,
+    flecs.With[Position](),
+    flecs.WithPair(w.ChildOf(), w.Any()),
+)
+
+// Target variable — binds $Parent per entity:
+q3 := flecs.NewQueryFromTerms(w,
+    flecs.With[Position](),
+    flecs.WithPairTgtVar(w.ChildOf(), "$Parent"),
+)
+```
+
+`EachChild`, `ParentOf`, `GetUp`, `HasUp`, `HasID`, `RemoveID`, observers, monitor
+observers, cleanup policies (`OnDeleteTarget`), snapshot, and JSON round-trips all
+behave identically to the default fragmenting mode.
+
+### Checking whether a relationship uses parent storage
+
+```go
+if flecs.IsParentStorage(r, w.ChildOf()) {
+    fmt.Println("ChildOf uses parent storage")
+}
+```
 
 ---
 

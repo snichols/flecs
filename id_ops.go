@@ -30,6 +30,18 @@ func addIDOnWorld(w *World, e ID, e2 ID) bool {
 		// Union pair: check union store for idempotency (pair never appears in archetype).
 		if e2.IsPair() {
 			relKey := ID(e2.First().Index())
+			// Parent-storage pair: check parent column for idempotency.
+			if w.parentStoragePolicies[relKey] {
+				marker := w.parentStorageMarker(e2.First())
+				if rec.Table != nil && rec.Table.HasComponent(marker) {
+					if cur, ok := rec.Table.GetParentEntry(int(rec.Row), relKey); ok && cur.Index() == e2.Second().Index() {
+						return false // already has this exact parent
+					}
+				}
+				w.registry.EnsureID(e2)
+				s0.queue.append(cmd{kind: cmdAddID, entity: e, id: e2})
+				return true
+			}
 			if w.unionPolicies[relKey] {
 				if store, ok := w.unionStore[relKey]; ok {
 					entityKey := ID(e.Index())
@@ -201,6 +213,12 @@ func addIDImmediate(w *World, e ID, id ID) bool {
 		// ecs_add_id(world, ecs_id(Position), EcsDontFragment).
 		applyDontFragmentPolicy(w, e)
 	}
+	// Parent-storage pair intercept: for (relID, target) where relID has parent-storage
+	// active, route to the non-fragmenting column write instead of archetype migration.
+	// Must come BEFORE the exclusive enforcement block which would incorrectly migrate.
+	if id.IsPair() && w.parentStoragePolicies[ID(id.First().Index())] {
+		return w.addParentStoragePair(e, id.First(), id.Second())
+	}
 	// Union pair handling: at-most-one-target without archetype transition.
 	// Must come before the Exclusive enforcement block (union implies exclusive,
 	// but uses the union store rather than archetype migration).
@@ -368,6 +386,11 @@ func overrideCopyForInstance(w *World, instance, prefab ID, seen map[ID]struct{}
 }
 
 func removeIDImmediate(w *World, e ID, id ID) bool {
+	// Parent-storage pair intercept: for (relID, target/wildcard) where relID has
+	// parent-storage active, route to the column-clear path instead of archetype migration.
+	if id.IsPair() && w.parentStoragePolicies[ID(id.First().Index())] {
+		return w.removeParentStoragePair(e, id.First(), id.Second())
+	}
 	// Union pair: remove from union store; no archetype transition.
 	if id.IsPair() {
 		relKey := ID(id.First().Index())

@@ -59,6 +59,11 @@ type Table struct {
 	reclaimEpoch uint64
 	pinned       bool
 	dead         bool
+	// parentCols holds per-row parent IDs for parent-storage relationships (Phase 16.47).
+	// A relationship in parent-storage mode stores one parent ID per entity row here
+	// instead of fragmenting tables by (rel, target) archetype signatures.
+	// Keyed by relationship entity ID; values are parallel to entities[].
+	parentCols map[ids.ID][]ids.ID
 }
 
 // New constructs a Table for the given sorted component-id signature.
@@ -176,6 +181,7 @@ func (t *Table) FreeColumns() {
 	t.bitsets = nil
 	t.addEdges = nil
 	t.removeEdges = nil
+	t.parentCols = nil
 }
 
 // BumpChange increments the table's change counter. Called by the World after
@@ -207,6 +213,10 @@ func (t *Table) Append(entity ids.ID) int {
 			bs[wordIdx] |= uint64(1) << bitIdx
 		}
 	}
+	// Extend any parent columns: new row gets a zero ID (no parent yet).
+	for relID, col := range t.parentCols {
+		t.parentCols[relID] = append(col, 0)
+	}
 	t.changeCount++
 	return row
 }
@@ -232,6 +242,15 @@ func (t *Table) RemoveSwap(row int) (movedEntity ids.ID, moved bool) {
 		if col != nil {
 			col.removeSwap(row)
 		}
+	}
+	// Swap-remove parent columns in parallel with entity rows.
+	for relID, col := range t.parentCols {
+		last := len(col) - 1
+		if row != last {
+			col[row] = col[last]
+		}
+		col[last] = 0
+		t.parentCols[relID] = col[:last]
 	}
 	// Update any CanToggle bitsets: swap last row's bit into the removed slot,
 	// then shrink. Mirror of how columns use swap-remove.
@@ -521,4 +540,64 @@ func (t *Table) IsRowEnabled(id ids.ID, row int) bool {
 		return true
 	}
 	return (bs[row>>6]>>(uint(row)&63))&1 != 0
+}
+
+// EnsureParentCol lazily allocates a parent column for relID, extending it to
+// the current row count with zero IDs. Idempotent.
+func (t *Table) EnsureParentCol(relID ids.ID) {
+	if _, ok := t.parentCols[relID]; ok {
+		return
+	}
+	if t.parentCols == nil {
+		t.parentCols = make(map[ids.ID][]ids.ID)
+	}
+	t.parentCols[relID] = make([]ids.ID, len(t.entities))
+}
+
+// HasParentCol reports whether relID has a parent column in this table.
+func (t *Table) HasParentCol(relID ids.ID) bool {
+	_, ok := t.parentCols[relID]
+	return ok
+}
+
+// GetParentEntry returns the parent ID stored for relID at row.
+// Returns (0, false) if no parent column exists or the stored ID is zero.
+func (t *Table) GetParentEntry(row int, relID ids.ID) (ids.ID, bool) {
+	col, ok := t.parentCols[relID]
+	if !ok || row < 0 || row >= len(col) {
+		return 0, false
+	}
+	v := col[row]
+	return v, v != 0
+}
+
+// SetParentEntry writes parent into the parent column for relID at row.
+// EnsureParentCol must have been called first.
+func (t *Table) SetParentEntry(row int, relID ids.ID, parent ids.ID) {
+	t.parentCols[relID][row] = parent
+}
+
+// RemoveParentCol removes the parent column for relID entirely.
+func (t *Table) RemoveParentCol(relID ids.ID) {
+	delete(t.parentCols, relID)
+}
+
+// ParentColRelIDs returns the relationship IDs that have parent columns in
+// this table. Returns nil if none. The returned slice is not retained.
+func (t *Table) ParentColRelIDs() []ids.ID {
+	if len(t.parentCols) == 0 {
+		return nil
+	}
+	out := make([]ids.ID, 0, len(t.parentCols))
+	for relID := range t.parentCols {
+		out = append(out, relID)
+	}
+	return out
+}
+
+// GetParentCol returns the raw parent-ID slice for relID. The slice is
+// parallel to Entities(). Returns nil if no parent column exists for relID.
+// The slice is invalidated by Append and RemoveSwap.
+func (t *Table) GetParentCol(relID ids.ID) []ids.ID {
+	return t.parentCols[relID]
 }

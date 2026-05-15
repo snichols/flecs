@@ -21,6 +21,12 @@ const (
 	// relationship is deleted and there are live sources, panic.
 	// (EcsIdOnDeleteTargetPanic)
 	policyOnDeleteTargetPanic cleanupPolicyFlags = 1 << 5
+	// policyOnDeleteTargetRemove: when an entity used as a target of this
+	// relationship is deleted, remove the relationship pair from source entities.
+	// Only meaningful for parent-storage relationships (fragmented storage orphans
+	// the pair by default). Set when SetCleanupPolicy is called with RemoveAction
+	// for OnDeleteTarget.
+	policyOnDeleteTargetRemove cleanupPolicyFlags = 1 << 6
 )
 
 // SetCleanupPolicy registers the cleanup action for a relationship or component
@@ -91,14 +97,17 @@ func applyCleanupPolicy(w *World, relID ID, trait ID, action ID) {
 			panic(fmt.Sprintf("flecs: SetCleanupPolicy: unknown action entity %v for OnDelete", action))
 		}
 	case traitIdx == w.onDeleteTargetID.Index():
-		flags &^= policyOnDeleteTargetDelete | policyOnDeleteTargetPanic
+		flags &^= policyOnDeleteTargetDelete | policyOnDeleteTargetPanic | policyOnDeleteTargetRemove
 		switch actionIdx {
 		case w.deleteActionID.Index():
 			flags |= policyOnDeleteTargetDelete
 		case w.panicActionID.Index():
 			flags |= policyOnDeleteTargetPanic
 		case w.removeActionID.Index():
-			// Remove is the default; clearing the bits above is sufficient.
+			// For parent-storage relationships, explicitly track the remove policy so
+			// deleteImmediate can clear the pair from source entities. For fragmented
+			// storage the pair is left orphaned (same as the implicit default).
+			flags |= policyOnDeleteTargetRemove
 		default:
 			panic(fmt.Sprintf("flecs: SetCleanupPolicy: unknown action entity %v for OnDeleteTarget", action))
 		}

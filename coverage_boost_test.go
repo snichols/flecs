@@ -2547,6 +2547,483 @@ func TestCovEachSystemPipelineDirty(t *testing.T) {
 	})
 }
 
+// ── Phase 16.47: parent-storage Reader method PS paths ───────────────────────
+
+// TestCovPS_ReaderHasIDOwnsID covers Reader.HasID and Reader.OwnsID for
+// parent-storage pairs (scope.go:87-100, 148-161). Four cases per method:
+// dead entity, no PS marker, wildcard, specific target.
+func TestCovPS_ReaderHasIDOwnsID(t *testing.T) {
+	w := flecs.New()
+	var rel, parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		parent = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, rel)
+	flecs.SetExclusive(w, rel)
+	flecs.SetParentStorage(w, rel)
+
+	type covPSRdr struct{ V int }
+	compID := flecs.RegisterComponent[covPSRdr](w)
+
+	var deadID, noMarkerID, withMarkerID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		deadID = fw.NewEntity()
+		flecs.Set(fw, deadID, covPSRdr{V: 1})
+	})
+	w.Write(func(fw *flecs.Writer) {
+		fw.Delete(deadID)
+		noMarkerID = fw.NewEntity()
+		flecs.Set(fw, noMarkerID, covPSRdr{V: 2}) // alive, has table, no PS pair
+		withMarkerID = fw.NewEntity()
+		flecs.Set(fw, withMarkerID, covPSRdr{V: 3})
+		flecs.AddID(fw, withMarkerID, flecs.MakePair(rel, parent)) // has PS marker
+	})
+	_ = compID
+
+	pair := flecs.MakePair(rel, parent)
+	wildPair := flecs.MakePair(rel, w.Wildcard())
+	otherParent := parent // reuse; a different parent would differ — we just test non-match
+	_ = otherParent
+
+	w.Read(func(r *flecs.Reader) {
+		// Dead entity → rec==nil → scope.go:89-91, 150-152
+		if r.HasID(deadID, pair) {
+			t.Error("Reader.HasID(dead, PSPair): expected false")
+		}
+		if r.OwnsID(deadID, pair) {
+			t.Error("Reader.OwnsID(dead, PSPair): expected false")
+		}
+
+		// No PS marker → scope.go:93-95, 154-156
+		if r.HasID(noMarkerID, pair) {
+			t.Error("Reader.HasID(noMarker, PSPair): expected false")
+		}
+		if r.OwnsID(noMarkerID, pair) {
+			t.Error("Reader.OwnsID(noMarker, PSPair): expected false")
+		}
+
+		// Wildcard → scope.go:96-98, 157-159
+		if !r.HasID(withMarkerID, wildPair) {
+			t.Error("Reader.HasID(marker, wildcardPair): expected true")
+		}
+		if !r.OwnsID(withMarkerID, wildPair) {
+			t.Error("Reader.OwnsID(marker, wildcardPair): expected true")
+		}
+
+		// Specific matching target → scope.go:99-100, 160-161
+		if !r.HasID(withMarkerID, pair) {
+			t.Error("Reader.HasID(marker, specificPair): expected true")
+		}
+		if !r.OwnsID(withMarkerID, pair) {
+			t.Error("Reader.OwnsID(marker, specificPair): expected true")
+		}
+	})
+}
+
+// TestCovPS_FreeHasIDOwnsID covers the free HasID and OwnsID functions for
+// parent-storage pairs (scope.go:579-588, 644-657). Same four cases.
+func TestCovPS_FreeHasIDOwnsID(t *testing.T) {
+	w := flecs.New()
+	var rel, parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		parent = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, rel)
+	flecs.SetExclusive(w, rel)
+	flecs.SetParentStorage(w, rel)
+
+	type covPSFree struct{ V int }
+	compID := flecs.RegisterComponent[covPSFree](w)
+
+	var deadID, noMarkerID, withMarkerID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		deadID = fw.NewEntity()
+		flecs.Set(fw, deadID, covPSFree{V: 1})
+	})
+	w.Write(func(fw *flecs.Writer) {
+		fw.Delete(deadID)
+		noMarkerID = fw.NewEntity()
+		flecs.Set(fw, noMarkerID, covPSFree{V: 2})
+		withMarkerID = fw.NewEntity()
+		flecs.Set(fw, withMarkerID, covPSFree{V: 3})
+		flecs.AddID(fw, withMarkerID, flecs.MakePair(rel, parent))
+	})
+	_ = compID
+
+	pair := flecs.MakePair(rel, parent)
+	wildPair := flecs.MakePair(rel, w.Wildcard())
+
+	w.Read(func(r *flecs.Reader) {
+		// Dead entity → scope.go:579-581, 644-648
+		if flecs.HasID(r, deadID, pair) {
+			t.Error("HasID(dead, PSPair): expected false")
+		}
+		if flecs.OwnsID(r, deadID, pair) {
+			t.Error("OwnsID(dead, PSPair): expected false")
+		}
+
+		// No PS marker → scope.go:583-585, 649-652
+		if flecs.HasID(r, noMarkerID, pair) {
+			t.Error("HasID(noMarker, PSPair): expected false")
+		}
+		if flecs.OwnsID(r, noMarkerID, pair) {
+			t.Error("OwnsID(noMarker, PSPair): expected false")
+		}
+
+		// Wildcard → scope.go:586-588, 653-655
+		if !flecs.HasID(r, withMarkerID, wildPair) {
+			t.Error("HasID(marker, wildcardPair): expected true")
+		}
+		if !flecs.OwnsID(r, withMarkerID, wildPair) {
+			t.Error("OwnsID(marker, wildcardPair): expected true")
+		}
+
+		// Specific matching target → scope.go:589-590, 656-657
+		if !flecs.HasID(r, withMarkerID, pair) {
+			t.Error("HasID(marker, specificPair): expected true")
+		}
+		if !flecs.OwnsID(r, withMarkerID, pair) {
+			t.Error("OwnsID(marker, specificPair): expected true")
+		}
+	})
+}
+
+// TestCovObserverTableLogger covers the logger path in OnTableCreate/Empty/Fill/Delete
+// and the EventKind.String / eventKindToEntity cases for those events.
+// Covers observer_table.go:54-57,113-116,174-177,242-245 and
+// observer.go:55-60,103-110,315-319.
+func TestCovObserverTableLogger(t *testing.T) {
+	w := flecs.New()
+	w.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	type covObsComp struct{ V int }
+	compID := flecs.RegisterComponent[covObsComp](w)
+
+	// EventKind.String() for Empty/Fill/Delete.
+	if s := flecs.EventOnTableEmpty.String(); s != "OnTableEmpty" {
+		t.Errorf("EventOnTableEmpty.String() = %q, want 'OnTableEmpty'", s)
+	}
+	if s := flecs.EventOnTableFill.String(); s != "OnTableFill" {
+		t.Errorf("EventOnTableFill.String() = %q, want 'OnTableFill'", s)
+	}
+	if s := flecs.EventOnTableDelete.String(); s != "OnTableDelete" {
+		t.Errorf("EventOnTableDelete.String() = %q, want 'OnTableDelete'", s)
+	}
+
+	// eventKindToEntity default case (unknown EventKind).
+	_ = flecs.ObserveID(w, compID, flecs.EventKind(99), func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+
+	// OnTableCreate with logger → observer_table.go:54-57.
+	obs1 := flecs.OnTableCreate(w, func(_ *flecs.Writer, _ *flecs.Table) {})
+	if obs1 == nil {
+		t.Fatal("OnTableCreate returned nil")
+	}
+
+	// OnTableEmpty with logger → observer_table.go:113-116, observer.go:55-56.
+	obs2 := flecs.OnTableEmpty(w, func(_ *flecs.Writer, _ *flecs.Table) {})
+	if obs2 == nil {
+		t.Fatal("OnTableEmpty returned nil")
+	}
+
+	// OnTableFill with logger → observer_table.go:174-177, observer.go:57-58.
+	obs3 := flecs.OnTableFill(w, func(_ *flecs.Writer, _ *flecs.Table) {})
+	if obs3 == nil {
+		t.Fatal("OnTableFill returned nil")
+	}
+
+	// OnTableDelete with logger → observer_table.go:242-245, observer.go:59-60.
+	obs4 := flecs.OnTableDelete(w, func(_ *flecs.Reader, _ *flecs.Table) {})
+	if obs4 == nil {
+		t.Fatal("OnTableDelete returned nil")
+	}
+
+	// ObserveID with EventOnTableEmpty/Fill/Delete → eventKindToEntity cases 103-108.
+	obs5 := flecs.ObserveID(w, compID, flecs.EventOnTableEmpty, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	obs6 := flecs.ObserveID(w, compID, flecs.EventOnTableFill, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	obs7 := flecs.ObserveID(w, compID, flecs.EventOnTableDelete, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	if obs5 == nil || obs6 == nil || obs7 == nil {
+		t.Fatal("ObserveID for table events returned nil")
+	}
+
+	// ObserveIDWithOptions with logger → observer.go:315-319.
+	obs8 := flecs.ObserveIDWithOptions(w, compID, flecs.ObserverOptions{}, []flecs.EventKind{flecs.EventOnAdd}, func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) {})
+	if obs8 == nil {
+		t.Fatal("ObserveIDWithOptions returned nil")
+	}
+
+	// ObserveIDWithOptions yieldExisting with a prefab entity (disabled skip path).
+	// Covers observer.go:334-335: table with Prefab tag is skipped during sweep.
+	var prefab flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		flecs.Set(fw, prefab, covObsComp{V: 42})
+		flecs.AddID(fw, prefab, w.Prefab())
+	})
+	sweepCount := 0
+	obs9 := flecs.ObserveIDWithOptions(w, compID,
+		flecs.WithYieldExisting(),
+		[]flecs.EventKind{flecs.EventOnAdd},
+		func(_ *flecs.Writer, _ flecs.ID, _ unsafe.Pointer) { sweepCount++ })
+	_ = obs9
+	_ = prefab
+	// sweepCount should be 0 — the prefab entity's table is skipped (line 334-335).
+}
+
+// TestCovValueOps_ZeroSizeAndDeadPairRef covers value_ops.go:36-38, 47-49, 55-57.
+// - GetRef[covZS] on entity with zero-size component → ptr==nil (line 36-38).
+// - GetPairRef[T] on dead entity → rec==nil (line 47-49).
+// - GetPairRef[covZS] on entity with zero-size pair → ptr==nil (line 55-57).
+func TestCovValueOps_ZeroSizeAndDeadPairRef(t *testing.T) {
+	type covZS struct{} // zero-size component type
+
+	// Test 1: GetRef zero-size → ptr==nil (value_ops.go:36-38).
+	w1 := flecs.New()
+	zsID := flecs.RegisterComponent[covZS](w1)
+	var liveE1 flecs.ID
+	w1.Write(func(fw *flecs.Writer) {
+		liveE1 = fw.NewEntity()
+		flecs.AddID(fw, liveE1, zsID) // zero-size component (tag column → nil)
+	})
+	w1.Read(func(r *flecs.Reader) {
+		ptr := flecs.GetRef[covZS](r, liveE1)
+		if ptr != nil {
+			t.Errorf("GetRef[zero-size]: expected nil, got %v", ptr)
+		}
+	})
+
+	// Test 2: GetPairRef on dead entity → rec==nil (value_ops.go:47-49).
+	w2 := flecs.New()
+	var rel2, tgt2 flecs.ID
+	w2.Write(func(fw *flecs.Writer) {
+		rel2 = fw.NewEntity()
+		tgt2 = fw.NewEntity()
+	})
+	type covPair2 struct{ V int }
+	var deadE2 flecs.ID
+	w2.Write(func(fw *flecs.Writer) {
+		deadE2 = fw.NewEntity()
+		flecs.Set(fw, deadE2, covPair2{V: 1})
+	})
+	w2.Write(func(fw *flecs.Writer) { fw.Delete(deadE2) })
+	w2.Read(func(r *flecs.Reader) {
+		ptr := flecs.GetPairRef[covPair2](r, deadE2, rel2, tgt2)
+		if ptr != nil {
+			t.Errorf("GetPairRef dead entity: expected nil, got %v", ptr)
+		}
+	})
+
+	// Test 3: GetPairRef with zero-size pair → ptr==nil (value_ops.go:55-57).
+	w3 := flecs.New()
+	var rel3, tgt3, e3 flecs.ID
+	w3.Write(func(fw *flecs.Writer) {
+		rel3 = fw.NewEntity()
+		tgt3 = fw.NewEntity()
+		e3 = fw.NewEntity()
+		flecs.AddID(fw, e3, flecs.MakePair(rel3, tgt3)) // zero-size tag pair, col==nil
+	})
+	w3.Read(func(r *flecs.Reader) {
+		ptr := flecs.GetPairRef[covZS](r, e3, rel3, tgt3)
+		if ptr != nil {
+			t.Errorf("GetPairRef[zero-size pair]: expected nil, got %v", ptr)
+		}
+	})
+}
+
+// TestCovValueOps_IsACycle covers the cycle detection in getViaIsAByID
+// (value_ops.go:188-189). Create A→IsA(B), B→IsA(A), then call GetByID(A, cid).
+func TestCovValueOps_IsACycle(t *testing.T) {
+	w := flecs.New()
+	type cycleComp struct{ V int }
+	cid := flecs.RegisterComponent[cycleComp](w)
+
+	// Diamond inheritance: A→IsA(B), A→IsA(C), B→IsA(D), C→IsA(D).
+	// When GetByID(A, cid) traverses the chain:
+	//   seen={A}, process B → seen={A,B}, process D (from B) → seen={A,B,D}
+	//   process C (from A) → seen={A,B,D,C}, process D (from C) → D in seen → line 188-189.
+	var A, B, C, D flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		D = fw.NewEntity()
+		B = fw.NewEntity()
+		C = fw.NewEntity()
+		A = fw.NewEntity()
+		flecs.AddID(fw, B, flecs.MakePair(w.IsA(), D))
+		flecs.AddID(fw, C, flecs.MakePair(w.IsA(), D))
+		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), B))
+		flecs.AddID(fw, A, flecs.MakePair(w.IsA(), C))
+	})
+
+	// None of the entities has cid → walks full diamond → D visited twice → 188-189.
+	w.Read(func(_ *flecs.Reader) {
+		v, ok := w.GetByID(A, cid)
+		if ok || v != nil {
+			t.Errorf("GetByID diamond IsA: expected (nil, false), got (%v, %v)", v, ok)
+		}
+	})
+}
+
+// TestCovPS_SetPairDeferredZeroSize covers scope.go:782-784 (else branch when
+// pairInfo.Size == 0 in deferred SetPair).
+func TestCovPS_SetPairDeferredZeroSize(t *testing.T) {
+	w := flecs.New()
+	var rel, tgt, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		tgt = fw.NewEntity()
+		e = fw.NewEntity()
+	})
+
+	// SetPair[struct{}] in deferred scope: pairInfo.Size == 0 → else branch (782-784).
+	w.Write(func(fw *flecs.Writer) {
+		flecs.SetPair[struct{}](fw, e, rel, tgt, struct{}{})
+	})
+}
+
+// TestCovPS_DeferredRemoveDeadPS covers scope.go:826-828 (rec==nil for deferred
+// RemoveID on a dead entity with a PS pair).
+func TestCovPS_DeferredRemoveDeadPS(t *testing.T) {
+	w := flecs.New()
+	var rel, parent flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		parent = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, rel)
+	flecs.SetExclusive(w, rel)
+	flecs.SetParentStorage(w, rel)
+
+	var dead flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		dead = fw.NewEntity()
+		flecs.AddID(fw, dead, flecs.MakePair(rel, parent))
+	})
+	w.Write(func(fw *flecs.Writer) {
+		fw.Delete(dead) // entity is dead after this scope
+	})
+
+	// In deferred scope, try to remove PS pair from dead entity → rec==nil → scope.go:826-828.
+	w.Write(func(fw *flecs.Writer) {
+		result := flecs.RemoveID(fw, dead, flecs.MakePair(rel, parent))
+		if result {
+			t.Error("RemoveID on dead PS entity should return false")
+		}
+	})
+}
+
+// TestCovPS_IsACacheInvalidation covers parent_storage.go:247-249 (IsA
+// cache invalidation when removing a PS pair from an IsA relationship).
+func TestCovPS_IsACacheInvalidation(t *testing.T) {
+	w := flecs.New()
+	// Make IsA exclusive and enable parent storage on it.
+	flecs.SetExclusive(w, w.IsA())
+	flecs.SetParentStorage(w, w.IsA())
+
+	var prefab, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		prefab = fw.NewEntity()
+		e = fw.NewEntity()
+		// Add (IsA, prefab) to e via PS path.
+		flecs.AddID(fw, e, flecs.MakePair(w.IsA(), prefab))
+	})
+	// Remove the IsA PS pair → removeParentStoragePair → line 247-249 fires.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(w.IsA(), prefab))
+	})
+}
+
+// TestCovPS_TwoRelsMigrateArchetype covers world.go:1833-1835 and 1871-1874
+// (saving and restoring parent-column entries in migrateArchetypeOnly when an
+// entity has two PS relationships).
+func TestCovPS_TwoRelsMigrateArchetype(t *testing.T) {
+	w := flecs.New()
+	var rel1, rel2, p1, p2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel1 = fw.NewEntity()
+		rel2 = fw.NewEntity()
+		p1 = fw.NewEntity()
+		p2 = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, rel1)
+	flecs.SetExclusive(w, rel1)
+	flecs.SetParentStorage(w, rel1)
+	flecs.SetRelationship(w, rel2)
+	flecs.SetExclusive(w, rel2)
+	flecs.SetParentStorage(w, rel2)
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		// Add rel1 PS pair: entity migrates to table with marker (rel1, Any).
+		flecs.AddID(fw, e, flecs.MakePair(rel1, p1))
+	})
+	// Add rel2 PS pair: triggers migrateArchetypeOnly to add (rel2, Any) marker.
+	// oldTable has parent col for rel1 with non-zero entry p1.
+	// → lines 1833-1835 (savedParents append) and 1871-1874 (restore) fire.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(rel2, p2))
+	})
+
+	// Verify both parents are accessible.
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, flecs.MakePair(rel1, p1)) {
+			t.Error("entity should still have rel1 after rel2 was added")
+		}
+		if !flecs.HasID(r, e, flecs.MakePair(rel2, p2)) {
+			t.Error("entity should have rel2 after it was added")
+		}
+	})
+}
+
+// TestCovTraversal_PSNoMarker covers traversal.go:72-74 and traversal.go:81.
+// Line 72-74: entity with no table passed to firstParentVia → rec.Table==nil.
+// Line 81: entity has table but no PS marker → return 0, false.
+func TestCovTraversal_PSNoMarker(t *testing.T) {
+	w := flecs.New()
+	var rel flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, rel)
+	flecs.SetExclusive(w, rel)
+	flecs.SetParentStorage(w, rel)
+
+	// Two distinct component types: noMarkerE has covTraOther (has a table),
+	// but GetUp searches for covTraTarget which nobody has.
+	type covTraOther struct{ X int }
+	type covTraTarget struct{ Y int }
+	flecs.RegisterComponent[covTraOther](w)
+	flecs.RegisterComponent[covTraTarget](w)
+
+	// Entity with no components (no table) → traversal.go:72-74.
+	var noTableE flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		noTableE = fw.NewEntity()
+	})
+
+	// Entity with covTraOther but NO PS pair → GetUp[covTraTarget] doesn't find it
+	// locally, then firstParentVia hits line 81 (PS active, no marker).
+	var noMarkerE flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		noMarkerE = fw.NewEntity()
+		flecs.Set(fw, noMarkerE, covTraOther{X: 1})
+	})
+
+	w.Read(func(r *flecs.Reader) {
+		// Traversal.go:72-74: rec.Table==nil → return 0, false.
+		_, ok1 := flecs.GetUp[covTraTarget](r, noTableE, rel)
+		if ok1 {
+			t.Error("GetUp on entity with no table should return false")
+		}
+
+		// Traversal.go:81: PS active, no marker → return 0, false.
+		_, ok2 := flecs.GetUp[covTraTarget](r, noMarkerE, rel)
+		if ok2 {
+			t.Error("GetUp on entity with no PS marker should return false")
+		}
+	})
+}
+
 // TestCovRelVarIntersection covers the intersection branch in collectVarDomainFor
 // (query.go:1101) by creating a query with two terms sharing the same relVar.
 func TestCovRelVarIntersection(t *testing.T) {

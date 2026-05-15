@@ -220,6 +220,16 @@ type Term struct {
 	// is stored in the per-relationship union store. Union terms cannot seed archetype
 	// iteration and are checked per-entity via the union store in matchesSparseTerms.
 	Union bool
+	// ParentStorage is set to true when the term's pair relationship has the
+	// ParentStorage trait. The term's ID is transformed to the marker (rel, Any) for
+	// archetype matching; per-row filtering checks the parent column for the specific
+	// target stored in concreteTarget. If concreteTarget is zero the term is a wildcard
+	// (all rows match). Terms with ParentStorage=true and a specific concreteTarget
+	// force mixed-mode iteration (like sparse/union terms with per-entity checks).
+	ParentStorage bool
+	// concreteTarget is the original specific pair target for a ParentStorage term
+	// with a non-wildcard target. Zero means wildcard — no per-row filtering needed.
+	concreteTarget ID
 	// Sub holds the inner terms for a TermScope term. Non-nil only when
 	// Kind == TermScope; inner terms have Sparse/DontFragment/Union routing hints
 	// set by validateAndSortTerms. The sub-expression is evaluated per entity
@@ -697,6 +707,9 @@ type Query struct {
 	// query at construction time. Each entry has been IncrRef'd; Free() decrements
 	// them so reclamation can proceed once the query is released.
 	reffedTables []*table.Table
+	// hasParentStorageTgtVar is true when at least one tgtVar term has ParentStorage=true.
+	// When true, buildVarRowsRec fills parent-column bindings per entity row.
+	hasParentStorageTgtVar bool
 }
 
 // applyInheritablePromotion auto-promotes a single term to SelfUp(IsA) when
@@ -811,7 +824,14 @@ func NewQueryFromTerms(w *World, terms ...Term) *Query {
 	varOrder := buildVarTopoOrder("flecs: NewQueryFromTerms", varSlots, terms, driverVar)
 	cp, andIDs, orGroups, alwaysFalse := validateAndSortTerms(w, "flecs: NewQueryFromTerms", terms)
 	skipDisabled, skipPrefab := computeQuerySkipFlags(w, cp)
-	q := &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder, varKinds: varKinds}
+	hasParentStorageTgtVar := false
+	for _, t := range cp {
+		if t.ParentStorage && t.tgtVar != "" {
+			hasParentStorageTgtVar = true
+			break
+		}
+	}
+	q := &Query{w: w, terms: cp, andIDs: andIDs, orGroups: orGroups, skipDisabled: skipDisabled, skipPrefab: skipPrefab, alwaysFalse: alwaysFalse, varSlots: varSlots, driverVar: driverVar, varOrder: varOrder, varKinds: varKinds, hasParentStorageTgtVar: hasParentStorageTgtVar}
 	q.reffedTables = bumpMatchingTableRefs(w, q)
 	return q
 }
@@ -1042,7 +1062,22 @@ func (q *Query) collectVarDomainFor(varName string, bindings []ID) []ID {
 			continue // negative-var terms filter at varCheckTable, not here
 		}
 		var candidates []ID
-		if t.relVar != "" {
+		if t.ParentStorage && t.srcVar == "" && t.Src == 0 {
+			// Parent-storage tgtVar: scan parent columns of tables with the marker.
+			marker := MakePair(t.ID, q.w.anyID)
+			relKey := ID(t.ID.Index())
+			for _, tbl := range q.w.tables {
+				if !tbl.HasComponent(marker) {
+					continue
+				}
+				col := tbl.GetParentCol(relKey)
+				for _, parent := range col {
+					if parent != 0 {
+						candidates = append(candidates, parent)
+					}
+				}
+			}
+		} else if t.relVar != "" {
 			// Both-var term: filter pair targets by the relVar binding (if bound).
 			relSlot := q.varSlots[t.relVar]
 			relBinding := bindings[relSlot]
@@ -1223,10 +1258,19 @@ func (q *Query) varCheckTable(t *table.Table, bindings []ID) bool {
 				// Variable-target pair on $this: resolve binding and check concrete pair.
 				// Terms where srcVar!="" or Src!=0 are variable-to-variable or fixed-source
 				// constraints consumed during domain collection (collectVarDomainFor) — skip here.
-				slot := q.varSlots[term.tgtVar]
-				binding := bindings[slot]
-				if binding == 0 || !t.HasComponent(MakePair(term.ID, binding)) {
-					return false
+				if term.ParentStorage {
+					// Parent-storage: table must have the marker (rel, Any).
+					// Per-row binding check happens at $this enumeration time.
+					marker := MakePair(term.ID, q.w.anyID)
+					if !t.HasComponent(marker) {
+						return false
+					}
+				} else {
+					slot := q.varSlots[term.tgtVar]
+					binding := bindings[slot]
+					if binding == 0 || !t.HasComponent(MakePair(term.ID, binding)) {
+						return false
+					}
 				}
 			case term.srcVar == "" && term.Src == 0 && !term.DontFragment && !term.Union:
 				// Regular $this archetype And term.
@@ -1366,9 +1410,22 @@ func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, tbl
 				if !q.varCheckTable(tbl, bindings) {
 					continue
 				}
-				for _, e := range tbl.Entities() {
+				ents := tbl.Entities()
+				for i, e := range ents {
+					// Per-row filter for parent-storage tgtVar terms: the variable is bound
+					// to a specific parent; only yield entities whose parent column matches.
+					if !q.matchesParentStorageTgtVarTerms(tbl, i, bindings) {
+						continue
+					}
+					// For parent-storage tgtVar terms, update the binding to the entity's parent.
+					bindingsForRow := bindings
+					if q.hasParentStorageTgtVar {
+						bindingsForRow = make([]ID, nSlots)
+						copy(bindingsForRow, bindings)
+						q.fillParentStorageTgtVarBindings(tbl, i, bindingsForRow)
+					}
 					b := make([]ID, nSlots)
-					copy(b, bindings)
+					copy(b, bindingsForRow)
 					*rows = append(*rows, varRow{thisEntity: e, thisTable: tbl, bindings: b, tablePtrs: tp})
 				}
 			}
@@ -1404,6 +1461,52 @@ func (q *Query) buildVarRowsRec(varOrder []string, depth int, bindings []ID, tbl
 		q.buildVarRowsRec(varOrder, depth+1, bindings, tblPtrs, baseTables, hasThisConstraint, rows)
 	}
 	bindings[slot] = 0 // reset for subsequent outer iterations
+}
+
+// matchesParentStorageTgtVarTerms returns true if all parent-storage tgtVar terms
+// whose variable is already bound are satisfied by entity at row in tbl. A term
+// whose variable is unbound (bindings[slot]==0) is unconditionally satisfied here;
+// fillParentStorageTgtVarBindings will populate that slot afterwards.
+func (q *Query) matchesParentStorageTgtVarTerms(tbl *table.Table, row int, bindings []ID) bool {
+	for _, term := range q.terms {
+		if !term.ParentStorage || term.tgtVar == "" || term.srcVar != "" || term.Src != 0 {
+			continue
+		}
+		slot, ok := q.varSlots[term.tgtVar]
+		if !ok {
+			continue
+		}
+		binding := bindings[slot]
+		if binding == 0 {
+			continue // not yet bound — no constraint
+		}
+		relKey := ID(term.ID.Index())
+		parent, had := tbl.GetParentEntry(row, relKey)
+		if !had || parent.Index() != binding.Index() {
+			return false
+		}
+	}
+	return true
+}
+
+// fillParentStorageTgtVarBindings reads the parent column at row for every
+// parent-storage tgtVar term whose variable is not yet bound (bindings[slot]==0)
+// and sets the slot to the entity's actual parent ID.
+func (q *Query) fillParentStorageTgtVarBindings(tbl *table.Table, row int, bindings []ID) {
+	for _, term := range q.terms {
+		if !term.ParentStorage || term.tgtVar == "" || term.srcVar != "" || term.Src != 0 {
+			continue
+		}
+		slot, ok := q.varSlots[term.tgtVar]
+		if !ok || bindings[slot] != 0 {
+			continue // already bound
+		}
+		relKey := ID(term.ID.Index())
+		parent, had := tbl.GetParentEntry(row, relKey)
+		if had && parent != 0 {
+			bindings[slot] = parent
+		}
+	}
 }
 
 // copyTblPtrs returns a copy of src if any entry is non-nil, otherwise nil.
@@ -1494,19 +1597,30 @@ func (q *Query) Iter() *QueryIter {
 	// sparseAndCount: terms with sparse-set data (drives Field routing + mixed mode).
 	// archetypeAndCount: terms with both archetype presence AND no DontFragment.
 	// unionAndCount: union-pair terms (not in archetype; checked per-entity via union store).
+	// parentStorageFilterCount: parent-storage terms with a specific target (per-row filter needed).
 	// Fixed-source TermAnd terms are excluded: they don't drive $this iteration.
+	// TermNot parent-storage with specific target also forces mixed mode (per-row check).
 	dontFragmentAndCount := 0
 	sparseAndCount := 0
 	archetypeAndCount := 0
 	unionAndCount := 0
+	parentStorageFilterCount := 0
 	for _, t := range q.terms {
+		if t.Kind == TermNot && t.ParentStorage && t.concreteTarget != 0 && t.Src == 0 {
+			parentStorageFilterCount++ // per-row TermNot check needed
+		}
 		if t.Kind != TermAnd {
 			continue
 		}
 		if t.Src != 0 {
 			continue // fixed-source: does not drive $this iteration mode
 		}
-		if t.Union {
+		if t.ParentStorage && t.concreteTarget != 0 {
+			// Parent-storage with specific target: in archetype (as marker) but needs
+			// per-row filtering → counts as archetype AND forces mixed mode.
+			archetypeAndCount++
+			parentStorageFilterCount++
+		} else if t.Union {
 			unionAndCount++
 		} else if t.DontFragment {
 			dontFragmentAndCount++
@@ -1535,8 +1649,9 @@ func (q *Query) Iter() *QueryIter {
 		}
 	}
 	// hasSparseTerms: at least one And term has sparse-set or union data, or there
-	// is a complex scope term, or there is an equality/name-match term → mixed entity-at-a-time evaluation needed.
-	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion) || hasComplexScope || hasEqTerms
+	// is a complex scope term, or there is an equality/name-match term, or there is a
+	// parent-storage term with a specific target → mixed entity-at-a-time evaluation needed.
+	hasSparseTerms := sparseAndCount > 0 || (unionAndCount > 0 && !allUnion) || hasComplexScope || hasEqTerms || parentStorageFilterCount > 0
 	_ = dontFragmentAndCount // used indirectly via allDontFragment
 
 	wildcardIdx := findWildcardTermIdx(q.w, q.terms)
@@ -2021,14 +2136,37 @@ func (it *QueryIter) VarNames() []string {
 }
 
 // matchesSparseTerms returns true if entity e satisfies all DontFragment, Union,
-// and complex-scope terms in the query. TermAnd requires presence; TermNot
-// requires absence. Sparse-only terms (DontFragment=false, Union=false) are
-// handled by the archetype check in matchesTable and are skipped here.
+// ParentStorage (specific-target), and complex-scope terms in the query. TermAnd
+// requires presence; TermNot requires absence. Sparse-only terms (DontFragment=false,
+// Union=false) are handled by the archetype check in matchesTable and are skipped here.
 // TermOptional and TermOr do not affect matching. Simple TermScope terms
 // (isScopeTableSimple) are handled at table level and skipped here; complex
 // scopes are evaluated per entity.
 func (it *QueryIter) matchesSparseTerms(e ID) bool {
 	for _, term := range it.terms {
+		if term.ParentStorage && term.concreteTarget != 0 {
+			// Per-row parent column check: entity must have the specific target.
+			rec := it.world.index.Get(e)
+			if rec == nil || rec.Table == nil {
+				if term.Kind == TermAnd {
+					return false
+				}
+				continue
+			}
+			relKey := ID(term.ID.First().Index())
+			parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+			switch term.Kind {
+			case TermAnd:
+				if !ok || parent.Index() != term.concreteTarget.Index() {
+					return false
+				}
+			case TermNot:
+				if ok && parent.Index() == term.concreteTarget.Index() {
+					return false
+				}
+			}
+			continue
+		}
 		if term.DontFragment {
 			ptr := sparseSetGet(it.world, e, term.ID)
 			switch term.Kind {
@@ -2254,6 +2392,9 @@ func (it *QueryIter) matchesTable(t *table.Table) bool {
 		case TermNot:
 			if term.DontFragment || term.Union {
 				break // not in archetype; skip archetype check (checked per-entity)
+			}
+			if term.ParentStorage && term.concreteTarget != 0 {
+				break // specific-target parent-storage: per-row check in matchesSparseTerms
 			}
 			if t.HasComponent(term.ID) {
 				return false
@@ -3313,8 +3454,8 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		applyInheritablePromotion(w, &cp[i])
 	}
 
-	// Mark sparse/DontFragment/Union routing hints. Must happen after sorting so
-	// that cp is final. Also recurse into scope Sub terms so that
+	// Mark sparse/DontFragment/Union/ParentStorage routing hints. Must happen after
+	// sorting so that cp is final. Also recurse into scope Sub terms so that
 	// isScopeTableSimple and evalScopeSubTerms can use the flags.
 	for i := range cp {
 		if cp[i].Kind == TermScope {
@@ -3328,6 +3469,30 @@ func validateAndSortTerms(w *World, caller string, terms []Term) ([]Term, []ID, 
 		cp[i].Sparse = isSparseTermID(w, cp[i].ID)
 		cp[i].DontFragment = isDontFragmentTermID(w, cp[i].ID)
 		cp[i].Union = isUnionTermID(w, cp[i].ID)
+		// Parent-storage pair detection.
+		if cp[i].relVar == "" {
+			if cp[i].ID.IsPair() && cp[i].tgtVar == "" {
+				// Non-variable pair: transform (rel, target) → (rel, Any) marker.
+				if isParentStoragePairID(w, cp[i].ID) {
+					relID := cp[i].ID.First()
+					origTarget := cp[i].ID.Second()
+					cp[i].ParentStorage = true
+					// Use the marker as the archetype key.
+					cp[i].ID = MakePair(relID, w.anyID)
+					// Store specific target for per-row filtering; 0 for wildcard.
+					if !isWildcardID(w, origTarget) {
+						cp[i].concreteTarget = origTarget
+					}
+				}
+			} else if !cp[i].ID.IsPair() && cp[i].tgtVar != "" && cp[i].srcVar == "" {
+				// Variable-target pair: WithPairTgtVar(rel, v) where rel has parent storage.
+				// The ID is just the rel entity. We can't transform the ID (it's the rel, not a pair).
+				// Set ParentStorage so the variable path knows to use the parent column.
+				if w.parentStoragePolicies[ID(cp[i].ID.Index())] {
+					cp[i].ParentStorage = true
+				}
+			}
+		}
 	}
 
 	// Traversable enforcement: any term whose Trav is non-zero requires the

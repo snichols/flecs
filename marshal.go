@@ -26,6 +26,10 @@ type jsonWorld struct {
 	// In v0.53.0+, contains data for DontFragment components only (data not in entity body).
 	// Restored AFTER entities so that entity IDs exist when the sparse-set is populated.
 	SparseData map[string]map[int]json.RawMessage `json:"sparse_data,omitempty"`
+	// ParentStorageSerials is the list of entity serials that have the ParentStorage policy.
+	// Restored in Phase 1b (after entity allocation, before body replay) so that pair
+	// routing is live when parent-storage pairs are applied in Phase 2.
+	ParentStorageSerials []int `json:"parent_storage_serials,omitempty"`
 	// UnionRelationshipSerials is the list of entity serials that have the Union policy.
 	// Restored in Phase 1b (after entity allocation, before body replay) so that the
 	// union routing is live when union pairs are applied in Phase 3b.
@@ -358,6 +362,20 @@ func (w *World) MarshalJSON() ([]byte, error) {
 					if relIdx == childOfIdx || relIdx == isAIdx {
 						continue
 					}
+					// Parent-storage: signature carries (rel, Any) marker; resolve
+					// the actual parent from the per-row parent column.
+					relKey := ID(relIdx)
+					if w.parentStoragePolicies[relKey] && uint32(cid.Second()) == w.anyID.Index() {
+						rec := w.index.Get(e)
+						if rec == nil || rec.Table == nil {
+							continue
+						}
+						parent, ok := rec.Table.GetParentEntry(int(rec.Row), relKey)
+						if !ok {
+							continue
+						}
+						tgtIdx = parent.Index()
+					}
 					relSerial, ok := m.indexToSerial[relIdx]
 					if !ok {
 						continue
@@ -494,6 +512,16 @@ func (w *World) MarshalJSON() ([]byte, error) {
 							}
 						}
 					}
+				}
+			}
+		}
+
+		// Serialize which entity serials have the ParentStorage policy.
+		var parentStorageSerials []int
+		if w.parentStoragePolicies != nil {
+			for relKey := range w.parentStoragePolicies {
+				if relSerial, ok := m.indexToSerial[uint32(relKey)]; ok {
+					parentStorageSerials = append(parentStorageSerials, relSerial)
 				}
 			}
 		}
@@ -636,6 +664,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			SparseComponents:         sparseComponents,
 			DontFragmentComponents:   dontFragmentComponents,
 			SparseData:               sparseData,
+			ParentStorageSerials:     parentStorageSerials,
 			UnionRelationshipSerials: unionRelSerials,
 			UnionRelationships:       unionRelationships,
 			EntityRangeMin:           rangeMin,
@@ -736,9 +765,19 @@ func (w *World) UnmarshalJSON(data []byte) error {
 			serialToID[je.Serial] = fw.NewEntity()
 		}
 
-		// Phase 1b: restore Union policies now that entity IDs are known.
-		// Must happen before Phase 3b (union pair replay) so that addIDImmediate
-		// routes union pairs to the union store rather than the archetype table.
+		// Phase 1b: restore ParentStorage and Union policies now that entity IDs are known.
+		// Must happen before Phase 2 (pair replay) so that routing is live.
+		for _, relSerial := range jw.ParentStorageSerials {
+			relID, ok := serialToID[relSerial]
+			if !ok {
+				unmarshalErr = fmt.Errorf("flecs: unmarshal failed: parent_storage_serials: serial %d not found", relSerial)
+				return
+			}
+			if w.parentStoragePolicies == nil {
+				w.parentStoragePolicies = make(map[ID]bool)
+			}
+			w.parentStoragePolicies[ID(relID.Index())] = true
+		}
 		for _, relSerial := range jw.UnionRelationshipSerials {
 			relID, ok := serialToID[relSerial]
 			if !ok {
