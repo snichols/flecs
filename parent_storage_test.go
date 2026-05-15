@@ -1056,6 +1056,249 @@ func TestParentStorageChildOfReparentPreservesOtherChildren(t *testing.T) {
 
 // ── Benchmark: reparent with 8 components — ON vs OFF ────────────────────────
 
+// ── Coverage: SetParentStorage with empty tables ────────────────────────────
+
+func TestSetParentStorageWithEmptyTable(t *testing.T) {
+	// Create an entity with a tag (creating a table), then delete it to leave
+	// an empty table. SetParentStorage must scan and skip empty tables (line 58-59).
+	type Tag struct{}
+	w := flecs.New()
+	tagID := flecs.RegisterComponent[Tag](w)
+	var e, relID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagID) // creates a table for Tag
+	})
+	w.Delete(e) // Tag table now has Count==0
+	flecs.SetRelationship(w, relID)
+	flecs.SetExclusive(w, relID)
+	flecs.SetParentStorage(w, relID) // scan must skip the empty Tag table without panic
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.IsParentStorage(r, relID) {
+			t.Fatal("SetParentStorage should succeed when world contains only empty tables")
+		}
+	})
+}
+
+// ── Coverage: deferred idempotency for parent-storage pair ───────────────────
+
+func TestParentStorageDeferredIdempotency(t *testing.T) {
+	// Two separate Write scopes: the first flushes so the entity has the marker
+	// in its archetype; the second re-adds the same pair inside a Write scope
+	// (deferDepth > 0) so the parent-column idempotency check fires (id_ops.go:36-39).
+	w, relID := newPSWorld(t)
+	var target, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		target = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(relID, target))
+	})
+	// Second Write: entity already has the pair — deferred re-add is a no-op.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(relID, target))
+	})
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, flecs.MakePair(relID, target)) {
+			t.Fatal("pair should still be present after deferred idempotent re-add")
+		}
+	})
+}
+
+// ── Coverage: orderedChildren interop with ChildOf parent storage ─────────────
+
+func TestParentStorageOrderedChildrenInterop(t *testing.T) {
+	// Enable ChildOf parent storage + orderedChildren on both parents.
+	// Covers: Case-2 orderedChildren path (180-183), Case-1 reparent orderedChildren
+	// (119-122, 134-137), and removeParentStoragePair orderedChildren (226-229).
+	w := flecs.New()
+	flecs.SetParentStorage(w, w.ChildOf())
+	var p1, p2, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 = fw.NewEntity()
+		p2 = fw.NewEntity()
+		e = fw.NewEntity()
+		// Initialize orderedChildren for both parents inside the Write scope.
+		flecs.AddID(fw, p1, w.OrderedChildren())
+		flecs.AddID(fw, p2, w.OrderedChildren())
+	})
+	// Case 2: first add of pair; orderedChildren path (180-183).
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(w.ChildOf(), p1))
+	})
+	// Case 1: reparent p1 → p2; orderedChildren remove-from-p1 (119-122) and add-to-p2 (134-137).
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(w.ChildOf(), p2))
+	})
+	// removeParentStoragePair: orderedChildren remove-from-p2 (226-229).
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(w.ChildOf(), p2))
+	})
+	if _, ok := w.ParentOf(e); ok {
+		t.Fatal("entity should have no parent after removal")
+	}
+	// p1 should not list e as a child (it was reparented).
+	w.EachChild(p1, func(child flecs.ID) bool {
+		if child == e {
+			t.Fatal("e should not be listed as a child of p1 after reparent")
+		}
+		return true
+	})
+}
+
+// ── Coverage: monitors fire during parent-storage add / reparent / remove ─────
+
+func TestParentStorageMonitorFire(t *testing.T) {
+	// Register a monitor so len(w.monitors) > 0.  Any monitor suffices to make
+	// the monitor-dispatch blocks execute.
+	// Covers: Case-2 monitor block (187-190), Case-1 reparent monitor block
+	// (140-142), and removeParentStoragePair monitor block (240-244).
+	type Tag struct{}
+	w, relID := newPSWorld(t)
+	tagID := flecs.RegisterComponent[Tag](w)
+	flecs.Monitor(w, []flecs.Term{flecs.With(tagID)}, func(_ *flecs.Writer, _ flecs.ID, _ bool) {})
+
+	var t1, t2, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		t1 = fw.NewEntity()
+		t2 = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, tagID)
+	})
+	// Case 2: first add — monitor block runs at 187-190.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(relID, t1))
+	})
+	// Case 1: reparent — monitor block runs at 140-142.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, e, flecs.MakePair(relID, t2))
+	})
+	// Remove — monitor block runs at 240-244.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(relID, t2))
+	})
+	w.Read(func(r *flecs.Reader) {
+		if flecs.HasID(r, e, flecs.MakePair(relID, t2)) {
+			t.Fatal("pair should be gone after removal")
+		}
+	})
+}
+
+// ── Coverage: remove pair with mismatched specific target ────────────────────
+
+func TestParentStorageRemoveWrongTarget(t *testing.T) {
+	// Entity has (rel, p1); try to remove (rel, p2) — mismatch → no-op (line 215-217).
+	w, relID := newPSWorld(t)
+	var p1, p2, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		p1 = fw.NewEntity()
+		p2 = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(relID, p1))
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(relID, p2)) // wrong target → no-op
+	})
+	w.Read(func(r *flecs.Reader) {
+		if !flecs.HasID(r, e, flecs.MakePair(relID, p1)) {
+			t.Fatal("entity should still have p1 as parent after failed wrong-target removal")
+		}
+	})
+}
+
+// ── Coverage: remove pair from entity that has no parent-storage marker ───────
+
+func TestParentStorageRemoveNoMarker(t *testing.T) {
+	// Entity has no (rel, *) pair at all; remove is a no-op (line 207-209).
+	w, relID := newPSWorld(t)
+	var target, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		target = fw.NewEntity()
+		e = fw.NewEntity()
+	})
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(relID, target)) // no-op: e has no marker
+	})
+	w.Read(func(r *flecs.Reader) {
+		if flecs.HasID(r, e, flecs.MakePair(relID, target)) {
+			t.Fatal("entity should not have a pair that was never added")
+		}
+	})
+}
+
+// ── Coverage: symmetric mirror on removeParentStoragePair ────────────────────
+
+func TestParentStorageSymmetricRemoval(t *testing.T) {
+	// Symmetric + exclusive + relationship with parent storage.
+	// Removing (rel, b) from a fires the symmetric mirror path (line 251-253).
+	w := flecs.New()
+	var relID, a, b flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		relID = fw.NewEntity()
+		a = fw.NewEntity()
+		b = fw.NewEntity()
+	})
+	flecs.SetRelationship(w, relID)
+	flecs.SetExclusive(w, relID)
+	flecs.SetSymmetric(w, relID)
+	flecs.SetParentStorage(w, relID)
+	w.Write(func(fw *flecs.Writer) {
+		flecs.AddID(fw, a, flecs.MakePair(relID, b))
+	})
+	// Removing (rel, b) from a → symmetric mirror tries to remove (rel, a) from b.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, a, flecs.MakePair(relID, b))
+	})
+	w.Read(func(r *flecs.Reader) {
+		if flecs.HasID(r, a, flecs.MakePair(relID, b)) {
+			t.Fatal("a should not have pair after removal")
+		}
+	})
+}
+
+// ── Coverage: CachedQuery over parent-storage table reclaims correctly ────────
+
+func TestParentStorageCachedQueryAfterReclaim(t *testing.T) {
+	// Create a cached query matching a parent-storage table. Empty the table,
+	// close the query (releasing its ref), then reclaim. Verifies that
+	// reclaimDeadTablesForced is exercised for parent-storage tables.
+	w, relID := newPSWorld(t)
+	w.SetTableReclamationThreshold(3)
+	var target, e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		target = fw.NewEntity()
+		e = fw.NewEntity()
+		flecs.AddID(fw, e, flecs.MakePair(relID, target))
+	})
+	// Cached query matching the parent-storage marker table.
+	cq := flecs.NewCachedQueryFromTerms(w, flecs.With(flecs.MakePair(relID, w.Wildcard())))
+	// Verify the query sees the entity.
+	count := 0
+	it := cq.Iter()
+	for it.Next() {
+		count += len(it.Entities())
+	}
+	if count != 1 {
+		t.Fatalf("cached query should see 1 entity before reclaim, got %d", count)
+	}
+	// Empty the parent-storage table.
+	w.Write(func(fw *flecs.Writer) {
+		flecs.RemoveID(fw, e, flecs.MakePair(relID, target))
+	})
+	// Close the query to release the table reference, enabling reclamation.
+	cq.Close()
+	before := w.ReclaimedTablesCount()
+	// Drive past the reclaim threshold.
+	for range 10 {
+		w.Progress(0)
+	}
+	if w.ReclaimedTablesCount() <= before {
+		t.Fatal("parent-storage table should be reclaimed after query closed and threshold exceeded")
+	}
+}
+
+// ── Benchmark ────────────────────────────────────────────────────────────────
+
 func BenchmarkParentStorage_Reparent_FullArchetype(b *testing.B) {
 	type C1 struct{ V [8]int64 }
 	type C2 struct{ V [8]int64 }
