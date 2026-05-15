@@ -370,3 +370,42 @@ sleep, or systems with large entity counts (> 100k) on multi-core hardware.
 
 The serial baseline (`WorkerCount=0`) is bit-for-bit identical to the behavior
 before Phase 10.1; no regression was observed on existing benchmarks.
+
+---
+
+## Phase 16.50 — Per-stage queues for parallel-batch dispatch
+
+Per-stage routing eliminates concurrent `cmdQueue` access for deferred mutations
+inside parallel-batch systems. The primary improvement is **correctness** (the
+previous shared-stage path was a latent data race under `-race`), not raw
+throughput — the fix is pure allocation routing with zero synchronization added
+on the hot path.
+
+Captured on AMD Ryzen Threadripper PRO 5995WX 64-Cores, 2026-05-15.
+
+### BenchmarkParallelSystems_PerStage (4 workers, 4 parallel systems, 500 entities each)
+
+```
+BenchmarkParallelSystems_PerStage-128     344413    12234 ns/op
+```
+
+The benchmark drives 4 parallel systems, each iterating 500 entities and
+exercising the per-stage writer binding (`it.Writer()`). Dispatch overhead
+(goroutine scheduling + `wg.Wait`) dominates for this light workload.
+
+### BenchmarkParallelSystems_Scaling (4 systems, varying worker count)
+
+```
+BenchmarkParallelSystems_Scaling/workers=1-128    376894     9919 ns/op
+BenchmarkParallelSystems_Scaling/workers=2-128    305277    12032 ns/op
+BenchmarkParallelSystems_Scaling/workers=4-128    290917    12300 ns/op
+BenchmarkParallelSystems_Scaling/workers=8-128    273372    13103 ns/op
+```
+
+For no-op iteration workloads, dispatch overhead exceeds computation time.
+Workloads with heavier per-system compute (> 50 µs per system) see meaningful
+throughput scaling as noted in the Phase 10.1 commentary above.
+
+**Race-detector improvement:** `go test -race -count=10` was failing with
+concurrent map/slice writes in `cmdQueue.append` under the old shared-stage
+path. With per-stage routing, `go test ./... -race -count=10` is clean.

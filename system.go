@@ -488,28 +488,7 @@ func (w *World) Progress(dt float32) {
 					wg.Wait()
 					s.statsTickDuration = time.Since(mtStart)
 					s.statsTickDidRun = true
-					// Merge worker stages in ascending id order, then stage 0.
-					// Within each stage the per-entity coalescer applies; across
-					// stages there is no coalescing (two stages mutating the same
-					// entity produce two migrations in id order).
-					// Pre/post merge hooks fire ONCE per Progress-driven merge
-					// cycle (not once per worker stage): pre fires before the
-					// first worker-stage flush, post fires after stage-0 flush.
-					s0 := w.stages[0]
-					s0.inMerge = true
-					w.firePreMergeHooks()
-					for i := 1; i <= n; i++ {
-						q := w.stages[i].queue
-						w.stages[i].queue = acquireCmdQueue()
-						q.flush(w)
-						releaseCmdQueue(q)
-					}
-					q0 := s0.queue
-					s0.queue = acquireCmdQueue()
-					q0.flush(w)
-					releaseCmdQueue(q0)
-					w.firePostMergeHooks()
-					s0.inMerge = false
+					w.mergeWorkerStages(n)
 					// stages[0].deferDepth is unchanged (managed by deferScope).
 					i++
 					continue
@@ -559,21 +538,43 @@ func (w *World) Progress(dt float32) {
 					}
 					continue
 				}
-				// Dispatch all systems in the batch as concurrent jobs.
-				var wg sync.WaitGroup
-				for _, bs := range batch {
-					bs := bs
-					wg.Add(1)
-					w.workerCh <- func() {
-						defer wg.Done()
-						start := time.Now()
-						it := bs.query.Iter()
-						bs.fn(phaseDT, it)
-						bs.statsTickDuration = time.Since(start)
-						bs.statsTickDidRun = true
+				// Dispatch all systems in the batch as concurrent jobs, grouped into
+				// sequential waves of at most workerCount. Within each wave, system
+				// wavePos maps exclusively to stage (wavePos+1), so concurrent
+				// goroutines write to disjoint stage queues with no synchronization.
+				// Waves execute sequentially via wg.Wait() so no stage is ever
+				// written concurrently across waves.
+				// For the common case (len(batch) ≤ workerCount) there is exactly
+				// one wave and all systems run in parallel.
+				batchN := w.workerCount
+				if batchN > 0 {
+					for waveStart := 0; waveStart < len(batch); waveStart += batchN {
+						waveEnd := waveStart + batchN
+						if waveEnd > len(batch) {
+							waveEnd = len(batch)
+						}
+						wave := batch[waveStart:waveEnd]
+						var wg sync.WaitGroup
+						for wavePos, bs := range wave {
+							bs := bs
+							stageWriter := &w.workerStageWriters[wavePos]
+							wg.Add(1)
+							w.workerCh <- func() {
+								defer wg.Done()
+								start := time.Now()
+								it := bs.query.Iter()
+								it.workerWriter = stageWriter
+								bs.fn(phaseDT, it)
+								bs.statsTickDuration = time.Since(start)
+								bs.statsTickDidRun = true
+							}
+						}
+						wg.Wait()
 					}
 				}
-				wg.Wait()
+				// Merge per-stage queues in ascending id order, then stage 0.
+				// Pre/post merge hooks fire once per batch boundary.
+				w.mergeWorkerStages(batchN)
 			}
 		})
 	}
@@ -638,6 +639,30 @@ func (w *World) SystemCount() int {
 		}
 	}
 	return n
+}
+
+// mergeWorkerStages flushes worker stages 1..n into the world in ascending id
+// order, then flushes stage 0. Pre/post merge hooks fire once per call.
+// Called after wg.Wait() for both multi-threaded and parallel-batch dispatch.
+// Invariant: each stage is owned by exactly one goroutine at flush time;
+// the caller holds w.mu (via the outer Progress lock) so no additional
+// synchronization is needed here.
+func (w *World) mergeWorkerStages(n int) {
+	s0 := w.stages[0]
+	s0.inMerge = true
+	w.firePreMergeHooks()
+	for i := 1; i <= n; i++ {
+		q := w.stages[i].queue
+		w.stages[i].queue = acquireCmdQueue()
+		q.flush(w)
+		releaseCmdQueue(q)
+	}
+	q0 := s0.queue
+	s0.queue = acquireCmdQueue()
+	q0.flush(w)
+	releaseCmdQueue(q0)
+	w.firePostMergeHooks()
+	s0.inMerge = false
 }
 
 // RunSystem invokes s once synchronously with the given dt, outside the normal
@@ -720,8 +745,13 @@ func RunSystemWorker(w *World, sys *System, workerIndex, workerCount int, dt flo
 	// Run the system callback with the worker's slice.
 	sys.fn(dt, workerIt)
 
-	// Flush the per-call stage. The world write mutex serializes concurrent
-	// worker flushes and guards against a simultaneous World.Write scope.
+	// Flush the per-call stage.
+	// w.mu.Lock() is intentionally retained here: RunSystemWorker is an
+	// out-of-pipeline user API — callers may fan goroutines without any other
+	// coordination, so the mutex serializes concurrent flushes and guards
+	// against a simultaneous World.Write scope. This is distinct from the
+	// pipeline paths (multi-threaded and parallel-batch), which hold w.mu for
+	// the entire Progress call and use per-stage routing instead of locking.
 	w.mu.Lock()
 	q := ps.queue
 	q.flush(w)

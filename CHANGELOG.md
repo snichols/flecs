@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.105.0 — 2026-05-15 — Phase 16.50: Per-stage Queues for Parallel-batch Dispatch
+
+Extends Phase 12.1's per-stage deferred-mutation routing from within-system
+(multi-threaded) parallelism to between-system (parallel-batched) parallelism.
+Closes the last ROADMAP Future Work / Concurrency item.
+
+### What changed
+
+The parallel-batch dispatcher previously routed all parallel systems to
+`stages[0].queue` — a latent data race on `cmdQueue.append` (concurrent slice
+growth and map writes). The fix:
+
+1. **Wave-based dispatch**: systems are grouped into sequential waves of at most
+   `WorkerCount`. Within each wave, system `wavePos` exclusively owns
+   `stages[wavePos+1]`. `wg.Wait()` between waves prevents cross-wave concurrent
+   access to any stage.
+2. **`mergeWorkerStages(N)` helper**: shared by both multi-threaded and
+   parallel-batch dispatch paths. Flushes stages 1..N in ascending ID order, then
+   stage 0. Pre/post merge hooks fire once per call.
+3. **`RunSystemWorker` mutex retained**: the out-of-pipeline user API uses ad-hoc
+   per-call stages and serializes concurrent flushes via `w.mu`. Rationale
+   documented in the function's doc comment.
+
+### Correctness
+
+`go test ./... -race -count=10` clean. Verified data-race elimination that
+previously manifested on `cmdQueue.append` under parallel-batch workloads.
+
+### New tests (system_parallel_test.go)
+
+- `TestParallelSystems_DeferredMutationsCorrect`
+- `TestParallelSystems_NoDataRace`
+- `TestParallelSystems_CoalescingPreserved`
+- `TestParallelSystems_BatchLargerThanWorkerCount`
+- `TestParallelSystems_OnPreMergeFiresOnce`
+- `TestParallelSystems_OnPostMergeFiresOnce`
+- `TestParallelSystems_PhaseBoundaries`
+- `TestParallelSystems_WithSerialSystem`
+- `TestParallelSystems_UserWriteFromOutsideSystem`
+- `TestParallelSystems_SnapshotRestore`
+- `TestParallelSystems_DuringReclamation`
+
+### New benchmarks (bench_test.go)
+
+- `BenchmarkParallelSystems_PerStage`
+- `BenchmarkParallelSystems_Scaling`
+
+### Breaking changes
+
+None. No public API changes.
+
+---
+
 ## v0.104.0 — 2026-05-15 — Phase 16.49: sync.Pool Traversal Pooling
 
 Profile-driven allocation reduction on three internal hot paths. No new public API.
