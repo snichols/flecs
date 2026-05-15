@@ -27,6 +27,7 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction, [EntitiesCompon
   - [Traversable](#traversable)
   - [Cleanup policies](#cleanup-policies)
   - [PairIsTag](#pairstag)
+  - [ParentStorage](#parentstorage)
 - [Relationship performance](#relationship-performance)
 
 ---
@@ -883,6 +884,64 @@ action, ok := flecs.GetCleanupPolicy(w, likesID, w.OnDeleteTarget())
 > an element is a component. The built-in `ChildOf` uses this internally. Custom
 > relationships cannot yet opt into this trait.
 > See the [PairIsTag trait gap](README.md#feature-gap-list-candidate-follow-up-issues).
+
+### ParentStorage
+
+**Shipped in v0.102.0 (Phase 16.47).** `SetParentStorage(w, relID)` enables *non-fragmenting hierarchy storage* for a relationship. By default, each unique `(relID, target)` pair produces a separate archetype table, so N parents × M identically-typed children fragment into N tables. Parent storage collapses all those tables into one by storing the parent ID in a per-row column rather than the archetype signature. Reparenting becomes an O(1) column write instead of an O(component-count) archetype migration.
+
+**Prerequisites:**
+
+- The relationship must already be declared with `SetRelationship` (or be a built-in relationship like `ChildOf`).
+- The relationship must be Exclusive (`SetExclusive`) — parent storage stores exactly one parent per entity.
+- No entities may already carry the relationship at the time `SetParentStorage` is called; the call panics if any exist.
+
+```go
+w := flecs.New()
+
+// Enable parent storage for ChildOf (the most common use-case).
+flecs.SetParentStorage(w, w.ChildOf())
+
+// Check whether it is enabled.
+flecs.IsParentStorage(w, w.ChildOf()) // → true
+
+// Children of different parents now share one archetype table.
+var p1, p2 flecs.ID
+w.Write(func(fw *flecs.Writer) {
+    p1 = fw.NewEntity()
+    p2 = fw.NewEntity()
+    for i := 0; i < 50; i++ {
+        c := fw.NewEntity()
+        fw.AddID(c, flecs.MakePair(w.ChildOf(), p1)) // no table split
+    }
+    for i := 0; i < 50; i++ {
+        c := fw.NewEntity()
+        fw.AddID(c, flecs.MakePair(w.ChildOf(), p2)) // same table as p1's children
+    }
+})
+```
+
+**Query behavior is unchanged.** Exact-target queries (`WithPair(ChildOf, p1)`) apply a per-row filter against the parent column; wildcard queries (`WithPair(ChildOf, *)`) scan the single shared table without filtering; variable queries (`WithPairTgtVar(ChildOf, "parent")`) bind the variable to the column value per row. `EachChild`, `ParentOf`, `GetUp`, `HasUp`, `TargetUp`, `PathOf`, `Lookup`, and all traversal queries behave identically to the fragmenting mode.
+
+**Cleanup policies** (`OnDeleteTarget`) also work correctly — the engine scans parent columns instead of pair-target indices when applying delete/remove/panic actions.
+
+**Observers** (`OnAdd`, `OnRemove`, `OnSet`, `OnReplace`, `OnTableCreate`, `OnTableFill`, `OnTableEmpty`) fire correctly for parent-column writes.
+
+**Snapshot round-trip** — both binary (`snapshot.go`) and JSON (`marshal.go`) serialization preserve the parent-storage flag and per-entity parent IDs.
+
+**When to use parent storage:**
+
+| Concern | Fragmenting (default) | Parent storage |
+|---|---|---|
+| Archetype count with many parents | O(N parents) | O(1) |
+| Reparenting cost | O(component-count) migration | O(1) column write |
+| Carries typed pair data | ✅ | ✅ |
+| At-most-one parent enforced | Requires `Exclusive` | Required (`Exclusive` implied) |
+| Multi-parent per entity | ✅ | ❌ (one parent per entity) |
+| Runtime mode switch after population | ❌ (fail-loud) | ❌ (fail-loud) |
+
+Choose parent storage for `ChildOf` (or any single-parent hierarchy relationship) when the number of distinct parents is large enough to cause measurable table fragmentation. The canonical opt-in is `flecs.SetParentStorage(w, w.ChildOf())` called once at world-setup time, before any children are added.
+
+See [docs/ParentStorage.md](ParentStorage.md) for the full motivation, API reference, performance characteristics, and limitations. See [docs/HierarchiesManual.md](HierarchiesManual.md) for hierarchy usage patterns.
 
 ---
 
