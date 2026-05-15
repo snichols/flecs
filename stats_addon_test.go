@@ -1,6 +1,10 @@
 package flecs_test
 
 import (
+	"encoding/json"
+	"math"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -297,5 +301,301 @@ func TestStatsSnapshot_SetName(t *testing.T) {
 	}
 	if snap.Systems[0].Name != "my-physics-system" {
 		t.Errorf("Name = %q, want %q", snap.Systems[0].Name, "my-physics-system")
+	}
+}
+
+// ─── Ring-buffer unit tests ──────────────────────────────────────────────────
+
+// TestStats_RingBuffer_Records60Ticks records 60 distinct values (1..60) and
+// verifies Reduce() returns the correct Avg/Min/Max.
+func TestStats_RingBuffer_Records60Ticks(t *testing.T) {
+	var sw flecs.StatsWindow
+	for i := 1; i <= 60; i++ {
+		sw.Record(float64(i))
+	}
+	got := sw.Reduce()
+	wantAvg := 30.5 // (1+60)/2
+	if math.Abs(got.Avg-wantAvg) > 1e-9 {
+		t.Errorf("Avg = %v, want %v", got.Avg, wantAvg)
+	}
+	if got.Min != 1 {
+		t.Errorf("Min = %v, want 1", got.Min)
+	}
+	if got.Max != 60 {
+		t.Errorf("Max = %v, want 60", got.Max)
+	}
+}
+
+// TestStats_RingBuffer_Wraps records 70 values (1..70); only the last 60
+// (11..70) should be reflected in Reduce().
+func TestStats_RingBuffer_Wraps(t *testing.T) {
+	var sw flecs.StatsWindow
+	for i := 1; i <= 70; i++ {
+		sw.Record(float64(i))
+	}
+	got := sw.Reduce()
+	// Last 60 values: 11..70; avg = (11+70)/2 = 40.5
+	wantAvg := 40.5
+	if math.Abs(got.Avg-wantAvg) > 1e-9 {
+		t.Errorf("Avg = %v, want %v", got.Avg, wantAvg)
+	}
+	if got.Min != 11 {
+		t.Errorf("Min = %v, want 11", got.Min)
+	}
+	if got.Max != 70 {
+		t.Errorf("Max = %v, want 70", got.Max)
+	}
+}
+
+// TestStats_WindowReduction_MinuteFromSecond drives 60 ticks via StatsTick and
+// verifies that the minute window has exactly one reduced slot.
+func TestStats_WindowReduction_MinuteFromSecond(t *testing.T) {
+	w := flecs.New()
+	// Commit initial state so statsEntityCount etc. are non-zero.
+	w.Progress(0.016)
+	// 60 StatsTick calls advance the aggregator to trigger one minute reduction.
+	for i := 0; i < 60; i++ {
+		w.StatsTick()
+	}
+	// Minute window should now have exactly one slot filled (Avg should be non-zero
+	// since entity count > 0 after Progress).
+	agg := w.WorldStatsWindow(flecs.StatsMinute)
+	// The minute window had exactly 1 reduction fed in, so Avg == that one value.
+	// EntityCount must be > 0 (built-in entities exist).
+	if agg.EntityCount.Avg == 0 {
+		t.Error("minute window EntityCount.Avg = 0, expected > 0 after one reduction")
+	}
+}
+
+// TestStats_WindowReduction_HourFromMinute drives 3600 ticks via StatsTick and
+// verifies that the hour window has at least one reduced slot.
+func TestStats_WindowReduction_HourFromMinute(t *testing.T) {
+	w := flecs.New()
+	w.Progress(0.016)
+	for i := 0; i < 3600; i++ {
+		w.StatsTick()
+	}
+	agg := w.WorldStatsWindow(flecs.StatsHour)
+	if agg.EntityCount.Avg == 0 {
+		t.Error("hour window EntityCount.Avg = 0, expected > 0 after 3600 ticks")
+	}
+}
+
+// TestStats_WindowReduction_EmptyWindow verifies that all methods on a fresh
+// StatsWindow return zero MetricGauge without panicking.
+func TestStats_WindowReduction_EmptyWindow(t *testing.T) {
+	var sw flecs.StatsWindow
+	g := sw.Reduce()
+	if g.Avg != 0 || g.Min != 0 || g.Max != 0 {
+		t.Errorf("empty Reduce() = %+v, want zero", g)
+	}
+	l := sw.Last()
+	if l.Avg != 0 || l.Min != 0 || l.Max != 0 {
+		t.Errorf("empty Last() = %+v, want zero", l)
+	}
+	// WorldStatsWindow on a fresh world should also be zero-safe.
+	w := flecs.New()
+	agg := w.WorldStatsWindow(flecs.StatsSecond)
+	if agg.EntityCount.Avg != 0 {
+		t.Errorf("fresh world second window EntityCount.Avg = %v, want 0", agg.EntityCount.Avg)
+	}
+}
+
+// TestStats_WorldStatsWindow_Second drives Progress 60× with a growing entity
+// count and verifies that the Second window Avg lands in the expected mid-range.
+func TestStats_WorldStatsWindow_Second(t *testing.T) {
+	w := flecs.New()
+	var baseCount int
+
+	// Capture the entity count baseline before adding test entities.
+	w.Progress(0)
+	baseCount = w.StatsSnapshot().World.EntityCount
+
+	// Add entities one per tick for 60 ticks.
+	for i := 0; i < 60; i++ {
+		w.Write(func(fw *flecs.Writer) { fw.NewEntity() })
+		w.Progress(0.016)
+	}
+
+	agg := w.WorldStatsWindow(flecs.StatsSecond)
+
+	// After 60 ticks adding 1 entity each, entity counts ranged from
+	// baseCount+1 to baseCount+60. Avg should be in that range.
+	lo := float64(baseCount + 1)
+	hi := float64(baseCount + 60)
+	if agg.EntityCount.Avg < lo || agg.EntityCount.Avg > hi {
+		t.Errorf("EntityCount.Avg = %v, expected in [%v, %v]", agg.EntityCount.Avg, lo, hi)
+	}
+	if agg.EntityCount.Min < lo {
+		t.Errorf("EntityCount.Min = %v, expected >= %v", agg.EntityCount.Min, lo)
+	}
+	if agg.EntityCount.Max > hi {
+		t.Errorf("EntityCount.Max = %v, expected <= %v", agg.EntityCount.Max, hi)
+	}
+}
+
+// TestStats_PipelineStatsWindow_Second drives Progress 60× and verifies that
+// the second window for pipeline metrics is non-empty.
+func TestStats_PipelineStatsWindow_Second(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[addonPos](w)
+	q := flecs.NewCachedQuery(w, posID)
+	flecs.NewSystem(w, q, func(dt float32, it *flecs.QueryIter) {}).SetName("pipeline-test-sys")
+
+	for i := 0; i < 60; i++ {
+		w.Progress(0.016)
+	}
+
+	agg := w.PipelineStatsWindow(flecs.StatsSecond)
+	if agg.World.EntityCount.Avg == 0 {
+		t.Error("PipelineStatsWindow second: world EntityCount.Avg = 0, expected > 0")
+	}
+	if agg.World.FrameCount.Avg == 0 {
+		t.Error("PipelineStatsWindow second: FrameCount.Avg = 0, expected > 0")
+	}
+}
+
+// ─── REST period tests ───────────────────────────────────────────────────────
+
+// TestRest_StatsWorld_PeriodSecond verifies that GET /stats/world?period=second
+// returns 200 with a JSON body shaped as WorldStatsAggregated (has avg/min/max fields).
+func TestRest_StatsWorld_PeriodSecond(t *testing.T) {
+	w := flecs.New()
+	for i := 0; i < 5; i++ {
+		w.Progress(0.016)
+	}
+	h := flecs.NewRESTHandler(w)
+	req := httptest.NewRequest(http.MethodGet, "/stats/world?period=second", nil)
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rw.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rw.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Body should have entity_count with avg/min/max sub-fields.
+	ec, ok := body["entity_count"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("entity_count not found or not object: %v", body)
+	}
+	if _, ok := ec["avg"]; !ok {
+		t.Errorf("entity_count missing 'avg' field: %v", ec)
+	}
+	if _, ok := ec["min"]; !ok {
+		t.Errorf("entity_count missing 'min' field: %v", ec)
+	}
+	if _, ok := ec["max"]; !ok {
+		t.Errorf("entity_count missing 'max' field: %v", ec)
+	}
+}
+
+// TestRest_StatsWorld_PeriodInvalid verifies that GET /stats/world?period=bogus
+// returns 400.
+func TestRest_StatsWorld_PeriodInvalid(t *testing.T) {
+	w := flecs.New()
+	h := flecs.NewRESTHandler(w)
+	req := httptest.NewRequest(http.MethodGet, "/stats/world?period=bogus", nil)
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, req)
+	if rw.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rw.Code)
+	}
+}
+
+// TestRest_StatsWorld_PeriodDefault verifies that omitting ?period= returns the
+// same JSON structure as before (back-compat: "world" key with snake_case fields).
+func TestRest_StatsWorld_PeriodDefault(t *testing.T) {
+	w := flecs.New()
+	w.Progress(0.016)
+	h := flecs.NewRESTHandler(w)
+
+	req := httptest.NewRequest(http.MethodGet, "/stats/world", nil)
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rw.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rw.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	world, ok := body["world"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("'world' key missing or not object: %v", body)
+	}
+	for _, field := range []string{"entity_count", "table_count", "frame_count"} {
+		if _, exists := world[field]; !exists {
+			t.Errorf("default response missing field %q", field)
+		}
+	}
+}
+
+// TestRest_StatsPipeline_PeriodMinute verifies that GET /stats/pipeline?period=minute
+// returns 200 with a JSON body that has world.entity_count.avg field.
+func TestRest_StatsPipeline_PeriodMinute(t *testing.T) {
+	w := flecs.New()
+	// Drive 60 ticks to produce at least one minute-window reduction.
+	w.Progress(0.016)
+	for i := 0; i < 60; i++ {
+		w.StatsTick()
+	}
+	h := flecs.NewRESTHandler(w)
+	req := httptest.NewRequest(http.MethodGet, "/stats/pipeline?period=minute", nil)
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rw.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rw.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	world, ok := body["world"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("'world' key missing: %v", body)
+	}
+	ec, ok := world["entity_count"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("world.entity_count missing or not object: %v", world)
+	}
+	if _, ok := ec["avg"]; !ok {
+		t.Errorf("world.entity_count missing 'avg': %v", ec)
+	}
+}
+
+// TestStats_Snapshot_PreservesWindows is deferred: including aggregator state in
+// the snapshot wire format requires a version bump and migration path that is
+// out of scope for Phase 16.38 (stats are observable-only, not simulation state).
+func TestStats_Snapshot_PreservesWindows(t *testing.T) {
+	t.Skip("aggregator state is not persisted in the snapshot wire format (Phase 16.38 non-goal)")
+}
+
+// TestStats_JSON_Aggregated_RoundTrip verifies that WorldStatsAggregated can be
+// marshaled to JSON and unmarshaled back with identical values.
+func TestStats_JSON_Aggregated_RoundTrip(t *testing.T) {
+	w := flecs.New()
+	for i := 0; i < 5; i++ {
+		w.Progress(0.016)
+	}
+	orig := w.WorldStatsWindow(flecs.StatsSecond)
+
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got flecs.WorldStatsAggregated
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.EntityCount.Avg != orig.EntityCount.Avg {
+		t.Errorf("EntityCount.Avg: got %v, want %v", got.EntityCount.Avg, orig.EntityCount.Avg)
+	}
+	if got.FrameCount.Max != orig.FrameCount.Max {
+		t.Errorf("FrameCount.Max: got %v, want %v", got.FrameCount.Max, orig.FrameCount.Max)
 	}
 }

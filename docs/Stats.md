@@ -140,13 +140,118 @@ for _, ph := range snap.Phases {
 }
 ```
 
+## Multi-period aggregation (v0.93.0)
+
+Phase 16.38 adds ring-buffer aggregation that mirrors upstream's `FlecsMonitor` windowing model.
+
+### `StatsPeriod` enum
+
+```go
+const (
+    StatsSecond StatsPeriod = iota // last ≤60 ticks
+    StatsMinute                    // last ≤60 second-reductions
+    StatsHour                      // last ≤60 minute-reductions
+)
+```
+
+> **Time-to-window note**: "1 tick ≈ 1 second" only when the pipeline runs at 1 Hz. Aggregation is tick-based, not wall-clock-based.
+
+### `MetricGauge`
+
+```go
+type MetricGauge struct {
+    Avg float64 `json:"avg"`
+    Min float64 `json:"min"`
+    Max float64 `json:"max"`
+}
+```
+
+### `MetricCounter`
+
+```go
+type MetricCounter struct {
+    Rate  float64 `json:"rate"`  // events/sec average over the window
+    Value float64 `json:"value"` // cumulative count
+}
+```
+
+### `StatsWindow`
+
+Fixed 60-slot ring buffer of `MetricGauge` values.
+
+```go
+var sw flecs.StatsWindow
+sw.Record(42.0)           // push instant value (Avg=Min=Max=42)
+g := sw.Reduce()          // Avg/Min/Max across filled slots; zero-safe
+last := sw.Last()         // most recently recorded gauge
+```
+
+`ECS_STAT_WINDOW = 60` matches upstream (`flecs/src/addons/monitor.c`).
+
+### `WorldStatsAggregated`
+
+Returned by `(*World).WorldStatsWindow(period)`.
+
+```go
+type WorldStatsAggregated struct {
+    EntityCount    MetricGauge `json:"entity_count"`
+    TableCount     MetricGauge `json:"table_count"`
+    ArchetypeCount MetricGauge `json:"archetype_count"`
+    FrameCount     MetricGauge `json:"frame_count"`
+    TotalTime      MetricGauge `json:"total_time"`
+    LastTickDelta  MetricGauge `json:"last_tick_delta"`
+}
+```
+
+### `PipelineStatsAggregated`
+
+Returned by `(*World).PipelineStatsWindow(period)`.
+
+```go
+type PipelineStatsAggregated struct {
+    World   WorldStatsAggregated    `json:"world"`
+    Phases  []PhaseStatsAggregated  `json:"phases,omitempty"`
+    Systems []SystemStatsAggregated `json:"systems,omitempty"`
+}
+```
+
+### Ring-buffer reduction cascade
+
+- **Second window**: every `Progress` call pushes the current instant into slot `[head]`; `head = (head+1) % 60`.
+- **Minute window**: every 60th `Progress`, the second ring is reduced into one slot of the minute ring.
+- **Hour window**: every 60th minute-reduction, the minute ring is reduced into one slot of the hour ring.
+
+This mirrors `flecs_stats_reduce` / `flecs_stats_reduce_last` in `flecs/src/addons/monitor.c`.
+
+### `(*World).WorldStatsWindow(period StatsPeriod) WorldStatsAggregated`
+
+```go
+agg := w.WorldStatsWindow(flecs.StatsSecond)
+fmt.Printf("entity avg over last 60 ticks: %.1f\n", agg.EntityCount.Avg)
+```
+
+### `(*World).PipelineStatsWindow(period StatsPeriod) PipelineStatsAggregated`
+
+```go
+agg := w.PipelineStatsWindow(flecs.StatsMinute)
+fmt.Printf("per-minute avg frame count: %.1f\n", agg.World.FrameCount.Avg)
+```
+
+### `(*World).StatsTick()`
+
+Manually advances the aggregator one tick using the currently committed world state. Designed for tests; the aggregator advances automatically in production via each `Progress` call.
+
+### REST integration
+
+See [FlecsRemoteApi.md](FlecsRemoteApi.md) for the `?period=` query parameter on `GET /stats/world` and `GET /stats/pipeline`.
+
 ## Scope note (v1)
 
-This is a v1 port: per-tick deltas and cumulative totals only. The following upstream features are explicitly deferred:
+Phase 16.38 adds second/minute/hour ring-buffer aggregation. The following remain deferred:
 
-- **Time-window aggregation** (`EcsPeriod1s` / `1m` / `1h` / `1d` / `1w`) — no ring buffers or windowed reduce/aggregate pipelines.
-- **Persistence** — stats reset on world recreation.
-- **REST endpoint** — deferred until the REST/Explorer port (Phase 16.30+).
+- **Histogram percentiles** (P50/P95/P99) — Avg/Min/Max suffices for v1.
+- **Custom user metrics** — Phase 16.38 covers only the world/pipeline metrics already exposed.
+- **Variable window sizes** — 60 is hardcoded (matches upstream `ECS_STAT_WINDOW`).
+- **Aggregator state in snapshots** — stats are observable-only; snapshot wire format unchanged.
 - **Memory allocator stats** — Go's runtime owns allocations; `runtime.MemStats` integration is out of scope.
-- **HTTP stats** — no HTTP server in scope.
 - **Alerts-on-threshold** — users can wire `StatsSnapshot` → `RegisterAlert` manually (see [Alerts.md](Alerts.md)).
