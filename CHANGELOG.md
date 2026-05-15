@@ -1,5 +1,90 @@
 # Changelog
 
+## v0.109.0 — 2026-05-15 — Phase 16.54: Traversal iter.Seq adapters
+
+Fourth post-port-completion phase. Completes the `iter.Seq` adoption story by
+adding range-over-func adapters for the remaining non-query traversal primitives:
+the `Each*` methods on `Reader` and the package-level `EachUnion`/`EachSparse`/`EachByID`
+functions.
+
+### What changed
+
+- **`(*Reader).Entities() iter.Seq[ID]`** — yields each alive entity in dense
+  allocation order; same undefined-under-mutation contract as `EachEntity`.
+- **`(*Reader).EntitiesContext(ctx) iter.Seq2[ID, error]`** — context-aware
+  variant; checks ctx every `ctxCheckInterval` (1024) entities; yields
+  `(0, ctx.Err())` on cancellation.
+- **`(*Reader).Children(parent ID) iter.Seq[ID]`** — yields direct children;
+  insertion order when parent has `OrderedChildren`, archetype order otherwise.
+- **`(*Reader).Prefabs(e ID) iter.Seq[ID]`** — yields direct IsA prefabs (not
+  transitive).
+- **`(*Reader).Systems(phase *Phase) iter.Seq[*System]`** — yields non-closed
+  systems in topological order; includes disabled systems; panics if phase is nil.
+- **`Union(s scope, relID ID) iter.Seq2[ID, ID]`** — yields `(entity, target)`
+  pairs in insertion order; drives the union dense slice directly for break support.
+- **`Sparse[T any](s scope) iter.Seq2[ID, *T]`** — yields `(entity, *T)` pairs
+  in dense insertion order; pointer is the stable boxed address.
+- **`ByID(s scope, componentID ID) iter.Seq2[ID, unsafe.Pointer]`** — yields
+  `(entity, ptr)` for all holders; handles both sparse/DontFragment and archetype
+  paths; filters dead entities.
+- **`ByIDContext(ctx, s scope, componentID ID) iter.Seq2[ID, error]`** —
+  context-aware variant; collapses payload (yields entity IDs only, consistent
+  with `QueryAllContext`); checks ctx every `ctxCheckInterval` tables.
+
+### Design notes
+
+- Method-style adapters (`Entities`, `Children`, `Prefabs`, `Systems`) wrap
+  the existing `bool`-returning `Each*` callbacks directly; break support is
+  inherited for free.
+- Package-level adapters (`Union`, `Sparse`, `ByID`) drive the underlying dense
+  slice / `compIndex.Each` machinery directly — required because those callbacks
+  have no `bool` return, so the adapter must own the stop signal (mirrors Phase
+  16.52's `Query`/`CachedQuery` pattern).
+- ctx variants only for inherently-unbounded populations (`Entities`, `ByID`).
+  `Children`/`Prefabs`/`Systems`/`Union`/`Sparse` omit ctx variants; their
+  populations are bounded by a single entity/phase/relationship.
+- `World.EachEntity`/`World.EachChild`/`World.EachPrefab` are covered
+  transitively via `w.Read(func(r){ … r.Entities() … })`; no `World`-level
+  adapter duplicates added.
+
+### New tests (`iter_seq_traversal_test.go`)
+
+54 tests: `YieldsAll`, `BreakHonored`, `Empty`, `MatchesEachX` for each adapter;
+`Entities_LargeWorld` (10k entities), `Children_OrderedChildren` (insertion
+order snapshot path), `Children_Unordered` (archetype path equivalence),
+`Prefabs_MultiLevel` (direct-only DIRECT semantics), `Systems_InPhase`
+(includes disabled systems), `Systems_NilPhasePanics`, `Union_Members`
+(insertion order), `Sparse_Holders` (dense insertion order),
+`ByID_DynamicComponent` (IsAlive filter), `ByID_SparseComponent` (dense-store
+branch), `EntitiesContext_Canceled` (>1024 entities, ctx fires at checkpoint),
+`EntitiesContext_PreCanceled`, `ByIDContext_Canceled` (>1024 tables),
+`ByIDContext_PreCanceled`, `ByIDContext_SparseComponent`, `ByIDContext_BreakHonored`,
+`Entities_DuringMutation_ReadScope` (snapshot-equivalence), compile-time
+interface assertions. `BenchmarkEachEntity_vs_Entities` (adapter overhead).
+
+### New runnable examples (`iter_seq_traversal_example_test.go`)
+
+`ExampleReader_Entities`, `ExampleReader_Children`, `ExampleReader_Prefabs`,
+`ExampleReader_Systems`, `ExampleUnion`, `ExampleSparse`, `ExampleByID` — each
+a minimal `w.Read(func(r){ for … range … {} })` with deterministic `// Output:`.
+
+### Documentation
+
+- `CHANGELOG.md` — this entry.
+- `ROADMAP.md` — "Shipped" header bumped to `(through v0.109.0)`; Phase 16.54 line added.
+- `README.md` — traversal adapters row added to feature table.
+- `doc.go` — range-over-func section extended with traversal adapter summary.
+- `docs/HierarchiesManual.md` — `Children`/`Prefabs` range-over-func examples.
+- `docs/EntitiesComponents.md` — `Entities`/`Sparse`/`ByID` range-over-func examples.
+- `docs/Systems.md` — `Systems(phase)` range-over-func example.
+- `docs/ComponentTraits.md` — `Union` range-over-func example.
+
+### Breaking changes
+
+None. All existing `Each*` APIs unchanged — pure additions only.
+
+---
+
 ## v0.108.0 — 2026-05-15 — Phase 16.53: Streaming snapshot I/O
 
 Third post-port-completion phase. Adds `io.Writer` / `io.Reader` interfaces

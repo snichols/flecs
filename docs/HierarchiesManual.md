@@ -76,7 +76,21 @@ w.Read(func(r *flecs.Reader) {
 })
 ```
 
+**Range-over-func (v0.109.0):** `(*Reader).Children` returns an `iter.Seq[ID]` adapter
+with identical semantics and full `break` support:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for child := range r.Children(spaceship) {
+        // use child
+    }
+})
+```
+
 Only direct children are visited. To walk the entire subtree, recurse manually (see [Depth-first traversal](#depth-first-traversal)).
+
+For the `Prefabs` range-over-func adapter (`r.Prefabs(e) iter.Seq[ID]`) see
+[PrefabsManual.md § EachPrefab](PrefabsManual.md#eachprefab).
 
 ---
 

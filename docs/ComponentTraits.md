@@ -968,6 +968,17 @@ w.Read(func(fr *flecs.Reader) {
 | `IsUnion(s, relID) bool` | Return true if relID is a union relationship. |
 | `EachUnion(s, relID, fn func(entity, target ID))` | Iterate all active (entity, target) pairs in insertion order. |
 
+**Range-over-func (v0.109.0):** `Union(s, relID) iter.Seq2[ID, ID]` returns an adapter
+with identical insertion-order semantics and full `break` support:
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for e, target := range flecs.Union(r, Movement) {
+        fmt.Printf("%v is in state %v\n", e, target)
+    }
+})
+```
+
 ---
 
 ### With
