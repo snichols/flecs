@@ -25,6 +25,12 @@ const (
 	// returned by World.EventMonitor() and marks the monitor subscription kind in
 	// the EventKind enum for symmetry with other built-in event entities.
 	EventMonitor EventKind = 5
+	// EventOnTableEmpty fires when a table's row count transitions from 1 → 0
+	// (last entity removed). Registered via OnTableEmpty / OnTableEmptyWithOptions.
+	EventOnTableEmpty EventKind = 6
+	// EventOnTableFill fires when a table's row count transitions from 0 → 1
+	// (first entity added). Registered via OnTableFill / OnTableFillWithOptions.
+	EventOnTableFill EventKind = 7
 )
 
 // String returns a human-readable name for the event kind.
@@ -40,6 +46,10 @@ func (ev EventKind) String() string {
 		return "OnTableCreate"
 	case EventMonitor:
 		return "Monitor"
+	case EventOnTableEmpty:
+		return "OnTableEmpty"
+	case EventOnTableFill:
+		return "OnTableFill"
 	default:
 		return "Unknown"
 	}
@@ -82,6 +92,10 @@ func eventKindToEntity(w *World, ev EventKind) ID {
 		return w.eventOnTableCreateID
 	case EventMonitor:
 		return w.eventMonitorID
+	case EventOnTableEmpty:
+		return w.eventOnTableEmptyID
+	case EventOnTableFill:
+		return w.eventOnTableFillID
 	default:
 		return 0
 	}
@@ -253,8 +267,8 @@ func ObserveIDWithOptions(w *World, id ID, opts ObserverOptions, events []EventK
 
 	if opts.source != 0 {
 		for _, ev := range events {
-			if ev == EventOnTableCreate {
-				panic("flecs: ObserveIDWithOptions: WithSource is not compatible with EventOnTableCreate; tables have no source entity semantics")
+			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill {
+				panic("flecs: ObserveIDWithOptions: WithSource is not compatible with table events; tables have no source entity semantics")
 			}
 		}
 	}

@@ -222,11 +222,13 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.EventOnSet():         {},
 		w.EventOnRemove():      {},
 		w.EventOnTableCreate(): {},
+		w.EventOnTableEmpty():  {},
+		w.EventOnTableFill():   {},
 		w.Event():              {},
 		w.DependsOn():          {},
 		w.EventMonitor():       {},
 		w.SlotOf():             {},
-		// Built-in unit entities (indices 48–72).
+		// Built-in unit entities (indices 50–74).
 		w.Meter():                 {},
 		w.KiloMeter():             {},
 		w.MilliMeter():            {},

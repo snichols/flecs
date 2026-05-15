@@ -1063,9 +1063,70 @@ C flecs fires `OnDelete` when a component entity itself is deleted, and `OnDelet
 
 `OnTableDelete` fires when a table is reclaimed. It is **not yet ported**: Go-flecs has no table-reclamation path (`delete(w.tables, ...)` is never called; tables persist for the lifetime of the World). Wiring `OnTableDelete` requires implementing table reclamation first, which is a substantial independent change deferred to a follow-up phase.
 
-### OnTableEmpty / OnTableFill Events
+### OnTableEmpty / OnTableFill Events {#on-table-empty-and-on-table-fill}
 
-C flecs can fire events when an archetype table transitions between empty and non-empty. Not ported to Go flecs.
+✅ **Shipped in v0.98.0.**
+
+`OnTableFill` fires the first time any entity is placed in a previously-empty archetype table (row count 0→1). `OnTableEmpty` fires when the last entity leaves a table (row count 1→0). These are table-level events, not per-entity events.
+
+```go
+// Fire once when the first entity enters any Position table.
+flecs.OnTableFill(w, func(fw *flecs.Writer, t *flecs.Table) {
+    fmt.Printf("table filled: %v\n", t.Type())
+})
+
+// Fire once when the last entity leaves any Position table.
+flecs.OnTableEmpty(w, func(fw *flecs.Writer, t *flecs.Table) {
+    fmt.Printf("table emptied: %v\n", t.Type())
+})
+```
+
+#### Multi-term filter
+
+Use `OnTableFillWithOptions` / `OnTableEmptyWithOptions` with `WithQuery(terms...)` to restrict the observer to tables whose component signature satisfies the filter:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+
+// Only fires for tables that include Position.
+flecs.OnTableFillWithOptions(w,
+    flecs.WithQuery(flecs.Term{ID: posID, Kind: flecs.TermAnd}),
+    func(fw *flecs.Writer, t *flecs.Table) {
+        fmt.Printf("Position table filled: %v\n", t.Type())
+    })
+```
+
+Filter terms are evaluated against the table's archetype signature (the sorted component ID list). `TermAnd` requires the ID to be present; `TermNot` requires the ID to be absent; OR-groups require at least one ID to be present. DontFragment and Sparse components are stored outside the archetype signature and always fail `TermAnd` on table-level filters.
+
+#### yield_existing
+
+`WithYieldExisting()` fires the callback synchronously at registration time for all matching tables in their current state:
+
+- `OnTableFill + WithYieldExisting()` — sweeps all currently **non-empty** tables (tables with at least one row), in sorted-signature order. The empty root table (`[]`) is excluded.
+- `OnTableEmpty + WithYieldExisting()` — sweeps all currently **empty** tables (tables with zero rows). The root empty table is included.
+
+```go
+// Receive Fill for every non-empty table that already exists.
+flecs.OnTableFillWithOptions(w, flecs.WithYieldExisting(),
+    func(fw *flecs.Writer, t *flecs.Table) { ... })
+```
+
+#### Root empty table semantics
+
+The root table (signature `[]`) is the table all entities occupy before any component is added. It is always alive. `OnTableFill` fires on the first `NewEntity` call (0→1 transition) and `OnTableEmpty` fires when the last bare entity is deleted (1→0 transition). `yield_existing` for `OnTableEmpty` includes the root table when it is currently empty.
+
+#### Deferred-scope semantics
+
+Transitions fire in order of occurrence during `Write(fn)` flush, matching the per-entity OnAdd/OnRemove semantics. A table can flicker 0→1→0 within a single batch; all transitions are emitted in sequence. The handler receives a `*Writer` for deferred mutations; any components added or deleted inside the handler are processed after the enclosing flush completes.
+
+#### Comparison with OnTableCreate
+
+| | `OnTableCreate` | `OnTableFill` / `OnTableEmpty` |
+|---|---|---|
+| Fires | Once per new archetype (first time any entity uses it) | Every 0→1 / 1→0 row-count transition |
+| Fires for root table? | No (`[]` excluded) | Yes (as a normal transition) |
+| yield_existing | Non-empty tables | Fill: non-empty; Empty: empty tables |
+| Multi-term filter | No | Yes, against table signature |
 
 ### Custom Events
 

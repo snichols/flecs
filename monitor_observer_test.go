@@ -479,9 +479,9 @@ func TestMonitorEventMonitorAccessor(t *testing.T) {
 	if id == 0 {
 		t.Fatal("EventMonitor() returned zero ID")
 	}
-	// Index should be 46 (one past DependsOn at 45).
-	if id.Index() != 46 {
-		t.Errorf("EventMonitor() index: got %d, want 46", id.Index())
+	// Index should be 48 (one past DependsOn at 47, after EventOnTableEmpty/Fill at 44/45).
+	if id.Index() != 48 {
+		t.Errorf("EventMonitor() index: got %d, want 48", id.Index())
 	}
 }
 
@@ -494,11 +494,11 @@ func TestMonitorEventKindConstant(t *testing.T) {
 	if s := flecs.EventMonitor.String(); s != "Monitor" {
 		t.Errorf("EventMonitor.String(): got %q, want %q", s, "Monitor")
 	}
-	// EventMonitor() accessor returns the built-in entity at index 46
+	// EventMonitor() accessor returns the built-in entity at index 48
 	w := newMonWorld()
 	id := w.EventMonitor()
-	if id.Index() != 46 {
-		t.Errorf("EventMonitor() index: got %d, want 46", id.Index())
+	if id.Index() != 48 {
+		t.Errorf("EventMonitor() index: got %d, want 48", id.Index())
 	}
 }
 

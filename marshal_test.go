@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 72 built-in entities (including Inverse at index 72) plus all
+// the 74 built-in entities (including Inverse at index 74) plus all
 // registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
@@ -53,7 +53,7 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.OrderedChildren(): {}, w.Sparse(): {}, w.DontFragment(): {},
 		w.Disabled(): {}, w.Prefab(): {},
 		w.Wildcard(): {}, w.Any(): {},
-		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.Event(): {},
+		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.EventOnTableEmpty(): {}, w.EventOnTableFill(): {}, w.Event(): {},
 		w.DependsOn(): {}, w.EventMonitor(): {}, w.SlotOf(): {},
 		// Built-in unit entities (indices 48–72).
 		w.Meter(): {}, w.KiloMeter(): {}, w.MilliMeter(): {},

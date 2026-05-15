@@ -130,8 +130,8 @@ func observeQueryCore(
 
 	if opts.source != 0 {
 		for _, ev := range events {
-			if ev == EventOnTableCreate {
-				panic("flecs: ObserveQueryWithOptions: WithSource is not compatible with EventOnTableCreate; tables have no source entity semantics")
+			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill {
+				panic("flecs: ObserveQueryWithOptions: WithSource is not compatible with table events; tables have no source entity semantics")
 			}
 		}
 	}
