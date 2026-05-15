@@ -885,3 +885,133 @@ func TestParallelSystems_DuringReclamation(t *testing.T) {
 		}
 	}
 }
+
+// TestParallelSystems_OrderingPreserved verifies two ordering invariants:
+//  1. Within a single parallel system (single stage), commands are applied in
+//     FIFO submission order. System A submits AddID(eA, cID) then AddID(eB, cID);
+//     the OnAdd hook must fire for eA before eB (cmds[0] before cmds[1]).
+//  2. Across parallel systems in a batch, stages are merged in ascending id
+//     order (wavePos 0 → stage 1 before wavePos 1 → stage 2): eC (stage 2)
+//     fires after both eA and eB (stage 1) in the OnAdd sequence.
+func TestParallelSystems_OrderingPreserved(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+	cID := flecs.RegisterComponent[psTagC](w)
+
+	// eA, eB belong to system A's write set (aID); neither has cID yet.
+	// eC belongs to system B's write set (bID); no cID yet.
+	var eA, eB, eC flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		eA = fw.NewEntity()
+		flecs.AddID(fw, eA, aID)
+		eB = fw.NewEntity()
+		flecs.AddID(fw, eB, aID)
+		eC = fw.NewEntity()
+		flecs.AddID(fw, eC, bID)
+	})
+
+	// OnAdd[cID] records the order in which entities receive cID during
+	// mergeWorkerStages. Fires on the main goroutine sequentially — no mutex needed.
+	var addOrder []flecs.ID
+	flecs.OnAdd[psTagC](w, func(_ *flecs.Writer, e flecs.ID, _ psTagC) {
+		addOrder = append(addOrder, e)
+	})
+
+	// System A (wavePos 0 → stage 1): submit eA first, eB second.
+	// FIFO: flush processes cmds[0]=AddID(eA,cID) before cmds[1]=AddID(eB,cID).
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		fw := it.Writer()
+		fw.AddID(eA, cID) // submitted first — cmds[0]
+		fw.AddID(eB, cID) // submitted second — cmds[1]
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// System B (wavePos 1 → stage 2): stage merges after stage 1.
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, it *flecs.QueryIter) {
+		it.Writer().AddID(eC, cID)
+	})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	// Within-stage FIFO: eA at [0], eB at [1].
+	// Across-stage: eC (stage 2) at [2], after both stage-1 entries.
+	if len(addOrder) != 3 {
+		t.Fatalf("expected 3 OnAdd(cID) callbacks, got %d", len(addOrder))
+	}
+	if addOrder[0] != eA {
+		t.Errorf("FIFO violation within stage: expected eA first, got entity %v", addOrder[0])
+	}
+	if addOrder[1] != eB {
+		t.Errorf("FIFO violation within stage: expected eB second, got entity %v", addOrder[1])
+	}
+	if addOrder[2] != eC {
+		t.Errorf("stage-id order violation: expected eC (stage 2) last, got entity %v", addOrder[2])
+	}
+}
+
+// TestParallelSystems_NestedScopesBlocked verifies that existing scope guards
+// (stage.deferDepth > 0) still reject structural operations that cannot run
+// inside a deferred scope when triggered from a worker goroutine inside a
+// parallel system. Two parallel systems form a batch so the first system
+// actually executes in a worker goroutine rather than on the main goroutine.
+func TestParallelSystems_NestedScopesBlocked(t *testing.T) {
+	w := flecs.New()
+	w.SetWorkerCount(2)
+
+	aID := flecs.RegisterComponent[psTagA](w)
+	bID := flecs.RegisterComponent[psTagB](w)
+
+	w.Write(func(fw *flecs.Writer) {
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, aID)
+		}
+		for range 5 {
+			e := fw.NewEntity()
+			flecs.AddID(fw, e, bID)
+		}
+	})
+
+	var scopePanicCount atomic.Int32
+
+	// System A: attempts RangeSet inside a deferred scope — must panic.
+	// The recover captures the panic so the worker goroutine does not crash.
+	cqA := flecs.NewCachedQuery(w, aID)
+	sA := flecs.NewSystem(w, cqA, func(_ float32, it *flecs.QueryIter) {
+		defer func() {
+			if recover() != nil {
+				scopePanicCount.Add(1)
+			}
+		}()
+		fw := it.Writer()
+		// RangeSet checks fw.stage.deferDepth > 0 and panics in a deferred
+		// scope. Worker stages are initialized with deferDepth=1 so the guard
+		// fires regardless of whether this runs on the main goroutine or a
+		// worker goroutine.
+		flecs.RangeSet(fw, flecs.ID(1000), flecs.ID(2000))
+	})
+	sA.SetParallel(true)
+	sA.SetWriteSet([]flecs.ID{aID})
+
+	// System B: no-op; required so sA runs in a worker goroutine (single-system
+	// batches execute synchronously on the main goroutine).
+	cqB := flecs.NewCachedQuery(w, bID)
+	sB := flecs.NewSystem(w, cqB, func(_ float32, _ *flecs.QueryIter) {})
+	sB.SetParallel(true)
+	sB.SetWriteSet([]flecs.ID{bID})
+
+	w.Progress(0)
+
+	if scopePanicCount.Load() == 0 {
+		t.Fatal("scope guard did not fire: RangeSet should panic when called inside a parallel system (stage.deferDepth > 0)")
+	}
+	_ = sB
+}
