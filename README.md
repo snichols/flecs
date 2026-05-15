@@ -215,6 +215,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Low-level ID API | `AddID`, `RemoveID`, `HasID`, `OwnsID` |
 | Pair IDs / relationships | `MakePair`, `SetPair[T]`, `GetPair[T]` |
 | ChildOf hierarchy | `w.ChildOf()`, `EachChild`, `ParentOf`, cascade delete |
+| Non-fragmenting parent storage _(v0.102.0)_ | `SetParentStorage(w, rel)`, `IsParentStorage(s, rel)` — opt-in O(1) reparenting; all child children of different parents share one archetype table |
 | IsA inheritance | `w.IsA()`, `Get`/`Has` walk the chain, `PrefabOf` |
 | Named entities | `SetName`, `GetName`, `Lookup`, `PathOf` |
 | Hooks (single) | `OnAdd[T]`, `OnSet[T]`, `OnRemove[T]`, `OnReplace[T]` / `OnReplaceID` |
