@@ -62,7 +62,7 @@ Each C doc was read and classified for porting effort.
 - **port-with-gaps** — describes features the Go port does not have; gaps annotated in the stub.
 - **skip** — C-specific tooling, build system, DSL, or migration content that has no Go equivalent.
 
-### Feature-gap list (candidate follow-up issues)
+### Feature-gap list (candidate follow-up issues) {#feature-gap-list}
 
 Features described in the C docs that the Go port does not currently implement:
 

@@ -79,10 +79,12 @@ See `.github/workflows/ci.yml` (`bench` job) and `CONTRIBUTING.md`.
 
 | Benchmark | Description |
 |-----------|-------------|
-| `BenchmarkDeferOverhead_NoOps` | `Defer(func(){})` with no operations; pure bookkeeping cost |
-| `BenchmarkDeferSet_10k` | 10k deferred Sets in one Defer block, then flush |
-| `BenchmarkDeferDelete_10k` | 10k deferred Deletes; timer wraps only the Defer/flush |
-| `BenchmarkDeferNested` | Nested DeferBegin/End cost |
+| `BenchmarkDeferOverhead_NoOps` | `w.Write(func(){})` with no operations; pure scope overhead |
+| `BenchmarkDeferSingleSet` | Single deferred Set inside a `Write` scope; 0 allocs/op baseline |
+| `BenchmarkDeferBatchedAdds` | Batch of `AddID` operations flushed from one `Write` scope |
+| `BenchmarkDeferSet_10k` | 10k deferred Sets in one `Write` scope, then flush |
+| `BenchmarkDeferDelete_10k` | 10k deferred Deletes; timer wraps only the Write/flush |
+| `BenchmarkDeferNested` | Nested `Write` scope cost |
 
 ### g) Systems + Progress
 
@@ -118,6 +120,39 @@ See `.github/workflows/ci.yml` (`bench` job) and `CONTRIBUTING.md`.
 | `BenchmarkGetUp_SelfHit` | `GetUp[T]` when entity locally owns component; depth-0, 0 allocs |
 | `BenchmarkGetUp_Depth1` | `GetUp[T]` one hop up; parent owns component, child does not |
 | `BenchmarkGetUp_Depth5` | `GetUp[T]` five hops up; only 5th ancestor owns component |
+| `BenchmarkQueryUpTraversal` | Cached query with `.Up(IsA)` traversal term over 100 entities |
+
+### j) Range-over-func (iter.Seq) vs Each-style
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkEach1_vs_All1/Each1` | `Each1[Position]` lambda loop over 1k entities |
+| `BenchmarkEach1_vs_All1/All1` | `All1[Position]` range-over-func loop over the same 1k entities |
+
+### l) Change detection
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkCachedQueryChangedHit_10kTables` | `CachedQuery.Changed()` — no table was mutated; O(1) per-table early-exit path |
+| `BenchmarkCachedQueryChangedAfterSet` | `CachedQuery.Changed()` — one entity mutated via `Set`; one table marked dirty |
+
+### m) Inheritable components
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkInheritableEach1_NoInheritors` | `Each1` on an inheritable component; no inheritor entities present |
+| `BenchmarkInheritableEach1_WithInheritors` | `Each1` on an inheritable component; inheritor entities present (SelfUp path) |
+
+### n) Multi-threaded within-system dispatch
+
+| Benchmark | Description |
+|-----------|-------------|
+| `BenchmarkMultiThreadedSystem/workers=1` | Single system, `SetMultiThreaded(true)`, 1 worker (no-op split) |
+| `BenchmarkMultiThreadedSystem/workers=2` | Same system split across 2 workers (50/50 row split) |
+| `BenchmarkMultiThreadedSystem/workers=4` | Same system split across 4 workers |
+| `BenchmarkMultiThreadedDeferredSet/workers=1` | Deferred `Set` from multi-threaded system, 1 worker |
+| `BenchmarkMultiThreadedDeferredSet/workers=2` | Same with 2 workers; each owns a per-stage queue |
+| `BenchmarkMultiThreadedDeferredSet/workers=4` | Same with 4 workers |
 
 ---
 
@@ -409,3 +444,87 @@ throughput scaling as noted in the Phase 10.1 commentary above.
 **Race-detector improvement:** `go test -race -count=10` was failing with
 concurrent map/slice writes in `cmdQueue.append` under the old shared-stage
 path. With per-stage routing, `go test ./... -race -count=10` is clean.
+
+---
+
+## v0.113.0 baseline — Phase 16.58: documentation hardening
+
+Re-measured to verify no regressions; all benchmarks in `bench_test.go` pass
+without panic. Numbers are reference only; see CI smoke-test note at the top.
+
+Machine: AMD Ryzen Threadripper PRO 5995WX 64-Cores, Go 1.26.1, Linux amd64, 2026-05-15.
+
+```
+BenchmarkNewEntity-128                                     10462592       110.5 ns/op      112 B/op     0 allocs/op
+BenchmarkDeleteEntity-128                                   8509531       138.1 ns/op       46 B/op     0 allocs/op
+BenchmarkAllocFreeAllocCycle-128                            2983333       367.8 ns/op      112 B/op     1 allocs/op
+BenchmarkSetExistingComponent-128                           7668992       151.3 ns/op        0 B/op     0 allocs/op
+BenchmarkSetNewComponentTriggerMigration-128                1956630       586.4 ns/op      245 B/op     0 allocs/op
+BenchmarkGetExistingComponent-128                          34806578        32.94 ns/op       0 B/op     0 allocs/op
+BenchmarkGetMissingComponent-128                           76995738        15.54 ns/op       0 B/op     0 allocs/op
+BenchmarkHasExistingComponent-128                          44952223        26.48 ns/op       0 B/op     0 allocs/op
+BenchmarkOwnsVsHas/Has-via-IsA-128                         18853279        63.08 ns/op       0 B/op     0 allocs/op
+BenchmarkOwnsVsHas/Owns-local-only-128                     88372287        13.34 ns/op       0 B/op     0 allocs/op
+BenchmarkAddOneComponent_CacheHit-128                       1984372       598.8 ns/op      243 B/op     0 allocs/op
+BenchmarkAddOneComponent_CacheMiss-128                      1000000      1852 ns/op        159 B/op     0 allocs/op
+BenchmarkRemoveOneComponent-128                             1000000      2795 ns/op          0 B/op     0 allocs/op
+BenchmarkSwapComponent-128                                  1000000      3040 ns/op         75 B/op     0 allocs/op
+BenchmarkQueryEach2_1k-128                                   173132      6562 ns/op        1096 B/op    8 allocs/op
+BenchmarkQueryEach2_10k-128                                   41362     28184 ns/op        1096 B/op    8 allocs/op
+BenchmarkQueryEach2_100k-128                                   5115    240467 ns/op        1096 B/op    8 allocs/op
+BenchmarkCachedQueryEach2_10k-128                            125421      9029 ns/op         512 B/op    1 allocs/op
+BenchmarkQueryIterField_10k-128                              136598      8194 ns/op         520 B/op    2 allocs/op
+BenchmarkQueryAcrossArchetypes_10k-128                        45340     30144 ns/op        1192 B/op    8 allocs/op
+BenchmarkFieldT_AllocCost-128                              54726612        21.90 ns/op       0 B/op     0 allocs/op
+BenchmarkEach1_vs_All1/Each1-128                             238053      5411 ns/op         896 B/op    7 allocs/op
+BenchmarkEach1_vs_All1/All1-128                              460334      2768 ns/op         896 B/op    7 allocs/op
+BenchmarkSetNoHook_10k-128                                      834   1393192 ns/op        4994 B/op    0 allocs/op
+BenchmarkOnSetHookFires_10k-128                                 763   1418173 ns/op        2741 B/op    0 allocs/op
+BenchmarkObserverFires_10k-128                                  642   1598658 ns/op        3258 B/op    0 allocs/op
+BenchmarkObserverFires_HookAndObserver_10k-128                  648   1691306 ns/op        6427 B/op    0 allocs/op
+BenchmarkObserverFires_5observers_10k-128                       582   1786673 ns/op        7156 B/op    0 allocs/op
+BenchmarkDeferSingleSet-128                                 6787983       152.7 ns/op        0 B/op     0 allocs/op
+BenchmarkDeferBatchedAdds-128                                 90268     11407 ns/op         226 B/op    0 allocs/op
+BenchmarkDeferOverhead_NoOps-128                           35987328        32.93 ns/op       0 B/op     0 allocs/op
+BenchmarkDeferSet_10k-128                                       734   1400822 ns/op        5674 B/op    0 allocs/op
+BenchmarkDeferDelete_10k-128                                    234   5165108 ns/op     2266226 B/op  118 allocs/op
+BenchmarkDeferNested-128                                    6759954       163.9 ns/op        0 B/op     0 allocs/op
+BenchmarkProgress_NoSystems-128                             2128894       767.0 ns/op      192 B/op     1 allocs/op
+BenchmarkProgress_OneSystem_10kEntities-128                  150414      7375 ns/op         706 B/op    2 allocs/op
+BenchmarkProgress_TenSystems_1kEntities-128                   64195     19596 ns/op        5411 B/op   12 allocs/op
+BenchmarkProgress_WithFixedTimestep-128                      347049      3093 ns/op         706 B/op    2 allocs/op
+BenchmarkProgress_PipelineFull-128                           130680      9166 ns/op        2247 B/op    5 allocs/op
+BenchmarkProgress_ParallelDispatch_2systems_10k-128           42880     27155 ns/op        1525 B/op    8 allocs/op
+BenchmarkProgress_SerialBaseline_2systems_10k-128             86713     13647 ns/op        1219 B/op    3 allocs/op
+BenchmarkMultiThreadedSystem/workers=1-128                     5107    220466 ns/op        1290 B/op    5 allocs/op
+BenchmarkMultiThreadedSystem/workers=2-128                     8680    147125 ns/op        1848 B/op    7 allocs/op
+BenchmarkMultiThreadedSystem/workers=4-128                    12466     91865 ns/op        2967 B/op   11 allocs/op
+BenchmarkMultiThreadedDeferredSet/workers=1-128                  20  58632161 ns/op     3369757 B/op  268 allocs/op
+BenchmarkMultiThreadedDeferredSet/workers=2-128                  27  38170423 ns/op     2460701 B/op  207 allocs/op
+BenchmarkMultiThreadedDeferredSet/workers=4-128                  38  27203204 ns/op     1127532 B/op  111 allocs/op
+BenchmarkChildOfCascadeDelete_100-128                          23787     50318 ns/op       11416 B/op   30 allocs/op
+BenchmarkChildOfCascadeDelete_10k-128                            231   5114373 ns/op    1746216 B/op  133 allocs/op
+BenchmarkIsAGet_Hit-128                                    14137917        86.80 ns/op       0 B/op     0 allocs/op
+BenchmarkIsAGet_MissedChain-128                            72361051        15.70 ns/op       0 B/op     0 allocs/op
+BenchmarkGetUp_SelfHit-128                                 31526858        36.99 ns/op       0 B/op     0 allocs/op
+BenchmarkGetUp_Depth1-128                                  13388930        90.74 ns/op       0 B/op     0 allocs/op
+BenchmarkGetUp_Depth5-128                                   5903628       178.5 ns/op        0 B/op     0 allocs/op
+BenchmarkQueryUpTraversal-128                               1214054       996.0 ns/op       728 B/op    4 allocs/op
+BenchmarkLookupPath_3deep-128                                577658      1937 ns/op          48 B/op    1 allocs/op
+BenchmarkCachedQueryChangedHit_10kTables-128               50824556        23.68 ns/op       0 B/op     0 allocs/op
+BenchmarkCachedQueryChangedAfterSet-128                     6063238       167.2 ns/op        0 B/op     0 allocs/op
+BenchmarkInheritableEach1_NoInheritors-128                    43461     25409 ns/op        1288 B/op   11 allocs/op
+BenchmarkInheritableEach1_WithInheritors-128                  50308     22695 ns/op        1496 B/op   13 allocs/op
+BenchmarkParallelSystems_PerStage-128                         97760     12329 ns/op        2650 B/op   12 allocs/op
+BenchmarkParallelSystems_Scaling/workers=1-128               115526      9420 ns/op        2697 B/op   15 allocs/op
+BenchmarkParallelSystems_Scaling/workers=2-128                97665     11540 ns/op        2666 B/op   13 allocs/op
+BenchmarkParallelSystems_Scaling/workers=4-128                97215     12087 ns/op        2650 B/op   12 allocs/op
+BenchmarkParallelSystems_Scaling/workers=8-128                91282     12829 ns/op        2650 B/op   12 allocs/op
+```
+
+### Notable observations vs Phase 8.1 baseline
+
+- **DeferSet_10k**: 2.4M ns → 1.4M ns; allocs/op 10018 → 0 (cmd arena + coalescing, Phases 8.3 + later).
+- **DeferDelete_10k**: 1.8M ns → 5.2M ns; allocs jumped 10037 → 118 — entity-delete cascade (OnDelete/OnDeleteTarget observer events, Phase 16.48) fires per component removed; the old benchmark predated cleanup-cascade features.
+- **ObserverFires_5observers_10k**: 3.0M ns, 480k B/op, 10k allocs → 1.8M ns, 7156 B/op, 0 allocs (per-fire snapshot eliminated in Phase 8.3).
+- **All zero-alloc paths still clean**: `SetExistingComponent`, `GetExistingComponent`, `HasExistingComponent`, `OwnsVsHas/*`, `FieldT_AllocCost`, `DeferSingleSet`, `DeferOverhead_NoOps`, `CachedQueryChangedHit_*` all 0 allocs/op.

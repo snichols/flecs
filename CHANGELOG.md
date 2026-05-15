@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.113.0 — 2026-05-15 — Phase 16.58: documentation & API consistency hardening
+
+Eighth post-port-completion phase. A quality-consolidation pass with zero new
+API surface. Hardens documentation, godoc, and internal consistency to prepare
+for a potential v1.0 declaration.
+
+### What changed
+
+- **`docs/AUDIT.md`** (new) — audit trail summarising every check performed and
+  what was fixed versus "checked, no gaps".
+- **`TestDocLinks`** (new, in `docs/docs_link_test.go`) — stdlib-only test that
+  parses every `docs/*.md`, extracts internal links, and asserts each target
+  file and heading anchor exists. Caught and fixed three broken anchors and one
+  broken link target.
+- **`example_snapshot_test.go`** (new) — `ExampleTakeSnapshot` demonstrates the
+  basic in-memory binary snapshot API (`TakeSnapshot`, `Bytes`, `LoadSnapshot`,
+  `RestoreSnapshot`).
+- **`example_context_test.go`** (new) — `ExampleWorld_ProgressContext`
+  demonstrates cooperative context cancellation with a pre-cancelled and a live
+  context.
+- **README.md concurrency model section** — updated stale `w.Readonly()` /
+  `ReadonlyEnd` example and feature-table rows to the current `w.Read` /
+  `w.Write` API (the old methods were removed in v0.40.0).
+- **`docs/Relationships.md`** — fixed broken anchor `Queries.md#traversal` →
+  `Queries.md#relationship-traversal`.
+- **`docs/README.md`** — added explicit `{#feature-gap-list}` ID to the
+  feature-gap-list heading so existing cross-references resolve correctly.
+- **BENCH.md** — refreshed numbers; stale benchmark rows removed; measurement
+  environment documented.
+- **ROADMAP.md** — added Phase 16.58 entry; updated "Shipped (through vX)"
+  heading to v0.113.0.
+- **Godoc** — all exported symbols in the root package and `flectest` subpackage
+  were audited; godoc gap = 0.
+
+### Non-breaking
+
+No exported symbol was added, renamed, or changed. All changes are documentation,
+examples, tests, and formatting.
+
 ## v0.112.0 — 2026-05-15 — Phase 16.57: snapshot schema-version tagging and migration registry
 
 Seventh post-port-completion phase. Adds user-facing schema-version tagging to
