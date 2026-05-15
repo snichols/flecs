@@ -134,10 +134,10 @@ type CachedQuery struct {
 	// varSlots, driverVar, varOrder, varKinds, and hasParentStorageTgtVar mirror
 	// Query fields for variable queries. Iter() re-executes buildVarRows on each call
 	// when varSlots != nil.
-	varSlots              map[string]int
-	driverVar             string
-	varOrder              []string
-	varKinds              map[string]VarKind
+	varSlots               map[string]int
+	driverVar              string
+	varOrder               []string
+	varKinds               map[string]VarKind
 	hasParentStorageTgtVar bool
 	// Sorted-iteration state — non-nil only when WithOrderBy was used.
 	orderBy             ID                      // sort-by component ID

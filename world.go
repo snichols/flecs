@@ -1256,9 +1256,7 @@ func deleteImmediate(w *World, e ID) bool {
 					}
 				} else {
 					// policyOnDeleteTargetDelete: cascade-delete parent-storage sources.
-					for _, src := range psSrcs {
-						stack = append(stack, src)
-					}
+					stack = append(stack, psSrcs...)
 				}
 				if len(tables) == 0 {
 					continue

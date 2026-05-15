@@ -154,7 +154,6 @@ func (w *World) addParentStoragePair(e ID, relID ID, target ID) bool {
 			if sigID.IsPair() && uint32(sigID.First().Index()) == relIdx && sigID != marker {
 				// Old fragmented pair found — remove it before adding marker.
 				w.migrate(e, 0, sigID, nil)
-				rec = w.index.Get(e)
 				break
 			}
 		}
