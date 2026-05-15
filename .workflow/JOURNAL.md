@@ -26,3 +26,7 @@ Boosted main package coverage to 95.0% (requirement ≥95%). Added 10 targeted t
 
 Fixed three golangci-lint violations: gofmt struct alignment in cached_query.go, S1011 append loop in world.go, SA4006 dead assignment in parent_storage.go. All tests pass -race -count=1, lint clean.
 
+## iterate iteration 8 (2026-05-15)
+
+Fixed two remaining ROADMAP.md gaps: bumped heading from "Shipped (through v0.101.0)" to "Shipped (through v0.102.0)" and added "all major upstream gaps closed" note after the Phase 16.47 entry. All other requirements were already satisfied per previous iterations.
+
