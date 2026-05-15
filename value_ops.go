@@ -147,7 +147,7 @@ func (w *World) GetByID(e ID, id ID) (any, bool) {
 		return materializeByPtr(info, ptr), true
 	}
 	// Local miss: walk the IsA chain.
-	return getViaIsAByID(w, e, id, info, nil)
+	return getViaIsAByIDPooled(w, e, id, info)
 }
 
 // materializeByPtr boxes the value at ptr using info.Type.
@@ -166,8 +166,20 @@ func materializeByPtr(info *component.TypeInfo, ptr unsafe.Pointer) any {
 	return reflect.NewAt(info.Type, ptr).Elem().Interface()
 }
 
+// getViaIsAByIDPooled is the pool-acquiring entry point for getViaIsAByID.
+// Call this instead of getViaIsAByID(w, e, id, info, nil) at external call sites.
+func getViaIsAByIDPooled(w *World, e ID, id ID, info *component.TypeInfo) (any, bool) {
+	seen := idSeenPool.Get().(map[ID]struct{})
+	seen[e] = struct{}{}
+	v, ok := getViaIsAByID(w, e, id, info, seen)
+	clear(seen)
+	idSeenPool.Put(seen)
+	return v, ok
+}
+
 // getViaIsAByID walks the IsA chain of e looking for component id.
 // Non-generic analog of getViaIsA[T], returning (any, bool).
+// seen is provided by the caller; recursive calls reuse the same map.
 func getViaIsAByID(w *World, e ID, id ID, info *component.TypeInfo, seen map[ID]struct{}) (any, bool) {
 	rec := w.index.Get(e)
 	if rec == nil {

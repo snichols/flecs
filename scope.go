@@ -135,7 +135,7 @@ func (r *Reader) HasID(e ID, id ID) bool {
 			}
 		}
 	}
-	return hasViaIsA(w, e, id, nil)
+	return hasViaIsAPooled(w, e, id)
 }
 
 // OwnsID reports whether entity e locally owns the component or tag identified
@@ -621,7 +621,7 @@ func HasID(s scope, e ID, id ID) bool {
 			}
 		}
 	}
-	return hasViaIsA(w, e, id, nil)
+	return hasViaIsAPooled(w, e, id)
 }
 
 // OwnsID reports whether entity e locally owns the component or tag identified by id.
