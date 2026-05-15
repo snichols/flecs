@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.108.0 — 2026-05-15 — Phase 16.53: Streaming snapshot I/O
+
+Third post-port-completion phase. Adds `io.Writer` / `io.Reader` interfaces
+to the snapshot subsystem, eliminating the need to materialize a full `[]byte`
+payload for large worlds. Composes directly with `gzip.NewWriter`, `net.Conn`,
+`*os.File`, and encrypted writers.
+
+### What changed
+
+- **`(*Snapshot).WriteTo(w io.Writer) (n int64, err error)`** — satisfies
+  `io.WriterTo`; streams the already-captured blob with zero extra allocation.
+- **`(*World).TakeSnapshotTo(out io.Writer) (n int64, err error)`** — take +
+  stream without materializing a `*Snapshot`; holds the world read lock for
+  the full write duration.
+- **`(*World).TakeSnapshotToContext(ctx, out) (n int64, err error)`** — same
+  with cooperative context cancellation between serialization stages; returns
+  `(bytes_written, ctx.Err())` on cancellation.
+- **`ReadSnapshotFrom(r io.Reader) (*Snapshot, error)`** — reads a snapshot
+  stream produced by any of the above; validates magic and version; materializes
+  the payload blob.
+- **`(*World).RestoreSnapshotFrom(r io.Reader) error`** — `ReadSnapshotFrom`
+  + `RestoreSnapshot` in one call.
+- **`(*World).RestoreSnapshotFromContext(ctx, r) error`** — same with context
+  cancellation checked before read and between deserialization stages.
+- **`Bytes()` refactored** — now a thin wrapper around `WriteTo(&bytes.Buffer{})`.
+- **`binWriter` refactored** — writes to any `io.Writer` with accumulated `n`
+  and sticky `err`; existing serialize functions unchanged.
+- Interface assertion: `var _ io.WriterTo = (*Snapshot)(nil)`.
+
+### Format compatibility
+
+`WriteTo` and `Bytes` produce byte-for-byte identical output. No format
+change; no format v3. `LoadSnapshot` reads `WriteTo` output unchanged.
+
+### New tests (`snapshot_stream_test.go`)
+
+19 tests: `WriteRead_RoundTrip`, `RoundTrip_LargeWorld` (10k ents × 5
+components), `RoundTrip_AllTraits` (sparse, DontFragment, union, ordered
+children), `MemoryBounded`, `GzipWriter`, `GzipRatio` (≥2× compression),
+`File_RoundTrip`, `PipeConn` (net.Pipe), `WriteContext_PreCanceled`,
+`WriteContext_CanceledMidStream`, `ReadContext_CanceledMidStream`,
+`ShortWrite`, `ShortRead`, `CorruptHeader`, `TruncatedStream`,
+`BytesEquivalence`, `LoadStreamFormat`, `ReadDuringMutation`.
+
+Benchmark: `BenchmarkSnapshot_BytesVsStream` (Bytes vs WriteTo vs TakeSnapshotTo).
+
+### New runnable example (`snapshot_stream_example_test.go`)
+
+`ExampleWorld_TakeSnapshotTo` — gzip-compressed file write + read round-trip.
+
+### Documentation
+
+- `docs/Snapshots.md` — new "Streaming snapshots" section.
+- `README.md` — streaming row added to feature table.
+
+### Breaking changes
+
+None. All existing APIs unchanged.
+
+---
+
 ## v0.107.0 — 2026-05-15 — Phase 16.52: iter.Seq / range-over-func for queries
 
 Second post-port-completion phase. Adds Go 1.23+ `iter.Seq` / `iter.Seq2`
