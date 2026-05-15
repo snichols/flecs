@@ -1487,7 +1487,7 @@ func getOnWorld[T any](w *World, e ID) (T, bool) {
 		}
 		return *(*T)(ptr), true
 	}
-	return getViaIsA[T](w, e, info.Component, nil)
+	return getViaIsAPooled[T](w, e, info.Component)
 }
 
 // hasOnWorld reports whether entity e has component T — locally or via an IsA chain.
@@ -1514,7 +1514,7 @@ func hasOnWorld[T any](w *World, e ID) bool {
 	if t != nil && t.HasComponent(cid) {
 		return true
 	}
-	return hasViaIsA(w, e, cid, nil)
+	return hasViaIsAPooled(w, e, cid)
 }
 
 // ownsOnWorld reports whether entity e locally owns component T.

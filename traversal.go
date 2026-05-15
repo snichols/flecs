@@ -17,9 +17,9 @@ const maxTraversalDepth = 64
 // Dead target guard: if a target entity in the chain is not alive the walk
 // terminates with (0, false), matching the IsA dead-prefab semantic.
 //
-// Cycle detection: a seen map is allocated lazily only after the first step
-// past e (zero allocation when fn matches on e itself). Detected cycles
-// terminate cleanly.
+// Cycle detection: when the chain has a parent, a seen map is acquired from
+// idSeenPool, used for the duration of the traversal, cleared, and returned.
+// Zero allocation for depth-0 hits (fn matches e itself or no parent exists).
 //
 // Depth limit: at most maxTraversalDepth steps past e are followed. Chains
 // deeper than maxTraversalDepth return (0, false) without panicking.
@@ -28,7 +28,7 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 	if rec == nil {
 		return 0, false
 	}
-	// Depth 0: check e itself — no seen-map allocation.
+	// Depth 0: check e itself — no seen-map needed.
 	if fn(e) {
 		return e, true
 	}
@@ -37,15 +37,17 @@ func walkUp(w *World, e ID, rel ID, fn func(ID) bool) (ID, bool) {
 	if !ok {
 		return 0, false
 	}
-	// Walk up the chain. Allocate seen lazily on the first step past e.
-	var seen map[ID]struct{}
+	// Walk up the chain using a pooled seen map for cycle detection.
+	seen := idSeenPool.Get().(map[ID]struct{})
+	seen[e] = struct{}{}
+	defer func() {
+		clear(seen)
+		idSeenPool.Put(seen)
+	}()
 	current := target
 	for depth := 1; depth <= maxTraversalDepth; depth++ {
 		if !w.index.IsAlive(current) {
 			return 0, false
-		}
-		if seen == nil {
-			seen = map[ID]struct{}{e: {}}
 		}
 		if _, visited := seen[current]; visited {
 			return 0, false

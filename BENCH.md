@@ -121,6 +121,41 @@ See `.github/workflows/ci.yml` (`bench` job) and `CONTRIBUTING.md`.
 
 ---
 
+## v0.104.0 baseline — sync.Pool traversal pooling (Phase 16.49)
+
+Captured on branch `snichols/issue-281` (Phase 16.49 — sync.Pool hot paths).
+Machine: AMD Ryzen Threadripper PRO 5995WX 64-Cores, 2026-05-15.
+
+### IsA traversal (getViaIsA / hasViaIsA)
+
+| Benchmark | Before | After | Δ ns/op | Δ allocs/op |
+|---|---|---|---|---|
+| `BenchmarkIsAGet_Hit` | 330.2 ns, 192 B, 2 allocs | 89.33 ns, 0 B, **0 allocs** | −73% | −100% |
+| `BenchmarkOwnsVsHas/Has-via-IsA` | ~330 ns, 192 B, 2 allocs | 68.35 ns, 0 B, **0 allocs** | −79% | −100% |
+
+### Relationship traversal (walkUp)
+
+| Benchmark | Before | After | Δ ns/op | Δ allocs/op |
+|---|---|---|---|---|
+| `BenchmarkGetUp_SelfHit` | 35.66 ns, 0 B, 0 allocs | 37.05 ns, 0 B, 0 allocs | +4% | 0% |
+| `BenchmarkGetUp_Depth1` | 317.8 ns, 192 B, 2 allocs | 96.25 ns, 0 B, **0 allocs** | −70% | −100% |
+| `BenchmarkGetUp_Depth5` | 556.1 ns, 192 B, 2 allocs | 182.6 ns, 0 B, **0 allocs** | −67% | −100% |
+
+SelfHit depth-0 overhead is within measurement noise (the map pool Get/Put path
+is not exercised for depth-0 hits, so there is no regression).
+
+### Pooled sites
+
+Three sites share one `idSeenPool sync.Pool` for `map[ID]struct{}`:
+- `walkUp` (was 13.05% of all allocs)
+- `hasViaIsA` (was 9.22%)
+- `getViaIsA` / `getViaIsAByID` (was 7.74%)
+
+Total allocation count reduced from 120.5M → 75.8M objects (37% reduction).
+See `PROFILE.md` for the full before/after pprof snapshots and classification.
+
+---
+
 ## Phase 6.2 baseline
 
 Captured on branch `snichols/issue-51` (Phase 6.2 — traversal helpers). Same

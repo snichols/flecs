@@ -62,12 +62,23 @@ func (w *World) EachPrefab(e ID, fn func(prefab ID) bool) {
 	eachPairTarget(rec.Table.Type(), w.isAID.Index(), fn)
 }
 
+// getViaIsAPooled is the pool-acquiring entry point for getViaIsA.
+// Call this instead of getViaIsA(w, e, cid, nil) at external call sites.
+func getViaIsAPooled[T any](w *World, e ID, cid ID) (T, bool) {
+	seen := idSeenPool.Get().(map[ID]struct{})
+	seen[e] = struct{}{}
+	v, ok := getViaIsA[T](w, e, cid, seen)
+	clear(seen)
+	idSeenPool.Put(seen)
+	return v, ok
+}
+
 // getViaIsA walks the IsA chain of e looking for component T with the given
 // pre-looked-up component ID cid.
 //
-// seen may be nil on entry; it is allocated lazily the first time an IsA pair
-// is encountered, with e pre-inserted to prevent cycles. Each prefab is added
-// before recursion. Dead prefabs are skipped.
+// seen is provided by the caller (non-nil when called from getViaIsAPooled or
+// recursively). Recursive calls pass the same seen map to detect cycles.
+// Dead prefabs are skipped.
 func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	var zero T
 	// DontInherit takes precedence over Inheritable: do not walk the IsA chain.
@@ -110,10 +121,22 @@ func getViaIsA[T any](w *World, e ID, cid ID, seen map[ID]struct{}) (T, bool) {
 	return zero, false
 }
 
+// hasViaIsAPooled is the pool-acquiring entry point for hasViaIsA.
+// Call this instead of hasViaIsA(w, e, cid, nil) at external call sites.
+func hasViaIsAPooled(w *World, e ID, cid ID) bool {
+	seen := idSeenPool.Get().(map[ID]struct{})
+	seen[e] = struct{}{}
+	result := hasViaIsA(w, e, cid, seen)
+	clear(seen)
+	idSeenPool.Put(seen)
+	return result
+}
+
 // hasViaIsA walks the IsA chain of e checking for the presence of component cid.
 //
-// seen may be nil on entry; it is allocated lazily the first time an IsA pair
-// is encountered, with e pre-inserted. Dead prefabs are skipped.
+// seen is provided by the caller (non-nil when called from hasViaIsAPooled or
+// recursively). Recursive calls pass the same seen map to detect cycles.
+// Dead prefabs are skipped.
 func hasViaIsA(w *World, e ID, cid ID, seen map[ID]struct{}) bool {
 	// DontInherit takes precedence over Inheritable: do not walk the IsA chain.
 	if w.instantiatePolicies[cid]&policyOnInstantiateDontInherit != 0 {

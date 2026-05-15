@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.104.0 — 2026-05-15 — Phase 16.49: sync.Pool Traversal Pooling
+
+Profile-driven allocation reduction on three internal hot paths. No new public API.
+
+### Internal changes
+
+| Site | Before | After |
+|---|---|---|
+| `walkUp` (relationship traversal) | 1 `map` alloc per chain | 0 allocs (pooled) |
+| `hasViaIsA` (IsA presence check) | 1 `map` alloc per chain | 0 allocs (pooled) |
+| `getViaIsA[T]` / `getViaIsAByID` (IsA value read) | 1 `map` alloc per chain | 0 allocs (pooled) |
+
+All three sites share one package-level `idSeenPool sync.Pool` for
+`map[ID]struct{}` cycle-detection sets. Each site acquires at call entry,
+clears, and returns on exit — maps never escape the callsite.
+
+### Performance
+
+| Benchmark | Before | After |
+|---|---|---|
+| `BenchmarkIsAGet_Hit` | 330 ns, 2 allocs | 89 ns, **0 allocs** |
+| `BenchmarkGetUp_Depth1` | 318 ns, 2 allocs | 96 ns, **0 allocs** |
+| `BenchmarkGetUp_Depth5` | 556 ns, 2 allocs | 183 ns, **0 allocs** |
+| `BenchmarkOwnsVsHas/Has-via-IsA` | ~330 ns, 2 allocs | 68 ns, **0 allocs** |
+
+Benchmark-suite total heap-object count: 120.5M → 75.8M (−37%).
+
+Sites audited and explicitly skipped (escape to caller):
+`(*Query).Iter`, `wildcardMatchingPairs`, `(*Query).buildVarRowsRec`.
+See `PROFILE.md` for full pprof snapshots and classification rationale.
+
+### New files
+
+- `pool.go` — `idSeenPool` declaration
+- `PROFILE.md` — before/after pprof top-20 snapshots with site classification
+
+### Breaking changes
+
+None.
+
+---
+
 ## v0.103.0 — 2026-05-15 — Phase 16.48: OnDelete / OnDeleteTarget Events + Component-Remove Cascade
 
 Two coupled cleanup-cascade features that share the same dispatch infrastructure.
