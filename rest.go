@@ -557,8 +557,8 @@ func restTypeInfo(w *World) http.HandlerFunc {
 				respV2.Kind = info.Type.Kind().String()
 			}
 			if unitID, ok := w.UnitFor(id); ok {
-				if name, nameOK := fr.GetName(unitID); nameOK {
-					respV2.Unit = name
+				if sym := w.UnitSymbol(unitID); sym != "" {
+					respV2.Unit = sym
 				}
 			}
 		})
