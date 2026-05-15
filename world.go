@@ -238,6 +238,8 @@ type World struct {
 	// (relID, target) use the signature marker (relID, anyID) and store the
 	// concrete target in a per-row parent column on the shared table.
 	parentStoragePolicies map[ID]bool
+	schemaVersion         uint32          // user-declared schema version; persisted in snapshots
+	migrations            []migrationEntry // registered migration steps (from→to→fn)
 }
 
 // New initializes and returns an empty World.

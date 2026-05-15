@@ -28,8 +28,16 @@ func (s *Snapshot) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	nn2, err := w.Write(s.blob)
+	// Write schema version (4 bytes LE) as the first payload field.
+	var sv [4]byte
+	binary.LittleEndian.PutUint32(sv[:], s.schemaVersion)
+	nn2, err := w.Write(sv[:])
 	n += int64(nn2)
+	if err != nil {
+		return
+	}
+	nn3, err := w.Write(s.blob)
+	n += int64(nn3)
 	return
 }
 
@@ -80,6 +88,15 @@ func (w *World) TakeSnapshotToContext(ctx context.Context, out io.Writer) (n int
 		return n, werr
 	}
 
+	// Write schema version (4 bytes LE).
+	var sv [4]byte
+	binary.LittleEndian.PutUint32(sv[:], w.schemaVersion)
+	nn2, werr := out.Write(sv[:])
+	n += int64(nn2)
+	if werr != nil {
+		return n, werr
+	}
+
 	// Write payload sections directly.
 	bw := &binWriter{w: out, n: n}
 	partial := snapshotWritePayloadContext(ctx, bw, w)
@@ -109,15 +126,23 @@ func ReadSnapshotFrom(r io.Reader) (*Snapshot, error) {
 		return nil, fmt.Errorf("flecs: ReadSnapshotFrom: invalid magic bytes %x", hdr[:4])
 	}
 	ver := binary.BigEndian.Uint32(hdr[4:8])
-	if ver != snapshotFormatVersion {
-		return nil, fmt.Errorf("flecs: ReadSnapshotFrom: unsupported version %d (want %d)", ver, snapshotFormatVersion)
+	if ver != snapshotFormatV2 && ver != snapshotFormatVersion {
+		return nil, fmt.Errorf("flecs: ReadSnapshotFrom: unsupported version %d (want %d or %d)", ver, snapshotFormatV2, snapshotFormatVersion)
 	}
 	worldID := binary.LittleEndian.Uint64(hdr[8:16])
+	var sv uint32
+	if ver == snapshotFormatVersion {
+		var svbuf [4]byte
+		if _, err := io.ReadFull(r, svbuf[:]); err != nil {
+			return nil, fmt.Errorf("flecs: ReadSnapshotFrom: reading schema version: %w", err)
+		}
+		sv = binary.LittleEndian.Uint32(svbuf[:])
+	}
 	blob, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("flecs: ReadSnapshotFrom: reading payload: %w", err)
 	}
-	return &Snapshot{blob: blob, worldID: worldID}, nil
+	return &Snapshot{blob: blob, worldID: worldID, schemaVersion: sv}, nil
 }
 
 // RestoreSnapshotFrom reads a snapshot from r and restores it into w. It is

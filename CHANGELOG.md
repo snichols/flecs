@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.112.0 — 2026-05-15 — Phase 16.57: snapshot schema-version tagging and migration registry
+
+Seventh post-port-completion phase. Adds user-facing schema-version tagging to
+binary snapshots and a migration registry so that old snapshots with changed
+component layouts can be loaded without manual data conversion.
+
+### What changed
+
+- **`(*World).SetSchemaVersion(v uint32)` / `(*World).SchemaVersion() uint32`** —
+  declares the world's current schema version. The version is embedded in every
+  binary snapshot (format v3). Default is 0.
+- **`(*World).RegisterMigration(from, to uint32, fn MigrationFunc)`** — registers
+  one migration step. Steps form a consecutive chain; all steps between the
+  snapshot's version and the world's version are applied in order.
+- **`MigrationFunc` / `*MigrationContext`** — migration functions receive a
+  neutral intermediate representation (IR) over decoded snapshot tables, keyed by
+  component name string. Available operations: `RenameComponent`, `DropComponent`,
+  `AddComponent`, `EachComponent` (for per-entity byte rewrites via
+  `ComponentRecord.SetRaw`).
+- **`(*Snapshot).SchemaVersion() uint32`** — reads the schema version embedded in a
+  snapshot. Returns 0 for pre-v3 (format v2) snapshots.
+- **Sentinel errors** — `ErrMissingMigration` (chain gap) and
+  `ErrSnapshotNewerThanWorld` (snapshot schema > world schema).
+- **Binary format v3** — header unchanged; payload now starts with a 4-byte
+  little-endian schema version field before the existing 10 sections. Format v2
+  snapshots are still accepted (`LoadSnapshot`, `ReadSnapshotFrom`); their schema
+  version defaults to 0.
+- **Atomicity** — the snapshot blob is fully decoded and the migration chain applied
+  to an in-memory IR before any change is committed to the live world. A failing
+  `MigrationFunc` leaves the world exactly as it was.
+- **New `docs/SnapshotMigration.md`** — full API reference, naming convention,
+  chain migration recipe, error table, atomicity guarantee, format diagram, and
+  streaming-API compatibility note.
+
+### New files
+
+- `migration.go` — all migration types, errors, API, and internal helpers
+- `snapshot_migration_test.go` — 20 tests (version tagging, fast path, single and
+  chain migrations, error handling, atomicity, streaming, JSON compatibility)
+- `snapshot_migration_example_test.go` — two-release example (HP→Health rename +
+  Level field expansion)
+
 ## v0.111.0 — 2026-05-15 — Phase 16.56: expvar metrics integration
 
 Sixth post-port-completion phase. Publishes the Stats addon's counters as stdlib

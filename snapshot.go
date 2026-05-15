@@ -20,7 +20,11 @@ var snapshotMagic = [4]byte{0xF1, 0xEC, 0x53, 0x00}
 
 // snapshotFormatVersion is the current binary-format version.
 // v2: adds parentStoragePolicies (policy map 18) and per-table parent columns.
-const snapshotFormatVersion = uint32(2)
+// v3: adds user schema version (4-byte LE) at the start of the payload.
+const snapshotFormatVersion = uint32(3)
+
+// snapshotFormatV2 is the previous format version, accepted for back-compat.
+const snapshotFormatV2 = uint32(2)
 
 // firstSnapUserIndex is the first raw entity index owned by user code.
 // Built-in entities occupy indices 1–77 (47 non-unit + 25 unit entities + 5 table/delete events);
@@ -37,9 +41,16 @@ const firstSnapUserIndex = uint32(78)
 // must not be passed to RestoreSnapshot or RestoreSnapshotContext; use it only
 // to detect that serialization was interrupted.
 type Snapshot struct {
-	blob    []byte // serialized payload (everything after the 16-byte file header)
-	worldID uint64 // world-identity token captured at take time
-	Partial bool   // true if serialization was cancelled mid-walk
+	blob          []byte // serialized payload (everything after the 16-byte file header)
+	worldID       uint64 // world-identity token captured at take time
+	schemaVersion uint32 // user schema version; 0 for pre-v3 snapshots
+	Partial       bool   // true if serialization was cancelled mid-walk
+}
+
+// SchemaVersion returns the user schema version embedded in this snapshot.
+// Returns 0 for snapshots created before format v3.
+func (s *Snapshot) SchemaVersion() uint32 {
+	return s.schemaVersion
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -73,7 +84,7 @@ func (w *World) TakeSnapshotContext(ctx context.Context) (*Snapshot, error) {
 		return &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w))), Partial: true}, ctx.Err()
 	default:
 	}
-	s := &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w)))}
+	s := &Snapshot{worldID: uint64(uintptr(unsafe.Pointer(w))), schemaVersion: w.schemaVersion}
 	var buf bytes.Buffer
 	bw := &binWriter{w: &buf}
 	partial := snapshotWritePayloadContext(ctx, bw, w)
@@ -127,7 +138,7 @@ func (w *World) RestoreSnapshotContext(ctx context.Context, s *Snapshot) error {
 		return ctx.Err()
 	default:
 	}
-	return snapshotDeserializeContext(ctx, w, s.blob)
+	return snapshotDeserializeContext(ctx, w, s.blob, s.schemaVersion)
 }
 
 // Bytes serializes s to a self-contained byte slice for disk storage.
@@ -156,13 +167,23 @@ func LoadSnapshot(b []byte) (*Snapshot, error) {
 		return nil, fmt.Errorf("flecs: LoadSnapshot: invalid magic bytes %x", b[:4])
 	}
 	ver := binary.BigEndian.Uint32(b[4:8])
-	if ver != snapshotFormatVersion {
-		return nil, fmt.Errorf("flecs: LoadSnapshot: unsupported version %d (want %d)", ver, snapshotFormatVersion)
+	if ver != snapshotFormatV2 && ver != snapshotFormatVersion {
+		return nil, fmt.Errorf("flecs: LoadSnapshot: unsupported version %d (want %d or %d)", ver, snapshotFormatV2, snapshotFormatVersion)
 	}
 	worldID := binary.LittleEndian.Uint64(b[8:16])
+	payload := b[16:]
+	var sv uint32
+	if ver == snapshotFormatVersion {
+		if len(payload) < 4 {
+			return nil, fmt.Errorf("flecs: LoadSnapshot: payload too short for schema version field")
+		}
+		sv = binary.LittleEndian.Uint32(payload[:4])
+		payload = payload[4:]
+	}
 	return &Snapshot{
-		blob:    append([]byte(nil), b[16:]...),
-		worldID: worldID,
+		blob:          append([]byte(nil), payload...),
+		worldID:       worldID,
+		schemaVersion: sv,
 	}, nil
 }
 
@@ -760,7 +781,16 @@ func serializeOrderedChildren(bw *binWriter, w *World) {
 // between major deserialization steps. If ctx is cancelled mid-restore, the
 // world is left in a partial state — callers that require atomicity should
 // snapshot the world before calling this function and re-restore on error.
-func snapshotDeserializeContext(ctx context.Context, w *World, blob []byte) error {
+func snapshotDeserializeContext(ctx context.Context, w *World, blob []byte, snapshotSchema uint32) error {
+	worldSchema := w.schemaVersion
+	if snapshotSchema > worldSchema {
+		return fmt.Errorf("%w: snapshot schema version %d, world schema version %d",
+			ErrSnapshotNewerThanWorld, snapshotSchema, worldSchema)
+	}
+	if snapshotSchema < worldSchema {
+		return snapshotDeserializeMigration(ctx, w, blob, snapshotSchema)
+	}
+	// Fast path: same schema version — existing restore logic unchanged.
 	br := &binReader{data: blob}
 	if err := deserializeComponents(br, w); err != nil {
 		return err
