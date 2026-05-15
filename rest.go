@@ -469,8 +469,20 @@ func restTypeInfo(w *World) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		path, _ := url.PathUnescape(r.PathValue("path"))
 
-		var resp typeInfoResponse
-		var found bool
+		q := r.URL.Query()
+		depth, explicit, depthOK := parseWalkDepth(q)
+		if !depthOK {
+			writeError(rw, http.StatusBadRequest, "invalid depth")
+			return
+		}
+		// explicit ?depth=1 preserves the v0.87.0 byte-identical response.
+		useOldSchema := explicit && depth == 1
+
+		var (
+			resp   typeInfoResponse
+			respV2 typeInfoResponseV2
+			found  bool
+		)
 		w.Read(func(fr *Reader) {
 			id, ok := fr.Lookup(path)
 			if !ok {
@@ -482,34 +494,69 @@ func restTypeInfo(w *World) http.HandlerFunc {
 			}
 			found = true
 
-			resp = typeInfoResponse{
-				Name:   info.Name,
-				Size:   info.Size,
-				Align:  info.Align,
-				Fields: []typeInfoFieldResponse{},
-			}
-
-			if info.Type != nil {
-				if info.Type.Kind() == reflect.Struct {
-					t := info.Type
-					n := t.NumField()
-					resp.Fields = make([]typeInfoFieldResponse, n)
-					for i := range n {
-						f := t.Field(i)
-						resp.Fields[i] = typeInfoFieldResponse{
-							Name:   f.Name,
-							Type:   f.Type.String(),
-							Offset: f.Offset,
+			if useOldSchema {
+				resp = typeInfoResponse{
+					Name:   info.Name,
+					Size:   info.Size,
+					Align:  info.Align,
+					Fields: []typeInfoFieldResponse{},
+				}
+				if info.Type != nil {
+					if info.Type.Kind() == reflect.Struct {
+						t := info.Type
+						n := t.NumField()
+						resp.Fields = make([]typeInfoFieldResponse, n)
+						for i := range n {
+							f := t.Field(i)
+							resp.Fields[i] = typeInfoFieldResponse{
+								Name:   f.Name,
+								Type:   f.Type.String(),
+								Offset: f.Offset,
+							}
 						}
 					}
+				} else {
+					resp.Opaque = true
 				}
-			} else {
-				resp.Opaque = true
+				if unitID, ok := w.UnitFor(id); ok {
+					if name, nameOK := fr.GetName(unitID); nameOK {
+						resp.Unit = name
+					}
+				}
+				return
 			}
 
+			// New schema (depth != 1 or absent).
+			respV2 = typeInfoResponseV2{
+				Name:  info.Name,
+				ID:    strconv.FormatUint(uint64(id), 10),
+				Size:  info.Size,
+				Align: info.Align,
+			}
+			if info.Type == nil {
+				respV2.Kind = "dynamic"
+			} else if info.Type.Kind() == reflect.Struct {
+				respV2.Kind = "struct"
+				if depth > 0 {
+					seen := map[reflect.Type]bool{info.Type: true}
+					fields := make([]typeNodeJSON, 0, info.Type.NumField())
+					for i := range info.Type.NumField() {
+						sf := info.Type.Field(i)
+						if !sf.IsExported() {
+							continue
+						}
+						node := walkTypeForJSON(sf.Type, depth-1, seen)
+						node.Name = sf.Name
+						fields = append(fields, node)
+					}
+					respV2.Fields = fields
+				}
+			} else {
+				respV2.Kind = info.Type.Kind().String()
+			}
 			if unitID, ok := w.UnitFor(id); ok {
 				if name, nameOK := fr.GetName(unitID); nameOK {
-					resp.Unit = name
+					respV2.Unit = name
 				}
 			}
 		})
@@ -519,7 +566,11 @@ func restTypeInfo(w *World) http.HandlerFunc {
 			return
 		}
 		rw.Header().Set("Cache-Control", "max-age=300")
-		writeJSON(rw, http.StatusOK, resp)
+		if useOldSchema {
+			writeJSON(rw, http.StatusOK, resp)
+		} else {
+			writeJSON(rw, http.StatusOK, respV2)
+		}
 	}
 }
 

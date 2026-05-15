@@ -669,58 +669,79 @@ if resp.StatusCode != http.StatusNoContent {
 
 ## GET /type_info/{path}
 
-Returns the reflection schema for a named component as JSON. The path is a dot-separated
-name resolved via `world.Lookup` (e.g. `"Position"`, `"physics.Velocity"`). Supports
-typed Go components (struct fields with name, type, and byte offset), dynamic components
-registered via `RegisterDynamicComponent` (size/align only; `opaque: true`), and
-zero-size tag components.
+Returns the reflection schema for a named component as JSON (v0.94.0). The path is a
+dot-separated name resolved via `world.Lookup` (e.g. `"Position"`, `"physics.Velocity"`).
+Supports typed Go components with recursive depth-N field expansion, primitive-type
+annotations, cycle detection, and slice/array/map/pointer handling. Dynamic components
+(`RegisterDynamicComponent`) and zero-size tag components are also supported.
 
-> **Path separator divergence from C upstream.** C flecs uses `/` as the path separator
-> (`ecs_lookup_path_w_sep(..., "/", ...)`). Go flecs uses `.` (the `world.Lookup` default).
-> Request `GET /type_info/physics.Velocity`, not `GET /type_info/physics/Velocity`. Nested
-> struct fields are rendered as opaque `reflect.Type.String()` strings — depth-1 only; no
-> recursive field expansion in v1.
+> **Path separator divergence from C upstream.** C flecs uses `/` as the path separator.
+> Go flecs uses `.` (the `world.Lookup` default). Request
+> `GET /type_info/physics.Velocity`, not `GET /type_info/physics/Velocity`.
 
 ```
-GET /type_info/{path}
+GET /type_info/{path}[?depth=N]
 → 200 OK  application/json  Cache-Control: max-age=300
+→ 400 Bad Request           (?depth= is non-numeric, negative, or > 16)
 → 404 Not Found             (path unknown, or entity has no TypeInfo in the registry)
 ```
+
+### Query parameter: `?depth=N`
+
+| Value | Behaviour |
+|-------|-----------|
+| absent | default depth 8 — new schema (see below) |
+| `0` | header-only response (name/id/size/align/kind), no field expansion |
+| `1` | **back-compat** — byte-identical to the v0.87.0 depth-1 schema |
+| `2`–`16` | new schema with N struct-nesting levels expanded |
+| `< 0`, `> 16`, non-numeric | `400 Bad Request` |
 
 ### Curl
 
 ```
 curl http://localhost:8080/type_info/Position
+curl "http://localhost:8080/type_info/Position?depth=3"
+curl "http://localhost:8080/type_info/Position?depth=0"   # header only
+curl "http://localhost:8080/type_info/Position?depth=1"   # v0.87.0 back-compat
 ```
 
-### Go client
+### Response shape (new schema — depth ≠ 1)
 
-```go
-resp, err := http.Get("http://localhost:8080/type_info/Position")
-if err != nil {
-    log.Fatal(err)
-}
-defer resp.Body.Close()
+For a typed Go component `game.Player`:
 
-var info struct {
-    Name   string `json:"name"`
-    Size   uint64 `json:"size"`
-    Align  uint64 `json:"align"`
-    Fields []struct {
-        Name   string `json:"name"`
-        Type   string `json:"type"`
-        Offset uint64 `json:"offset"`
-    } `json:"fields"`
-    Opaque bool   `json:"opaque,omitempty"`
-    Unit   string `json:"unit,omitempty"`
+```json
+{
+  "name": "game.Player",
+  "id": "42",
+  "size": 32,
+  "align": 8,
+  "kind": "struct",
+  "unit": "Percentage",
+  "fields": [
+    {"name": "Pos",   "kind": "struct",    "type": "game.Vec3",
+     "fields": [
+       {"name": "X", "kind": "primitive", "type": "float32"},
+       {"name": "Y", "kind": "primitive", "type": "float32"},
+       {"name": "Z", "kind": "primitive", "type": "float32"}
+     ]},
+    {"name": "HP",    "kind": "primitive", "type": "int32"},
+    {"name": "Tags",  "kind": "slice",     "element": {"kind": "primitive", "type": "string"}},
+    {"name": "Stats", "kind": "map",
+     "key":   {"kind": "primitive", "type": "string"},
+     "value": {"kind": "primitive", "type": "int32"}},
+    {"name": "Owner", "kind": "pointer",
+     "element": {"kind": "struct", "type": "game.Player", "recursive": true}}
+  ]
 }
-json.NewDecoder(resp.Body).Decode(&info)
-fmt.Println(info.Name, info.Size, len(info.Fields))
 ```
 
-### Response shape
+For a dynamic component:
 
-For a typed Go component `Position { X, Y float64 }`:
+```json
+{"name": "DynComp", "id": "7", "size": 8, "align": 8, "kind": "dynamic"}
+```
+
+### Response shape (v0.87.0 back-compat — explicit `?depth=1`)
 
 ```json
 {
@@ -734,32 +755,51 @@ For a typed Go component `Position { X, Y float64 }`:
 }
 ```
 
-For a dynamic component registered via `RegisterDynamicComponent(fw, "DynComp", 8, 8)`:
+### Type node fields (new schema)
 
-```json
-{
-  "name": "DynComp",
-  "size": 8,
-  "align": 8,
-  "fields": [],
-  "opaque": true
-}
+Each node in the type tree (`fields[]`, `element`, `key`, `value`) carries:
+
+| Field | When present | Meaning |
+|-------|-------------|---------|
+| `name` | field nodes | Go struct field name |
+| `kind` | always | `"struct"`, `"primitive"`, `"slice"`, `"array"`, `"map"`, `"pointer"`, `"interface"`, `"chan"`, `"func"`, `"dynamic"` |
+| `type` | struct, primitive, recursive marker | qualified Go type name or primitive kind string |
+| `underlying` | named primitive only | underlying kind string (e.g. `"int32"` for `type Score int32`) |
+| `recursive` | struct | `true` when this type is already on the current path (cycle detected) |
+| `length` | array | element count |
+| `fields` | struct | expanded sub-fields (absent at depth limit or when recursive) |
+| `element` | slice, array, pointer | element type node |
+| `key` | map | key type node |
+| `value` | map | value type node |
+| `unit` | top-level response | unit entity name if attached via `world.SetUnit` |
+
+### Primitive type mapping
+
+| Go type | `"type"` value |
+|---------|---------------|
+| `bool` | `"bool"` |
+| `int`, `int8`, …, `int64` | `"int"`, `"int8"`, … |
+| `uint`, `uint8`, …, `uint64` | `"uint"`, `"uint8"`, … |
+| `float32`, `float64` | `"float32"`, `"float64"` |
+| `complex64`, `complex128` | `"complex64"`, `"complex128"` |
+| `string` | `"string"` |
+| `type Score int32` (named) | `"pkg.Score"` + `"underlying": "int32"` |
+| `byte` (alias for `uint8`) | `"uint8"` (aliases are indistinguishable via reflection) |
+| `rune` (alias for `int32`) | `"int32"` |
+
+### Cycle detection semantics
+
+The walk uses a `seen` set tracking struct types along the **current path** from root to
+the current node. If a struct type appears a second time on the same path it is emitted as
+`{"kind": "struct", "type": "...", "recursive": true}` instead of being expanded.
+
+Two sibling fields that reference the same type are **not** a cycle — each sibling
+receives the parent path's `seen` set independently, so both expand fully.
+
 ```
-
-### Fields
-
-- `name` — `reflect.Type.String()` for typed Go components (e.g. `"main.Position"`), or
-  the registered string name for dynamic components.
-- `size` — `unsafe.Sizeof` of the component type; `0` for zero-size structs.
-- `align` — `unsafe.Alignof` of the component type; `0` for zero-size structs.
-- `fields` — ordered struct fields at depth 1; `[]` for zero-size, dynamic, or non-struct
-  types. Each field: `name` (Go field name), `type` (`reflect.Type.String()`; pointer /
-  interface / slice / nested-struct fields are rendered as opaque type strings), `offset`
-  (byte offset within the struct).
-- `opaque` — `true` only for dynamic components (`TypeInfo.Type == nil`); omitted
-  otherwise.
-- `unit` — unit entity name if `world.UnitFor(id)` returns a registered unit; omitted
-  otherwise.
+type T struct { L *Sub; R *Sub }   // L and R both expand Sub — not recursive
+type Node struct { Next *Node }    // Next.element is {"recursive": true}
+```
 
 ---
 
@@ -1121,11 +1161,12 @@ response body saves a follow-up read and tells the client the new state directly
 
 ### Type-info and reflection endpoints
 
-> **Partially ported in Go flecs (v0.87.0).** `GET /type_info/{path}` is now implemented
-> — see [`## GET /type_info/{path}`](#get-type_infopath) above. It supports typed Go
-> structs (depth-1 field walk), dynamic components, and zero-size tags. Full meta-cursor
-> parity (`ecs_type_info_to_json` depth-N recursion, primitive-type annotations, enum
-> members) is **not yet ported** — the Go `reflect` walk is sufficient for v1.
+> **Ported in Go flecs (v0.87.0 + v0.94.0).** `GET /type_info/{path}` is fully
+> implemented — see [`## GET /type_info/{path}`](#get-type_infopath) above. v0.87.0
+> shipped depth-1 field walk; v0.94.0 adds depth-N recursion (default 8, max 16 via
+> `?depth=N`), precise primitive-type annotations, cycle detection, and
+> slice/array/map/pointer handling. Dynamic components and zero-size tags are also
+> supported. Enum member annotation is not yet ported.
 
 ### Listing endpoints
 
@@ -1180,5 +1221,5 @@ response body saves a follow-up read and tells the client the new state directly
 - **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — ✅ mutation shipped in v0.89.0. See [`## PUT /component/{entity}/{component}`](#put-componententitycomponent) and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent). `GET /component` (value read) not yet ported.
 - **Toggle endpoint** (`PUT /toggle`) — ✅ shipped in v0.90.0. See [`### Toggle endpoint`](#toggle-endpoint) above.
 - **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
-- **Type-info / reflection endpoint** (`GET /type_info/{path}`) — depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, and full meta-cursor parity not yet ported.
+- **Type-info / reflection endpoint** (`GET /type_info/{path}`) — ✅ depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, cycle detection, and slice/array/map/pointer handling shipped in v0.94.0. Enum member annotation not yet ported.
 - **FlecsExplorer integration** — browser UI requires unported endpoints; not integrated.
