@@ -37,6 +37,15 @@ const (
 	// cannot safely accept new rows. Use OnTableDelete / OnTableDeleteWithOptions
 	// to subscribe.
 	EventOnTableDelete EventKind = 8
+	// EventOnDelete fires once per entity whose lifecycle is about to end (via
+	// Delete or via cascade), before the existing OnRemove hook/observer dispatch.
+	// The handler receives a *Reader because the entity is mid-delete; mutations must
+	// be deferred via World.Write(fn). Use OnDelete / OnDeleteWithOptions to subscribe.
+	EventOnDelete EventKind = 9
+	// EventOnDeleteTarget fires once per (target, dependent, pairRelID) triple
+	// during cleanup-policy cascade, before the dependent is enqueued for delete-or-remove.
+	// Use OnDeleteTarget / OnDeleteTargetWithOptions to subscribe.
+	EventOnDeleteTarget EventKind = 10
 )
 
 // String returns a human-readable name for the event kind.
@@ -58,6 +67,10 @@ func (ev EventKind) String() string {
 		return "OnTableFill"
 	case EventOnTableDelete:
 		return "OnTableDelete"
+	case EventOnDelete:
+		return "OnDelete"
+	case EventOnDeleteTarget:
+		return "OnDeleteTarget"
 	default:
 		return "Unknown"
 	}
@@ -106,6 +119,10 @@ func eventKindToEntity(w *World, ev EventKind) ID {
 		return w.eventOnTableFillID
 	case EventOnTableDelete:
 		return w.eventOnTableDeleteID
+	case EventOnDelete:
+		return w.eventOnDeleteID
+	case EventOnDeleteTarget:
+		return w.eventOnDeleteTargetID
 	default:
 		return 0
 	}
@@ -128,11 +145,13 @@ type multiTermFilter struct {
 // observer is a back-pointer to the owning Observer handle; used by
 // dispatchObservers to consult the enabled flag without a separate map lookup.
 // multiFilter is non-nil for multi-term observers; nil for single-term observers.
+// relFilter is non-zero for OnDeleteTarget observers filtered by relationship ID.
 type observerNode struct {
 	key         observerKey
 	callback    func(fw *Writer, e ID, ptr unsafe.Pointer)
 	observer    *Observer
 	multiFilter *multiTermFilter
+	relFilter   ID // non-zero: OnDeleteTarget fires only when pairRelID == relFilter
 	removed     bool
 }
 

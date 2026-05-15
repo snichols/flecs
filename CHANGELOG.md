@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.103.0 — 2026-05-15 — Phase 16.48: OnDelete / OnDeleteTarget Events + Component-Remove Cascade
+
+Two coupled cleanup-cascade features that share the same dispatch infrastructure.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `OnDelete(w *World, fn func(fr *Reader, e ID)) *Observer` | Register observer that fires before entity deletion |
+| `OnDeleteWithOptions(w *World, opts ObserverOptions, fn ...) *Observer` | OnDelete with `WithQuery` multi-term filter |
+| `OnDeleteTarget(w *World, fn func(fr *Reader, target, dependent, pairRelID ID)) *Observer` | Register observer for cleanup-policy cascade triples |
+| `OnDeleteTargetWithOptions(w *World, opts ObserverOptions, fn ...) *Observer` | OnDeleteTarget with `WithRelationship` / `WithQuery` filters |
+| `WithRelationship(relID ID) ObserverOptions` | Filter OnDeleteTarget observer to a specific relationship |
+| `(ObserverOptions).AndQuery(terms ...Term) ObserverOptions` | Chain WithRelationship with WithQuery |
+| `(*World).EventOnDelete() ID` | Returns the built-in EventOnDelete entity (index 76) |
+| `(*World).EventOnDeleteTarget() ID` | Returns the built-in EventOnDeleteTarget entity (index 77) |
+
+### Behaviour
+
+- **EventOnDelete** — fires synchronously inside `deleteOne`, before `OnRemove` hooks. The handler receives `*Reader`: the entity is mid-delete, its components are still readable, but mutations must be deferred via `World.Write(fn)`.
+- **EventOnDeleteTarget** — fires per (target, dependent, pairRelID) triple during the cleanup-policy DFS in `deleteImmediate`, before the dependent is enqueued for delete-or-remove. For Panic policy: fires before the panic, enabling handlers to log.
+- **Component-remove cascade** — when a component entity is deleted with RemoveAction policy (the default), all entities holding it as a component now undergo archetype migration and receive `OnRemove` callbacks. Previously, the component entity was freed and tables retained the orphaned ID.
+- **WithYieldExisting** is a no-op for both events: delete events are future-only.
+- **Performance note** — component-remove cascade is O(entities-with-component). See `docs/ObserversManual.md` and `docs/Relationships.md`.
+
+### Breaking changes
+
+- **Built-in entity reindex**: two new event entities at indices 76–77 (`EventOnDelete`, `EventOnDeleteTarget`); user entities (from `NewEntity`) now start at index 78. This is the second index shift in three phases (Phase 16.46 shifted 75→76; Phase 16.48 shifts 76→78).
+- Binary snapshot format is **unchanged** (version 2); the `firstSnapUserIndex` constant is updated to 78.
+
+---
+
 ## v0.102.0 — 2026-05-15 — Phase 16.47: Parent Hierarchy Storage
 
 Opt-in non-fragmenting storage for exclusive relationships. Children of different

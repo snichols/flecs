@@ -283,11 +283,9 @@ w.Write(func(fw *flecs.Writer) {
 })
 ```
 
-### No Dedicated OnDelete / OnDeleteTarget Observer Events
+### OnDelete and OnDeleteTarget Observer Events
 
-There are no `OnDelete` or `OnDeleteTarget` observer events in either upstream C flecs or Go flecs. Those identifiers exist only as **cleanup-policy relationship traits** — they govern what happens to entities when a component entity or pair target is deleted, not as event kinds that observers can subscribe to.
-
-To react when an entity is deleted, subscribe to `EventOnRemove`. `EventOnRemove` fires before each component is removed from an entity, including during entity deletion. From upstream's own documentation (`ObserversManual.md:2273`): *"When a parent and its children are deleted, `OnRemove` observers will be invoked for children first."* The `observer.go:17` comment is explicit: *"EventOnRemove fires before a component is removed from an entity, including on entity deletion."*
+✅ **Shipped in v0.103.0.** Go flecs provides `EventOnDelete` and `EventOnDeleteTarget` as first-class observer event entities. See [OnDelete and OnDeleteTarget Events](#on-delete-and-on-delete-target) for the full API, dispatch ordering, and examples.
 
 Cleanup policies (what to do when a component entity or relationship target is deleted) are a separate concern; see [ComponentTraits.md § Cleanup traits (OnDelete / OnDeleteTarget)](ComponentTraits.md#cleanup-traits-ondelete--ondeletetarget).
 
@@ -1053,9 +1051,7 @@ The following features from C flecs are not yet available in the Go port. They a
 
 ### OnDelete / OnDeleteTarget Events
 
-C flecs fires `OnDelete` when a component entity itself is deleted, and `OnDeleteTarget` when a pair target is deleted. Neither event exists in Go flecs.
-
-**Workaround**: Manually call cleanup code before deleting component entities.
+✅ **Shipped in v0.103.0.** Go flecs now fires `EventOnDelete` when an entity is deleted and `EventOnDeleteTarget` when a pair target is deleted. See [OnDelete and OnDeleteTarget Events](#on-delete-and-on-delete-target) for the full API.
 
 ### OnTableDelete {#on-table-delete}
 
@@ -1231,6 +1227,117 @@ obs = flecs.ObserveWithOptions[Position](w,
 
 ---
 
+## OnDelete and OnDeleteTarget Events {#on-delete-and-on-delete-target}
+
+✅ **Shipped in v0.103.0.**
+
+`OnDelete` fires once per entity whose lifecycle is about to end (via `Delete` or via cleanup-policy cascade), **before** the existing `OnRemove` hooks run. `OnDeleteTarget` fires once per `(target, dependent, pairRelID)` triple during the cleanup-policy DFS, **before** the dependent entity is enqueued for delete-or-remove.
+
+### Dispatch ordering
+
+```
+1. Delete(e) called (or cascade triggered by parent delete)
+2. EventOnDelete fires for e — handler reads e's state via *Reader
+3. Component-remove cascade: if e is used as a component (RemoveAction policy),
+   remove it from all holder entities (fires OnRemove per holder)
+4. OnRemove hooks fire for each component on e
+5. Walk dependents: for each (R, e) where R has an OnDeleteTarget policy —
+   a. EventOnDeleteTarget fires for (target=e, dependent, pairRelID=R)
+   b. Apply policy: Delete → recurse step 2; Remove → remove pair; Panic → panic after fire
+6. Free e's slot
+```
+
+### Handler context: `*Reader`, not `*Writer`
+
+Both handlers receive `*Reader` because the entity is mid-delete: its component storage is still intact and readable, but issuing structural mutations (Add, Remove, Set) during the dispatch window is unsafe. To mutate the world from an `OnDelete` or `OnDeleteTarget` handler, defer via `World.Write(fn)`:
+
+```go
+flecs.OnDelete(w, func(fr *flecs.Reader, e flecs.ID) {
+    v, _ := flecs.Get[Health](fr, e)
+    // Schedule a write after the cascade settles:
+    w.Write(func(fw *flecs.Writer) {
+        flecs.Set(fw, logEntity, DeathLog{Victim: e, HP: v.HP})
+    })
+})
+```
+
+### Basic registration
+
+```go
+// Fire for any entity being deleted.
+flecs.OnDelete(w, func(fr *flecs.Reader, e flecs.ID) {
+    fmt.Printf("entity %v is being deleted\n", e)
+})
+
+// Fire for each (target, dependent, relationship) triple during cascade.
+flecs.OnDeleteTarget(w, func(fr *flecs.Reader, target, dependent, pairRelID flecs.ID) {
+    fmt.Printf("deleting %v cascades to %v via relationship %v\n",
+        target, dependent, pairRelID)
+})
+```
+
+### WithQuery filter
+
+Use `OnDeleteWithOptions` with `WithQuery(terms...)` to fire only for entities whose archetype table matches at the moment of deletion:
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+
+flecs.OnDeleteWithOptions(w,
+    flecs.WithQuery(flecs.With(posID)),
+    func(fr *flecs.Reader, e flecs.ID) {
+        fmt.Printf("Position-bearing entity %v deleted\n", e)
+    },
+)
+```
+
+### WithRelationship filter
+
+Use `OnDeleteTargetWithOptions` with `WithRelationship(relID)` to restrict the observer to cascades driven by a specific relationship:
+
+```go
+// Only fire when ChildOf cascade is the cause — ignore other relationships.
+flecs.OnDeleteTargetWithOptions(w,
+    flecs.WithRelationship(w.ChildOf()),
+    func(fr *flecs.Reader, target, dependent, pairRelID flecs.ID) {
+        fmt.Printf("child %v orphaned by deletion of parent %v\n", dependent, target)
+    },
+)
+```
+
+Combine `WithRelationship` and `WithQuery` by chaining:
+
+```go
+flecs.OnDeleteTargetWithOptions(w,
+    flecs.WithRelationship(w.ChildOf()).AndQuery(flecs.With(posID)),
+    func(fr *flecs.Reader, target, dep, rel flecs.ID) { ... },
+)
+```
+
+### WithYieldExisting — no-op
+
+`WithYieldExisting()` is silently ignored for both events. Delete events are future-only; there is no meaningful state to replay at registration time.
+
+### Component-remove cascade (Feature 2)
+
+When a component entity is deleted with the default `RemoveAction` policy, all entities that currently hold it as a component undergo archetype migration: the component is removed from their signature and `OnRemove` fires per entity. This ensures no table retains a deleted component ID in its live entity set.
+
+**Performance note**: the cascade is O(entities-with-component). For large component sets this can be significant; consider using `OnDelete` to observe and `World.Write(fn)` to schedule deferred cleanup if needed.
+
+```go
+type Position struct{ X, Y float32 }
+posID := flecs.RegisterComponent[Position](w)
+
+e := flecs.NewEntityWith[Position](w, Position{X: 1})
+
+// After this: e is still alive but no longer has Position.
+w.Delete(posID)
+```
+
+See [docs/Relationships.md](Relationships.md#cleanup-policy-observer-events) for the relationship between cleanup policies and observer events.
+
+---
+
 ## Summary
 
 | API | What it does |
@@ -1260,6 +1367,14 @@ obs = flecs.ObserveWithOptions[Position](w,
 | `ObserveQueryID(w, triggerID, event, filterTerms, fn)` | Multi-term observer with explicit trigger ID |
 | `ObserveQueryEvents(w, events, terms, fn)` | Multi-term, multi-event observer |
 | `ObserveQueryWithOptions(w, opts, events, terms, fn)` | Multi-term observer with options (yield_existing, source) |
+| `OnDelete(w, fn)` | Register observer that fires before entity deletion (before `OnRemove`) |
+| `OnDeleteWithOptions(w, opts, fn)` | OnDelete with `WithQuery` filter; `WithYieldExisting()` is a no-op |
+| `OnDeleteTarget(w, fn)` | Register observer for cleanup-policy cascade triples |
+| `OnDeleteTargetWithOptions(w, opts, fn)` | OnDeleteTarget with `WithRelationship` / `WithQuery` filters |
+| `WithRelationship(relID ID)` | Option: restrict `OnDeleteTarget` to a specific relationship |
+| `(ObserverOptions).AndQuery(terms ...Term)` | Chain `WithRelationship` with multi-term filter |
+| `(*World).EventOnDelete() ID` | Built-in EventOnDelete entity (index 76) |
+| `(*World).EventOnDeleteTarget() ID` | Built-in EventOnDeleteTarget entity (index 77) |
 
 ---
 

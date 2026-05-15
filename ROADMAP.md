@@ -1,6 +1,6 @@
 # Roadmap
 
-## Shipped (through v0.102.0)
+## Shipped (through v0.103.0)
 
 The following features are available in the current release:
 
@@ -103,8 +103,9 @@ The following features are available in the current release:
 - **Extended query variables** _(v0.100.0, Phase 16.45)_ — three new variable modes for the multi-variable query engine: **(1) Variable in relationship-name position**: `WithPairRelVar(varName, target)` / `WithPairBothVar(relVarName, tgtVarName)` / `(Term).RelVar(name)` — the relationship slot of a pair term carries a named variable; `($Rel, target)` and `($Rel,$Tgt)` DSL forms. **(2) Negative-variable constraints**: `Without(id).TgtVar(name)` — TermNot terms may carry `TgtVar`; the variable must be bound by a prior positive term; unbound negative variables produce `ErrCodeUnboundNegativeVar (8)` at parse time. **(3) Table-kind variables**: `WithTableVar(varName)` / `WithVarKind(varName, VarTable)` — a variable can be bound to an archetype table pointer rather than an entity ID; `(*QueryIter).VarTable(name)` retrieves it; `$T:Component($this)` DSL form. New supporting API: `(*QueryIter).VarNames() []string`; `VarKind` enum (`VarEntity=0`, `VarTable=1`, `VarAny=2` reserved); REST response surface via `vars` JSON field. Optimizer extended for table-kind domain estimation and relVar term exclusion from seed selection. `ErrCodeUnboundNegativeVar` added to `ParseErrorCode` enum. Closes all three deferred query-extension items. See [docs/Queries.md § Query variables](docs/Queries.md#query-variables) and [docs/QueryDSL.md](docs/QueryDSL.md).
 - **Table reclamation** _(v0.101.0, Phase 16.46)_ — long-running worlds with archetype churn no longer leak memory monotonically. Each `*Table` carries `emptyTicks` (consecutive ticks with `Count()==0`), `pinned` (opt-out), and `refCount` (atomic; bumped by live queries, cached-query subscriptions, and open iterators). At the start of every `Progress()` a sweep frees tables with `emptyTicks >= threshold && !pinned && refCount==0`. Default threshold: 60 ticks. Config API: `SetTableReclamationThreshold(uint32)` / `TableReclamationThreshold() uint32` / `ReclaimedTablesCount() uint64` / `ReclaimNow() int`; pass 0 to disable. `OnTableDelete(w, fn)` / `OnTableDeleteWithOptions(w, opts, fn)` fires synchronously before reclamation; handler receives `*Reader` (table mid-destruction); multi-term filter via `WithQuery(terms...)`; `WithYieldExisting()` is a no-op. Dead-table safety: `IsDead()` guard in `migrate()` edge-cache lookup; `CacheAddEdge`/`CacheRemoveEdge` silently overwrite stale dead entries. Snapshot restore resets `emptyTicks` to 0 for all tables. `EventOnTableDelete` built-in entity at index 75; user entities now start at index 76. Closes `docs/README.md` gap line 154. See [docs/TableReclamation.md](docs/TableReclamation.md) and [docs/ObserversManual.md § OnTableDelete](docs/ObserversManual.md#on-table-delete).
 - **Parent hierarchy storage** _(v0.102.0, Phase 16.47)_ — opt-in non-fragmenting storage for exclusive relationships. Children of different parents sharing the same other components occupy **one** archetype table; the concrete parent target is stored in a per-row column keyed by relationship ID. Reparenting is O(1) (parent column write only; no archetype migration). API: `SetParentStorage(w, relID)` / `IsParentStorage(scope, relID)`. Requires the relationship to be declared Exclusive and Relationship first. Signature marker `(relID, Any)` appears in the archetype instead of `(relID, target)`. All existing APIs transparent: `EachChild`, `ParentOf`, `GetUp`, `HasUp`, `HasID`, regular and cached queries (per-row mixed mode for specific-target terms), monitor observers, `OnAdd`/`OnRemove` fire on concrete pair, traversal, cleanup policies (`OnDeleteTarget` scans parent columns), binary snapshots (format v2), and JSON marshaling. Closes `docs/README.md` gap line 131. See [docs/HierarchiesManual.md § Parent storage](docs/HierarchiesManual.md#parent-storage).
+- **OnDelete / OnDeleteTarget observer events + component-remove cascade** _(v0.103.0, Phase 16.48)_ — two coupled cleanup-cascade features. **Feature 1**: `EventOnDelete` fires once per entity about to be deleted (before `OnRemove` hooks); `EventOnDeleteTarget` fires once per (target, dependent, pairRelID) triple during cleanup-policy cascade (before enqueue). Registration API: `OnDelete(w, fn)` / `OnDeleteWithOptions(w, opts, fn)` / `OnDeleteTarget(w, fn)` / `OnDeleteTargetWithOptions(w, opts, fn)`. Handlers receive `*Reader` (entity is mid-delete; mutations must be deferred via `World.Write(fn)`). Multi-term filter via `WithQuery(terms...)`; relationship filter via `WithRelationship(relID)` for `OnDeleteTarget`. `WithYieldExisting()` is a no-op for both events. **Feature 2**: when a component entity is deleted with RemoveAction policy (default), all entities holding it as a component now undergo archetype migration and fire `OnRemove` — no more orphaned signatures. O(entities-with-component). Two new built-in event entities at indices 76–77 (`EventOnDelete`, `EventOnDeleteTarget`); user entities now start at index 78. `EventOnDelete()` / `EventOnDeleteTarget()` accessors on `*World`. See [docs/ObserversManual.md § OnDelete and OnDeleteTarget](docs/ObserversManual.md#on-delete-and-on-delete-target).
 
-**All major upstream gaps closed** — with Phase 16.47, every upstream C flecs feature in the original gap list is now implemented in Go-flecs. The Go-flecs roadmap is effectively complete. Future work focuses on performance, addons, and concurrency improvements.
+**All major upstream gaps closed** — with Phase 16.48, every upstream C flecs feature in the original gap list is now implemented in Go-flecs. The Go-flecs roadmap is effectively complete. Future work focuses on performance, addons, and concurrency improvements.
 
 ## Documentation
 
@@ -138,15 +139,15 @@ The following are deferred to later phases. No timeline is set; issues welcome.
 
 Remaining observer/hook and entity gaps from the docs/README.md feature-gap list:
 
-- **OnTableDelete event** — fires when a table is reclaimed. Requires implementing table-reclamation infrastructure first (`delete(w.tables, ...)` is currently never called). (Phase 16.9 candidate.)
+- ~~**OnTableDelete event**~~ — ✅ shipped in v0.101.0 (Phase 16.46).
 - ~~**OnTableEmpty / OnTableFill events**~~ — ✅ shipped in v0.98.0 (Phase 16.43).
-- **OnDelete / OnDeleteTarget observer events** — fire observer callbacks when a component entity or pair target is deleted. (Phase 16.9 candidate.)
+- ~~**OnDelete / OnDeleteTarget observer events**~~ — ✅ shipped in v0.103.0 (Phase 16.48).
 - ~~**Multi-term observers**~~ — ✅ shipped in v0.70.0 (Phase 16.15).
 - ~~**Observer propagation along relationship edges**~~ — ✅ shipped in v0.72.0 (Phase 16.17). `OnAdd`/`OnSet`/`OnRemove`/`OnReplace` and custom `Emit` propagate downward along `IsA` edges; DontInherit and override gates apply; BFS cache with invalidation on structural change.
 
 ### Cleanup policy extensions (Phase 15.1 candidates)
-- **OnDelete component-remove cascade** — when a component entity is deleted, actively remove that component from all entities that hold it (currently orphans the pair; Remove is the default but not actively applied on the component-remove path).
-- **Observer-driven OnDelete / OnDeleteTarget events** — fire observer callbacks when cleanup policies trigger, matching C's `flecs_invoke_hook` path.
+- ~~**OnDelete component-remove cascade**~~ — ✅ shipped in v0.103.0 (Phase 16.48).
+- ~~**Observer-driven OnDelete / OnDeleteTarget events**~~ — ✅ shipped in v0.103.0 (Phase 16.48). All major upstream gaps closed.
 
 ### Addons
 - (all originally-planned addons shipped)

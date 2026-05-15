@@ -7,12 +7,14 @@ import (
 )
 
 // ObserverOptions carries optional configuration for [ObserveWithOptions],
-// [ObserveIDWithOptions], and [ObserveEventWithOptions].
-// Construct via [WithYieldExisting], [WithSource], or [WithQuery]; use the zero value for no options.
+// [ObserveIDWithOptions], [ObserveEventWithOptions], [OnDeleteWithOptions], and
+// [OnDeleteTargetWithOptions]. Construct via [WithYieldExisting], [WithSource],
+// [WithQuery], or [WithRelationship]; use the zero value for no options.
 type ObserverOptions struct {
-	yieldExisting bool
-	source        ID     // 0 = any-entity (default); non-zero = fixed source
-	filterTerms   []Term // multi-term filter for table observers (OnTableEmpty/OnTableFill)
+	yieldExisting      bool
+	source             ID     // 0 = any-entity (default); non-zero = fixed source
+	filterTerms        []Term // multi-term filter for table observers (OnTableEmpty/OnTableFill)
+	filterRelationship ID     // non-zero: OnDeleteTarget fires only when pairRelID matches
 }
 
 // WithSource returns an option that constrains an observer to fire only when
@@ -70,6 +72,26 @@ func WithQuery(terms ...Term) ObserverOptions {
 //	WithQuery(With(posID)).AndYieldExisting()
 func (o ObserverOptions) AndYieldExisting() ObserverOptions {
 	o.yieldExisting = true
+	return o
+}
+
+// WithRelationship returns options that constrain an OnDeleteTarget observer to fire
+// only when the pairRelID parameter matches relID. Compose with WithQuery by chaining:
+//
+//	WithRelationship(w.ChildOf()).AndQuery(With(posID))
+func WithRelationship(relID ID) ObserverOptions {
+	if relID == 0 {
+		panic("flecs: WithRelationship: relID must be non-zero; use a valid relationship entity ID")
+	}
+	return ObserverOptions{filterRelationship: relID}
+}
+
+// AndQuery returns a copy of o with the multi-term filter set to terms.
+// Use to combine WithRelationship with WithQuery:
+//
+//	WithRelationship(w.ChildOf()).AndQuery(With(posID))
+func (o ObserverOptions) AndQuery(terms ...Term) ObserverOptions {
+	o.filterTerms = terms
 	return o
 }
 
