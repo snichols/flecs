@@ -663,13 +663,14 @@ func TestIsATagInheritance(t *testing.T) {
 
 // ── Count baseline ────────────────────────────────────────────────────────────
 
-// TestIsAWorldCountBaseline verifies that a fresh world has 72 built-in entities
+// TestIsAWorldCountBaseline verifies that a fresh world has 74 built-in entities
 // (47 original + 15 atomic unit entities from Phase 16.30 + 10 compound unit entities
-// from Phase 16.42) before any user entities.
+// from Phase 16.42 + 2 table-population event entities from Phase 16.43)
+// before any user entities.
 func TestIsAWorldCountBaseline(t *testing.T) {
 	w := flecs.New()
 	base := w.Count()
-	if base != 72 {
-		t.Fatalf("fresh World.Count(): want 72 (47 original built-ins + 25 unit entities), got %d", base)
+	if base != 74 {
+		t.Fatalf("fresh World.Count(): want 74 (47 original built-ins + 25 unit entities + 2 table-pop events), got %d", base)
 	}
 }

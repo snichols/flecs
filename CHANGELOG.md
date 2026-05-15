@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.98.0 — 2026-05-15 — Phase 16.43: OnTableEmpty / OnTableFill events
+
+Adds two new built-in observer events for archetype table population transitions.
+`OnTableFill` fires when a table's row count transitions 0→1 (first entity added).
+`OnTableEmpty` fires when a table's row count transitions 1→0 (last entity removed).
+
+### New API
+
+| Function | Description |
+|---|---|
+| `OnTableFill(w, fn)` | Register observer that fires on table 0→1 transition |
+| `OnTableFillWithOptions(w, opts, fn)` | `OnTableFill` with multi-term filter / yield_existing |
+| `OnTableEmpty(w, fn)` | Register observer that fires on table 1→0 transition |
+| `OnTableEmptyWithOptions(w, opts, fn)` | `OnTableEmpty` with multi-term filter / yield_existing |
+| `w.EventOnTableFill() ID` | Built-in EventOnTableFill event entity (index 45) |
+| `w.EventOnTableEmpty() ID` | Built-in EventOnTableEmpty event entity (index 44) |
+| `EventOnTableFill EventKind = 7` | EventKind constant |
+| `EventOnTableEmpty EventKind = 6` | EventKind constant |
+
+### Semantics
+
+- **Root table**: the root empty table (`[]` signature) fires normally — `OnTableFill` on
+  the first `NewEntity`, `OnTableEmpty` on the last `Delete`.
+- **Deferred scope**: transitions fire in order of occurrence inside `Write(fn)` defer
+  scopes (matches OnAdd/OnRemove per-entity semantics). A table can flicker 0→1→0 within
+  a single batch; all transitions are emitted in order.
+- **Multi-term filters**: `WithQuery(terms...)` evaluates the filter against the table's
+  component signature. DontFragment/Sparse components are not part of the archetype
+  signature and always fail TermAnd on table-level filters.
+- **yield_existing**: `OnTableFill + WithYieldExisting()` sweeps all currently non-empty
+  tables synchronously at registration time (sorted-signature order, empty root excluded).
+  `OnTableEmpty + WithYieldExisting()` sweeps all currently empty tables (includes root).
+
+### Index shift
+
+Two new built-in event entities are inserted at indices 44–45, shifting all subsequent
+built-in indices by +2. EventMonitor moves from 46 to 48; unit indices shift from 48–72
+to 50–74; user entities now start at index 75 (was 73).
+
 ## v0.97.0 — 2026-05-15 — Phase 16.42: Compound units
 
 Extends the Units addon (v0.85.0 / Phase 16.30) with compound units — products, quotients,

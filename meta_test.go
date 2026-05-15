@@ -17,12 +17,13 @@ import (
 // Traversable(27), Relationship(28), Target(29), Trait(30), PairIsTag(31),
 // With(32), OrderedChildren(33), Sparse(34), DontFragment(35), Disabled(36),
 // Prefab(37), Wildcard(38), Any(39), EventOnAdd(40), EventOnSet(41),
-// EventOnRemove(42), EventOnTableCreate(43), Event(44), DependsOn(45),
-// EventMonitor(46), SlotOf(47), Meter(48), KiloMeter(49), MilliMeter(50),
-// Second(51), MilliSecond(52), Minute(53), Hour(54), Gram(55), KiloGram(56),
-// MegaGram(57), Newton(58), Joule(59), Hertz(60), Radian(61), Degree(62),
-// and compound units MeterPerSecond(63)..Inverse(72).
-const builtinEntityCount = 72
+// EventOnRemove(42), EventOnTableCreate(43), EventOnTableEmpty(44),
+// EventOnTableFill(45), Event(46), DependsOn(47), EventMonitor(48), SlotOf(49),
+// Meter(50), KiloMeter(51), MilliMeter(52), Second(53), MilliSecond(54),
+// Minute(55), Hour(56), Gram(57), KiloGram(58), MegaGram(59), Newton(60),
+// Joule(61), Hertz(62), Radian(63), Degree(64),
+// and compound units MeterPerSecond(65)..Inverse(74).
+const builtinEntityCount = 74
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

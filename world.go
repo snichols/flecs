@@ -91,37 +91,39 @@ type World struct {
 	eventOnSetID         ID                              // built-in EventOnSet event entity (index 41)
 	eventOnRemoveID      ID                              // built-in EventOnRemove event entity (index 42)
 	eventOnTableCreateID ID                              // built-in EventOnTableCreate event entity (index 43)
-	eventTagID           ID                              // built-in Event tag entity (index 44)
-	dependsOnID          ID                              // built-in DependsOn relationship entity (index 45)
-	eventMonitorID       ID                              // built-in EventMonitor event entity (index 46)
-	slotOfID             ID                              // built-in SlotOf relationship entity (index 47)
-	// Built-in unit entities (indices 48–62); atomic units (Phase 16.30).
-	meterID       ID // built-in Meter length unit entity (index 48)
-	kiloMeterID   ID // built-in KiloMeter length unit entity (index 49)
-	milliMeterID  ID // built-in MilliMeter length unit entity (index 50)
-	secondID      ID // built-in Second duration unit entity (index 51)
-	milliSecondID ID // built-in MilliSecond duration unit entity (index 52)
-	minuteID      ID // built-in Minute duration unit entity (index 53)
-	hourID        ID // built-in Hour duration unit entity (index 54)
-	gramID        ID // built-in Gram mass unit entity (index 55)
-	kiloGramID    ID // built-in KiloGram mass unit entity (index 56)
-	megaGramID    ID // built-in MegaGram mass unit entity (index 57)
-	newtonID      ID // built-in Newton force unit entity (index 58, opaque root)
-	jouleID       ID // built-in Joule energy unit entity (index 59, opaque root)
-	hertzID       ID // built-in Hertz frequency unit entity (index 60, opaque root)
-	radianID      ID // built-in Radian angle unit entity (index 61)
-	degreeID      ID // built-in Degree angle unit entity (index 62)
-	// Built-in compound unit entities (indices 63–72); user entities start at index 73.
-	meterPerSecondID        ID // built-in MeterPerSecond velocity unit (index 63)
-	kiloMeterPerHourID      ID // built-in KiloMeterPerHour velocity unit (index 64)
-	meterPerSecondSquaredID ID // built-in MeterPerSecondSquared acceleration unit (index 65)
-	newtonCompoundID        ID // built-in NewtonCompound force unit kg·m/s² (index 66)
-	jouleCompoundID         ID // built-in JouleCompound energy unit kg·m²/s² (index 67)
-	wattID                  ID // built-in Watt power unit kg·m²/s³ (index 68)
-	pascalID                ID // built-in Pascal pressure unit kg/(m·s²) (index 69)
-	hertzCompoundID         ID // built-in HertzCompound frequency unit 1/s (index 70)
-	radianPerSecondID       ID // built-in RadianPerSecond angular velocity unit (index 71)
-	inverseID               ID // built-in Inverse reciprocal helper entity (index 72)
+	eventOnTableEmptyID  ID                              // built-in EventOnTableEmpty event entity (index 44)
+	eventOnTableFillID   ID                              // built-in EventOnTableFill event entity (index 45)
+	eventTagID           ID                              // built-in Event tag entity (index 46)
+	dependsOnID          ID                              // built-in DependsOn relationship entity (index 47)
+	eventMonitorID       ID                              // built-in EventMonitor event entity (index 48)
+	slotOfID             ID                              // built-in SlotOf relationship entity (index 49)
+	// Built-in unit entities (indices 50–64); atomic units (Phase 16.30).
+	meterID       ID // built-in Meter length unit entity (index 50)
+	kiloMeterID   ID // built-in KiloMeter length unit entity (index 51)
+	milliMeterID  ID // built-in MilliMeter length unit entity (index 52)
+	secondID      ID // built-in Second duration unit entity (index 53)
+	milliSecondID ID // built-in MilliSecond duration unit entity (index 54)
+	minuteID      ID // built-in Minute duration unit entity (index 55)
+	hourID        ID // built-in Hour duration unit entity (index 56)
+	gramID        ID // built-in Gram mass unit entity (index 57)
+	kiloGramID    ID // built-in KiloGram mass unit entity (index 58)
+	megaGramID    ID // built-in MegaGram mass unit entity (index 59)
+	newtonID      ID // built-in Newton force unit entity (index 60, opaque root)
+	jouleID       ID // built-in Joule energy unit entity (index 61, opaque root)
+	hertzID       ID // built-in Hertz frequency unit entity (index 62, opaque root)
+	radianID      ID // built-in Radian angle unit entity (index 63)
+	degreeID      ID // built-in Degree angle unit entity (index 64)
+	// Built-in compound unit entities (indices 65–74); user entities start at index 75.
+	meterPerSecondID        ID // built-in MeterPerSecond velocity unit (index 65)
+	kiloMeterPerHourID      ID // built-in KiloMeterPerHour velocity unit (index 66)
+	meterPerSecondSquaredID ID // built-in MeterPerSecondSquared acceleration unit (index 67)
+	newtonCompoundID        ID // built-in NewtonCompound force unit kg·m/s² (index 68)
+	jouleCompoundID         ID // built-in JouleCompound energy unit kg·m²/s² (index 69)
+	wattID                  ID // built-in Watt power unit kg·m²/s³ (index 70)
+	pascalID                ID // built-in Pascal pressure unit kg/(m·s²) (index 71)
+	hertzCompoundID         ID // built-in HertzCompound frequency unit 1/s (index 72)
+	radianPerSecondID       ID // built-in RadianPerSecond angular velocity unit (index 73)
+	inverseID               ID // built-in Inverse reciprocal helper entity (index 74)
 	// Units addon state
 	unitDefs             map[ID]Unit                   // unit entity ID → Unit descriptor (built-in + user)
 	compoundDefs         map[ID]*compoundDef           // compound unit entity ID → factor lists
@@ -262,36 +264,38 @@ type World struct {
 //   - Index 41: EventOnSet built-in event entity
 //   - Index 42: EventOnRemove built-in event entity
 //   - Index 43: EventOnTableCreate built-in event entity
-//   - Index 44: Event built-in tag entity (marks an entity as an event identifier)
-//   - Index 45: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
-//   - Index 46: EventMonitor built-in event entity
-//   - Index 47: SlotOf built-in relationship entity (bootstrapped with Exclusive + PairIsTag + Relationship)
-//   - Index 48: Meter built-in length unit entity
-//   - Index 49: KiloMeter built-in length unit entity (Factor=1000, Base=Meter)
-//   - Index 50: MilliMeter built-in length unit entity (Factor=0.001, Base=Meter)
-//   - Index 51: Second built-in duration unit entity
-//   - Index 52: MilliSecond built-in duration unit entity (Factor=0.001, Base=Second)
-//   - Index 53: Minute built-in duration unit entity (Factor=60, Base=Second)
-//   - Index 54: Hour built-in duration unit entity (Factor=3600, Base=Second)
-//   - Index 55: Gram built-in mass unit entity
-//   - Index 56: KiloGram built-in mass unit entity (Factor=1000, Base=Gram)
-//   - Index 57: MegaGram built-in mass unit entity (Factor=1_000_000, Base=Gram)
-//   - Index 58: Newton built-in force unit entity (opaque root; compound alias at index 66)
-//   - Index 59: Joule built-in energy unit entity (opaque root; compound alias at index 67)
-//   - Index 60: Hertz built-in frequency unit entity (opaque root; compound alias at index 70)
-//   - Index 61: Radian built-in angle unit entity
-//   - Index 62: Degree built-in angle unit entity (Factor=math.Pi/180, Base=Radian)
-//   - Index 63: MeterPerSecond built-in velocity unit entity (compound: m/s)
-//   - Index 64: KiloMeterPerHour built-in velocity unit entity (compound: km/h)
-//   - Index 65: MeterPerSecondSquared built-in acceleration unit entity (compound: m/s²)
-//   - Index 66: NewtonCompound built-in force unit entity (compound: kg·m/s², Symbol="N")
-//   - Index 67: JouleCompound built-in energy unit entity (compound: kg·m²/s², Symbol="J")
-//   - Index 68: Watt built-in power unit entity (compound: kg·m²/s³, Symbol="W")
-//   - Index 69: Pascal built-in pressure unit entity (compound: kg/(m·s²), Symbol="Pa")
-//   - Index 70: HertzCompound built-in frequency unit entity (compound: 1/s, Symbol="Hz")
-//   - Index 71: RadianPerSecond built-in angular velocity unit entity (compound: rad/s)
-//   - Index 72: Inverse built-in reciprocal helper entity (opaque marker)
-//   - Index 73+: user entities (NewEntity)
+//   - Index 44: EventOnTableEmpty built-in event entity
+//   - Index 45: EventOnTableFill built-in event entity
+//   - Index 46: Event built-in tag entity (marks an entity as an event identifier)
+//   - Index 47: DependsOn built-in relationship entity (bootstrapped with Relationship + PairIsTag)
+//   - Index 48: EventMonitor built-in event entity
+//   - Index 49: SlotOf built-in relationship entity (bootstrapped with Exclusive + PairIsTag + Relationship)
+//   - Index 50: Meter built-in length unit entity
+//   - Index 51: KiloMeter built-in length unit entity (Factor=1000, Base=Meter)
+//   - Index 52: MilliMeter built-in length unit entity (Factor=0.001, Base=Meter)
+//   - Index 53: Second built-in duration unit entity
+//   - Index 54: MilliSecond built-in duration unit entity (Factor=0.001, Base=Second)
+//   - Index 55: Minute built-in duration unit entity (Factor=60, Base=Second)
+//   - Index 56: Hour built-in duration unit entity (Factor=3600, Base=Second)
+//   - Index 57: Gram built-in mass unit entity
+//   - Index 58: KiloGram built-in mass unit entity (Factor=1000, Base=Gram)
+//   - Index 59: MegaGram built-in mass unit entity (Factor=1_000_000, Base=Gram)
+//   - Index 60: Newton built-in force unit entity (opaque root; compound alias at index 68)
+//   - Index 61: Joule built-in energy unit entity (opaque root; compound alias at index 69)
+//   - Index 62: Hertz built-in frequency unit entity (opaque root; compound alias at index 72)
+//   - Index 63: Radian built-in angle unit entity
+//   - Index 64: Degree built-in angle unit entity (Factor=math.Pi/180, Base=Radian)
+//   - Index 65: MeterPerSecond built-in velocity unit entity (compound: m/s)
+//   - Index 66: KiloMeterPerHour built-in velocity unit entity (compound: km/h)
+//   - Index 67: MeterPerSecondSquared built-in acceleration unit entity (compound: m/s²)
+//   - Index 68: NewtonCompound built-in force unit entity (compound: kg·m/s², Symbol="N")
+//   - Index 69: JouleCompound built-in energy unit entity (compound: kg·m²/s², Symbol="J")
+//   - Index 70: Watt built-in power unit entity (compound: kg·m²/s³, Symbol="W")
+//   - Index 71: Pascal built-in pressure unit entity (compound: kg/(m·s²), Symbol="Pa")
+//   - Index 72: HertzCompound built-in frequency unit entity (compound: 1/s, Symbol="Hz")
+//   - Index 73: RadianPerSecond built-in angular velocity unit entity (compound: rad/s)
+//   - Index 74: Inverse built-in reciprocal helper entity (opaque marker)
+//   - Index 75+: user entities (NewEntity)
 func New() *World {
 	w := &World{
 		index:     entityindex.New(),
@@ -559,13 +563,25 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventOnTableCreate))
 	w.eventOnTableCreateID = eventOnTableCreate
-	// Allocate the built-in Event tag entity (gets index 44).
+	// Allocate the built-in EventOnTableEmpty event entity (gets index 44).
+	eventOnTableEmpty := w.index.Alloc()
+	rec = w.index.Get(eventOnTableEmpty)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnTableEmpty))
+	w.eventOnTableEmptyID = eventOnTableEmpty
+	// Allocate the built-in EventOnTableFill event entity (gets index 45).
+	eventOnTableFill := w.index.Alloc()
+	rec = w.index.Get(eventOnTableFill)
+	rec.Table = w.empty
+	rec.Row = uint32(w.empty.Append(eventOnTableFill))
+	w.eventOnTableFillID = eventOnTableFill
+	// Allocate the built-in Event tag entity (gets index 46).
 	eventTag := w.index.Alloc()
 	rec = w.index.Get(eventTag)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventTag))
 	w.eventTagID = eventTag
-	// Allocate the built-in DependsOn relationship entity (gets index 45).
+	// Allocate the built-in DependsOn relationship entity (gets index 47).
 	// Bootstrapped with Relationship + PairIsTag (minimum for v1; Traversable and
 	// OnInstantiate/Inherit deferred to a follow-up phase per issue #197 design).
 	dependsOn := w.index.Alloc()
@@ -573,20 +589,20 @@ func New() *World {
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(dependsOn))
 	w.dependsOnID = dependsOn
-	// Allocate the built-in EventMonitor event entity (gets index 46).
+	// Allocate the built-in EventMonitor event entity (gets index 48).
 	eventMonitor := w.index.Alloc()
 	rec = w.index.Get(eventMonitor)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(eventMonitor))
 	w.eventMonitorID = eventMonitor
-	// Allocate the built-in SlotOf relationship entity (gets index 47).
+	// Allocate the built-in SlotOf relationship entity (gets index 49).
 	slotOf := w.index.Alloc()
 	rec = w.index.Get(slotOf)
 	rec.Table = w.empty
 	rec.Row = uint32(w.empty.Append(slotOf))
 	w.slotOfID = slotOf
-	// Allocate the built-in Units addon entities (indices 48–72).
-	// User entity allocation starts at index 73 after this point.
+	// Allocate the built-in Units addon entities (indices 50–74).
+	// User entity allocation starts at index 75 after this point.
 	meter := w.index.Alloc()
 	rec = w.index.Get(meter)
 	rec.Table = w.empty
@@ -906,7 +922,13 @@ func (w *World) EventOnRemove() ID { return w.eventOnRemoveID }
 // EventOnTableCreate returns the ID of the built-in EventOnTableCreate event entity.
 func (w *World) EventOnTableCreate() ID { return w.eventOnTableCreateID }
 
-// EventMonitor returns the ID of the built-in EventMonitor event entity (index 46).
+// EventOnTableEmpty returns the ID of the built-in EventOnTableEmpty event entity.
+func (w *World) EventOnTableEmpty() ID { return w.eventOnTableEmptyID }
+
+// EventOnTableFill returns the ID of the built-in EventOnTableFill event entity.
+func (w *World) EventOnTableFill() ID { return w.eventOnTableFillID }
+
+// EventMonitor returns the ID of the built-in EventMonitor event entity (index 48).
 // Monitor observers registered via Monitor / MonitorWithOptions subscribe to this
 // event kind. The entity is exposed for introspection and symmetry with other
 // built-in event entities; direct observer dispatch is not performed via this ID.
@@ -1052,6 +1074,10 @@ func (w *World) deleteOne(e ID) bool {
 		if ok {
 			movedRec := w.index.Get(moved)
 			movedRec.Row = uint32(row)
+		}
+		// Fire OnTableEmpty when the table transitions 1→0.
+		if t.Count() == 0 {
+			w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableEmptyID, t)
 		}
 	}
 	// Clear any singleton slots held by this entity.
@@ -1649,6 +1675,15 @@ func (w *World) migrate(e ID, addID, removeID ID, copyValue unsafe.Pointer) {
 			w.fireSparseMonitors(e, removeID, 0)
 		}
 	}
+
+	// Fire OnTableFill when new table transitions 0→1 (newRow==0 means it was the first row).
+	if newRow == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableFillID, newTable)
+	}
+	// Fire OnTableEmpty when old table transitions 1→0.
+	if oldTable != nil && oldTable.Count() == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableEmptyID, oldTable)
+	}
 }
 
 // migrateArchetypeOnly moves entity e's archetype record by adding or removing
@@ -1725,6 +1760,15 @@ func (w *World) migrateArchetypeOnly(e ID, addID, removeID ID) {
 	}
 	rec.Table = newTable
 	rec.Row = uint32(newRow)
+
+	// Fire OnTableFill when new table transitions 0→1.
+	if newRow == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableFillID, newTable)
+	}
+	// Fire OnTableEmpty when old table transitions 1→0.
+	if oldTable != nil && oldTable.Count() == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableEmptyID, oldTable)
+	}
 }
 
 // TablesFor returns a snapshot of all archetype tables that contain
@@ -1877,6 +1921,15 @@ func (w *World) commitBatch(e ID, newSig []ID, addedIDs, removedIDs []ID) {
 		for _, id := range removedIDs {
 			w.fireSparseMonitors(e, id, 0)
 		}
+	}
+
+	// Fire OnTableFill when new table transitions 0→1.
+	if newRow == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableFillID, newTable)
+	}
+	// Fire OnTableEmpty when old table transitions 1→0.
+	if oldTable != nil && oldTable.Count() == 0 {
+		w.dispatchTableObservers(tableCreateSentinelID, w.eventOnTableEmptyID, oldTable)
 	}
 }
 

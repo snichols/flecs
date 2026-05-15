@@ -367,7 +367,7 @@ func TestUserUnit_MultipleBuiltinBases_RoundTrip(t *testing.T) {
 	}
 
 	// Just verify unmarshal succeeds and the entities are alive.
-	// The user units are allocated starting at index 63; IDs differ in w2
+	// The user units are allocated starting at index 75; IDs differ in w2
 	// since they are new entities. Count entities to verify they round-tripped.
 	// Unmarshal would have returned an error on failure; reaching here is success.
 	if w2.Count() < w.Count() {
@@ -379,7 +379,7 @@ func TestUserUnit_MultipleBuiltinBases_RoundTrip(t *testing.T) {
 
 func TestBuiltinUnitByIndex_OutOfRangeReturnsError(t *testing.T) {
 	// Trigger the out-of-range path by passing an invalid built-in index
-	// (47 = SlotOf, not a unit) via a hand-crafted JSON payload.
+	// (47 = DependsOn, not a unit; built-in units start at 50) via a hand-crafted JSON payload.
 	type Tagged struct{ V float32 }
 
 	w := flecs.New()
@@ -413,7 +413,7 @@ func TestBuiltinUnitByIndex_OutOfRangeReturnsError(t *testing.T) {
 		}
 	})
 
-	// Craft JSON with valid comp_name but invalid builtin unit index (47 < 48).
+	// Craft JSON with valid comp_name but invalid builtin unit index (47 < 50).
 	invalid := `{"version":1,"entities":[],"comp_units":[{"comp_name":"` + compName + `","unit_builtin_idx":47}]}`
 	w2 := flecs.New()
 	flecs.RegisterComponent[Tagged](w2)
@@ -742,16 +742,16 @@ func TestCompound_BuiltIns_AllRegistered(t *testing.T) {
 		index  uint32
 		symbol string
 	}{
-		{"MeterPerSecond", w.MeterPerSecond(), 63, "m/s"},
-		{"KiloMeterPerHour", w.KiloMeterPerHour(), 64, "km/h"},
-		{"MeterPerSecondSquared", w.MeterPerSecondSquared(), 65, "m/s²"},
-		{"NewtonCompound", w.NewtonCompound(), 66, "N"},
-		{"JouleCompound", w.JouleCompound(), 67, "J"},
-		{"Watt", w.Watt(), 68, "W"},
-		{"Pascal", w.Pascal(), 69, "Pa"},
-		{"HertzCompound", w.HertzCompound(), 70, "Hz"},
-		{"RadianPerSecond", w.RadianPerSecond(), 71, "rad/s"},
-		{"Inverse", w.Inverse(), 72, "1/x"},
+		{"MeterPerSecond", w.MeterPerSecond(), 65, "m/s"},
+		{"KiloMeterPerHour", w.KiloMeterPerHour(), 66, "km/h"},
+		{"MeterPerSecondSquared", w.MeterPerSecondSquared(), 67, "m/s²"},
+		{"NewtonCompound", w.NewtonCompound(), 68, "N"},
+		{"JouleCompound", w.JouleCompound(), 69, "J"},
+		{"Watt", w.Watt(), 70, "W"},
+		{"Pascal", w.Pascal(), 71, "Pa"},
+		{"HertzCompound", w.HertzCompound(), 72, "Hz"},
+		{"RadianPerSecond", w.RadianPerSecond(), 73, "rad/s"},
+		{"Inverse", w.Inverse(), 74, "1/x"},
 	}
 	for _, c := range cases {
 		if c.id.Index() != c.index {

@@ -20,9 +20,9 @@ var snapshotMagic = [4]byte{0xF1, 0xEC, 0x53, 0x00}
 const snapshotFormatVersion = uint32(1)
 
 // firstSnapUserIndex is the first raw entity index owned by user code.
-// Built-in entities occupy indices 1–72 (47 non-unit + 25 unit entities);
-// user entities start at index 73.
-const firstSnapUserIndex = uint32(73)
+// Built-in entities occupy indices 1–74 (47 non-unit + 25 unit entities + 2 table-pop events);
+// user entities start at index 75.
+const firstSnapUserIndex = uint32(75)
 
 // Snapshot holds a binary in-memory snapshot of a World's state. The blob is
 // opaque; use [Snapshot.Bytes] / [LoadSnapshot] for disk persistence. The

@@ -8,10 +8,11 @@ import (
 
 // ObserverOptions carries optional configuration for [ObserveWithOptions],
 // [ObserveIDWithOptions], and [ObserveEventWithOptions].
-// Construct via [WithYieldExisting] or [WithSource]; use the zero value for no options.
+// Construct via [WithYieldExisting], [WithSource], or [WithQuery]; use the zero value for no options.
 type ObserverOptions struct {
 	yieldExisting bool
-	source        ID // 0 = any-entity (default); non-zero = fixed source
+	source        ID     // 0 = any-entity (default); non-zero = fixed source
+	filterTerms   []Term // multi-term filter for table observers (OnTableEmpty/OnTableFill)
 }
 
 // WithSource returns an option that constrains an observer to fire only when
@@ -47,6 +48,28 @@ func (o ObserverOptions) AndSource(e ID) ObserverOptions {
 		panic("flecs: AndSource: source entity ID must be non-zero; use a valid entity ID")
 	}
 	o.source = e
+	return o
+}
+
+// WithQuery returns options that attach a multi-term filter to a table observer
+// (OnTableEmpty / OnTableFill). The filter is evaluated against the table's
+// component signature rather than an individual entity: TermAnd requires the
+// component to be present in the table; TermNot requires it to be absent.
+// Other term kinds are ignored.
+//
+// Compose with WithYieldExisting by chaining:
+//
+//	WithQuery(terms...).AndYieldExisting()
+func WithQuery(terms ...Term) ObserverOptions {
+	return ObserverOptions{filterTerms: terms}
+}
+
+// AndYieldExisting returns a copy of o with yieldExisting set to true.
+// Use to combine WithQuery with WithYieldExisting:
+//
+//	WithQuery(With(posID)).AndYieldExisting()
+func (o ObserverOptions) AndYieldExisting() ObserverOptions {
+	o.yieldExisting = true
 	return o
 }
 
@@ -93,8 +116,8 @@ func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKin
 
 	if opts.source != 0 {
 		for _, ev := range events {
-			if ev == EventOnTableCreate {
-				panic("flecs: ObserveWithOptions: WithSource is not compatible with EventOnTableCreate; tables have no source entity semantics")
+			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill {
+				panic("flecs: ObserveWithOptions: WithSource is not compatible with table events; tables have no source entity semantics")
 			}
 		}
 	}
