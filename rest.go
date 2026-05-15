@@ -1,6 +1,7 @@
 package flecs
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 // NewRESTHandler returns an http.Handler that exposes read-only inspection
@@ -34,18 +36,20 @@ import (
 //
 // # Routes
 //
-//	GET /stats                   — world stats JSON (200)
-//	GET /stats/world             — WorldStats snapshot as JSON; Cache-Control: no-store (200 or 503)
-//	GET /stats/pipeline          — PipelineStats snapshot as JSON; Cache-Control: no-store (200 or 503)
-//	GET /components              — all registered component infos (200)
-//	GET /components/{id}         — single component by uint64 ID (200 or 404)
-//	GET /entities                — alive entities; optional ?limit=N (default 1000, max 10000) (200 or 400)
-//	GET /entities/{id}           — entity detail (200 or 404)
-//	GET /snapshot                — full world MarshalJSON output (200 or 500)
-//	PUT /snapshot                — replace world state; body is MarshalJSON output (204, 400)
-//	GET /type_info/{path}        — reflection schema for a named component (200, 404)
-//	PUT /entity                  — create or claim entity; JSON body {id?,name?,parent?} (200, 400, 404, 409, 503)
-//	DELETE /entity/{path...}     — delete entity by dot-separated path (200, 400, 404, 503)
+//	GET /stats                               — world stats JSON (200)
+//	GET /stats/world                         — WorldStats snapshot as JSON; Cache-Control: no-store (200 or 503)
+//	GET /stats/pipeline                      — PipelineStats snapshot as JSON; Cache-Control: no-store (200 or 503)
+//	GET /components                          — all registered component infos (200)
+//	GET /components/{id}                     — single component by uint64 ID (200 or 404)
+//	GET /entities                            — alive entities; optional ?limit=N (default 1000, max 10000) (200 or 400)
+//	GET /entities/{id}                       — entity detail (200 or 404)
+//	GET /snapshot                            — full world MarshalJSON output (200 or 500)
+//	PUT /snapshot                            — replace world state; body is MarshalJSON output (204, 400)
+//	GET /type_info/{path}                    — reflection schema for a named component (200, 404)
+//	PUT /entity                              — create or claim entity; JSON body {id?,name?,parent?} (200, 400, 404, 409, 503)
+//	DELETE /entity/{path...}                 — delete entity by dot-separated path (200, 400, 404, 503)
+//	PUT /component/{entity}/{component}      — set or add a component on an entity; body is JSON (200, 400, 404, 413, 503)
+//	DELETE /component/{entity}/{component}   — remove a component from an entity (200, 404, 503)
 func NewRESTHandler(w *World) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", restStats(w))
@@ -63,6 +67,8 @@ func NewRESTHandler(w *World) http.Handler {
 	var writeMu sync.Mutex
 	mux.HandleFunc("PUT /entity", restPutEntity(w, &writeMu))
 	mux.HandleFunc("DELETE /entity/{path...}", restDeleteEntity(w, &writeMu))
+	mux.HandleFunc("PUT /component/{entity}/{component}", restPutComponent(w, &writeMu))
+	mux.HandleFunc("DELETE /component/{entity}/{component}", restDeleteComponent(w, &writeMu))
 	return mux
 }
 
@@ -554,6 +560,197 @@ func restDeleteEntity(w *World, writeMu *sync.Mutex) http.HandlerFunc {
 			defer func() { panicVal = recover() }()
 			w.Write(func(fw *Writer) {
 				fw.Delete(e)
+			})
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		rw.WriteHeader(http.StatusOK)
+	}
+}
+
+// resolveComponentID parses the component URL segment and returns the component ID.
+// The segment may be a plain entity name or a tilde-separated pair "rel~tgt".
+// Returns compID, relID, tgtID, isPair, and whether both entity and component resolved.
+func resolveComponentPaths(fr *Reader, entityPath, componentPath string) (e ID, compID ID, relID ID, tgtID ID, isPair bool, entityFound bool, compFound bool) {
+	e, entityFound = fr.Lookup(entityPath)
+	if !entityFound {
+		return
+	}
+	if idx := strings.IndexByte(componentPath, '~'); idx >= 0 {
+		rel, relOK := fr.Lookup(componentPath[:idx])
+		tgt, tgtOK := fr.Lookup(componentPath[idx+1:])
+		if !relOK || !tgtOK {
+			return
+		}
+		isPair = true
+		relID, tgtID = rel, tgt
+		compID = MakePair(rel, tgt)
+		compFound = true
+	} else {
+		id, ok := fr.Lookup(componentPath)
+		if !ok {
+			return
+		}
+		compID = id
+		compFound = true
+	}
+	return
+}
+
+func restPutComponent(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		entityPath, _ := url.PathUnescape(r.PathValue("entity"))
+		componentPath, _ := url.PathUnescape(r.PathValue("component"))
+
+		var e ID
+		var entityFound bool
+		var compID ID
+		var compFound bool
+		var isPair bool
+		var relID, tgtID ID
+		var hasInfo bool
+		var compSize uintptr
+		var compType reflect.Type
+
+		w.Read(func(fr *Reader) {
+			e, compID, relID, tgtID, isPair, entityFound, compFound = resolveComponentPaths(fr, entityPath, componentPath)
+			if compFound {
+				if ti, ok := w.registry.LookupByID(compID); ok {
+					hasInfo = true
+					compSize = ti.Size
+					compType = ti.Type
+				}
+			}
+		})
+
+		if !entityFound {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+		if !compFound {
+			writeError(rw, http.StatusNotFound, "component not found")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(rw, r.Body, 1<<20)
+
+		var writeBody func(fw *Writer)
+
+		switch {
+		case !hasInfo || compSize == 0:
+			// Tag: body must be empty.
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				if strings.Contains(err.Error(), "http: request body too large") {
+					writeError(rw, http.StatusRequestEntityTooLarge, "request body too large")
+				} else {
+					writeError(rw, http.StatusBadRequest, "failed to read body")
+				}
+				return
+			}
+			if len(body) > 0 {
+				writeError(rw, http.StatusBadRequest, "tag component must have empty body")
+				return
+			}
+			writeBody = func(fw *Writer) { fw.AddID(e, compID) }
+
+		case compType != nil:
+			// Typed data component or pair: decode JSON body.
+			ptr := reflect.New(compType)
+			if err := json.NewDecoder(r.Body).Decode(ptr.Interface()); err != nil {
+				if strings.Contains(err.Error(), "http: request body too large") {
+					writeError(rw, http.StatusRequestEntityTooLarge, "request body too large")
+				} else {
+					writeError(rw, http.StatusBadRequest, "malformed JSON body")
+				}
+				return
+			}
+			v := ptr.Elem().Interface()
+			if isPair {
+				writeBody = func(fw *Writer) { fw.SetPairByID(e, relID, tgtID, v) }
+			} else {
+				writeBody = func(fw *Writer) { fw.SetByID(e, compID, v) }
+			}
+
+		default:
+			// Dynamic component: JSON string of base64-encoded bytes.
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				if strings.Contains(err.Error(), "http: request body too large") {
+					writeError(rw, http.StatusRequestEntityTooLarge, "request body too large")
+				} else {
+					writeError(rw, http.StatusBadRequest, "failed to read body")
+				}
+				return
+			}
+			var b64 string
+			if err := json.Unmarshal(body, &b64); err != nil {
+				writeError(rw, http.StatusBadRequest, "dynamic component body must be a JSON string (base64)")
+				return
+			}
+			decoded, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				writeError(rw, http.StatusBadRequest, "invalid base64 in body")
+				return
+			}
+			if uintptr(len(decoded)) != compSize {
+				writeError(rw, http.StatusBadRequest, fmt.Sprintf("dynamic component size mismatch: got %d bytes, expected %d", len(decoded), compSize))
+				return
+			}
+			writeBody = func(fw *Writer) {
+				SetIDPtr(fw, e, compID, unsafe.Pointer(&decoded[0]))
+			}
+		}
+
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(writeBody)
+		}()
+		writeMu.Unlock()
+
+		if panicVal != nil {
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		rw.WriteHeader(http.StatusOK)
+	}
+}
+
+func restDeleteComponent(w *World, writeMu *sync.Mutex) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		entityPath, _ := url.PathUnescape(r.PathValue("entity"))
+		componentPath, _ := url.PathUnescape(r.PathValue("component"))
+
+		var e ID
+		var entityFound bool
+		var compID ID
+		var compFound bool
+
+		w.Read(func(fr *Reader) {
+			e, compID, _, _, _, entityFound, compFound = resolveComponentPaths(fr, entityPath, componentPath)
+		})
+
+		if !entityFound {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+		if !compFound {
+			writeError(rw, http.StatusNotFound, "component not found")
+			return
+		}
+
+		var panicVal any
+		writeMu.Lock()
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Write(func(fw *Writer) {
+				fw.RemoveID(e, compID)
 			})
 		}()
 		writeMu.Unlock()

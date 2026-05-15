@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.89.0 — 2026-05-14 — Phase 16.34: REST component mutation endpoints
+
+Adds `PUT /component/{entity}/{component}` and `DELETE /component/{entity}/{component}` to
+the REST handler, enabling component set/add and remove over HTTP. Deliberately diverges
+from the C upstream `flecs_rest_put_component` / `flecs_rest_delete_component` (C encodes
+the component as a `?component=` query parameter; Go uses URL path segments and a JSON
+body). Pair encoding uses `~` as the separator (avoids URL-encoded parentheses).
+
+### API additions
+
+- **`PUT /component/{entity}/{component}`** — set or add a component on an entity. Handles
+  four component kinds based on the registered `TypeInfo`:
+  - **Tag** (`TypeInfo.Size == 0` or no `TypeInfo`): body must be empty (`400` if
+    non-empty). Calls `fw.AddID(e, id)`.
+  - **Typed data** (`TypeInfo.Type != nil`): body is JSON of the registered Go type.
+    Calls `fw.SetByID(e, id, v)`.
+  - **Typed pair** (pair ID with `TypeInfo.Type != nil`): body is JSON. Calls
+    `fw.SetPairByID(e, rel, tgt, v)`.
+  - **Dynamic** (`TypeInfo.Type == nil`, `TypeInfo.Size > 0`): body is a JSON string
+    containing base64 of exactly `TypeInfo.Size` bytes. Calls
+    `SetIDPtr(fw, e, id, ptr)`.
+  - Body cap: 1 MB via `http.MaxBytesReader`; over-size → `413 Request Entity Too Large`.
+- **`DELETE /component/{entity}/{component}`** — remove a component from an entity.
+  Calls `fw.RemoveID(e, id)`. Returns `200 OK` even when the entity did not hold the
+  component (idempotent, matching upstream `ecs_remove_id` silent-no-op behaviour).
+
+### Semantics
+
+- **Entity path**: dot-separated (`Reader.Lookup`), same convention as Phase 16.33.
+- **Component path**: plain entity name or `<rel>~<tgt>` for pairs. `~` is RFC 3986
+  unreserved; no percent-encoding needed.
+- **Pair encoding**: `~` separator (deliberate C divergence from URL-encoded parentheses).
+- **Idempotent DELETE**: `200 OK` when the component is absent (locked-in decision).
+- **Tag body**: must be empty; non-empty body → `400 Bad Request`.
+- **Body size cap**: 1 MB; over-size → `413 Request Entity Too Large`.
+- **Panic recovery**: both handlers wrap `w.Write` in a `recover()`; unexpected panics
+  map to `503 Service Unavailable`.
+- **Concurrency**: shared `sync.Mutex` (same as Phase 16.33) serialises concurrent
+  `w.Write` calls.
+
+### Test coverage
+
+17 test functions in `rest_component_test.go` cover: typed data PUT (valid, malformed
+JSON, wrong shape), tag PUT (empty body, non-empty body), dynamic PUT (valid base64,
+wrong-size base64), tag pair PUT, typed pair PUT, entity-not-found (404), component-
+not-found (404), body-too-large (413), DELETE existing, DELETE absent (200 idempotent),
+DELETE entity-not-found (404), DELETE component-not-found (404), concurrent PUT + DELETE
+under `-race`, and 503 panic-recovery paths for both handlers.
+Per-function coverage: `restPutComponent` 100%, `restDeleteComponent` 100%;
+overall package coverage ≥ 95%.
+
+---
+
 ## v0.88.0 — 2026-05-14 — Phase 16.33: REST entity mutation endpoints
 
 Adds `PUT /entity` and `DELETE /entity/{path...}` to the REST handler, enabling entity

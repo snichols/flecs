@@ -830,6 +830,94 @@ fmt.Println(res.StatusCode) // 200
 
 ---
 
+## PUT /component/{entity}/{component}
+
+Sets or adds a component on an entity. The `{entity}` segment is a dot-separated path
+resolved via `Reader.Lookup`; the `{component}` segment is either a plain entity name or a
+tilde-separated pair `<rel>~<tgt>` (see [Pair encoding](#pair-encoding) below).
+
+> **Path-separator and encoding divergence from C upstream.** C flecs encodes the
+> component as a `?component=` query parameter (parsed by `flecs_id_parse`) and the value
+> as `?value=`. Go flecs uses URL path segments (consistent with
+> `DELETE /entity/{path...}` from Phase 16.33), a JSON request body, and `~` for pairs.
+> All three divergences are deliberate and documented here.
+
+```
+PUT /component/{entity}/{component}
+→ 200 OK              empty body on success
+→ 400 Bad Request     malformed JSON body; non-empty body on tag component; wrong size on dynamic
+→ 404 Not Found       entity path or component path does not resolve
+→ 413 Request Entity Too Large   body exceeds 1 MB
+→ 503 Service Unavailable        unexpected internal panic
+```
+
+### Component kinds
+
+| Kind | Detection | Body | Write call |
+|---|---|---|---|
+| Tag | no `TypeInfo` OR `TypeInfo.Size == 0` | **must be empty** (`400` if non-empty) | `fw.AddID(e, id)` |
+| Typed data | `TypeInfo.Type != nil` | JSON of the registered Go type | `fw.SetByID(e, id, v)` |
+| Typed pair | `TypeInfo.Type != nil` on pair ID | JSON of the registered Go type | `fw.SetPairByID(e, rel, tgt, v)` |
+| Dynamic | `TypeInfo.Type == nil`, `TypeInfo.Size > 0` | JSON string of base64 of exactly `TypeInfo.Size` bytes | `SetIDPtr(fw, e, id, ptr)` |
+
+### Pair encoding
+
+Use `~` (tilde) as the separator between the relationship and target paths:
+
+```
+PUT /component/myentity/ChildOf~parent     # tag pair
+PUT /component/myentity/HasData~slot1      # typed pair (if registered)
+```
+
+Tilde is unreserved in RFC 3986 (no percent-encoding needed) and is not valid in Flecs
+entity names. Resolution splits on the first `~`; each side is resolved separately via
+`Reader.Lookup`. `404` if either side fails to resolve.
+
+### Curl
+
+```
+# Add a typed component
+curl -X PUT http://localhost:8080/component/hero/Position \
+     -d '{"X":10.0,"Y":20.0}'
+
+# Add a tag
+curl -X PUT http://localhost:8080/component/hero/Warrior
+
+# Add a dynamic component (base64 of 4 bytes)
+curl -X PUT http://localhost:8080/component/hero/Dyn4 \
+     -d '"AAAAAA=="'
+
+# Add a tag pair
+curl -X PUT http://localhost:8080/component/hero/ChildOf~village
+```
+
+---
+
+## DELETE /component/{entity}/{component}
+
+Removes a component from an entity. Resolves both paths and calls `fw.RemoveID(e, id)`.
+
+> **Idempotent.** Removing a component the entity does not hold returns `200 OK` (matching
+> the upstream C `ecs_remove_id` silent-no-op behaviour). This is a locked-in decision.
+
+> **Pair encoding.** Same `~` separator as `PUT /component` — see above.
+
+```
+DELETE /component/{entity}/{component}
+→ 200 OK              always when both paths resolve (idempotent)
+→ 404 Not Found       entity path or component path does not resolve
+→ 503 Service Unavailable   unexpected internal panic
+```
+
+### Curl
+
+```
+curl -X DELETE http://localhost:8080/component/hero/Position
+curl -X DELETE http://localhost:8080/component/hero/ChildOf~village
+```
+
+---
+
 ## Error responses
 
 All error responses use JSON with an `"error"` field:
@@ -864,13 +952,19 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Component mutation endpoints
 
-> **Not yet ported in Go flecs.** C flecs exposes `GET /component/<path>?component=X`
-> (read one component value), `PUT /component/<path>?component=X[&value=V]` (add or set
-> a component value), and `DELETE /component/<path>?component=X` (remove a component).
-> Mutation requires the reflection API; value serialization requires `ecs_ptr_to_json` /
-> `ecs_ptr_from_json` which depend on the meta module.
+> **Partially ported in Go flecs (v0.89.0).** `PUT /component/{entity}/{component}` (set
+> or add a component value) and `DELETE /component/{entity}/{component}` (remove a
+> component) are now implemented — see [`## PUT /component/{entity}/{component}`](#put-componententitycomponent)
+> and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent)
+> above. Go flecs deliberately diverges from C upstream: path-segment encoding (consistent
+> with `DELETE /entity/{path...}`), JSON body (not `?value=` query parameter), and `~` as
+> the pair separator (avoids URL-encoded parentheses). All three divergences are documented
+> in the PUT section above.
 >
-> Go workaround: use `flecs.Get[T]`, `flecs.Set[T]`, `flecs.Remove[T]` directly.
+> Not yet ported: `GET /component/<path>?component=X` (read one component value) — requires
+> `ecs_ptr_to_json` / value-encoding support not yet ported to Go flecs.
+>
+> Go workaround for reads: use `flecs.Get[T]` directly.
 
 ### Toggle endpoint
 
@@ -950,7 +1044,7 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 - **Query execution endpoint** (`GET /query?expr=`) — requires FlecsQueryLanguage DSL; not ported to Go flecs.
 - **Entity mutation endpoints** (`PUT /entity`, `DELETE /entity/{path...}`) — ✅ shipped in v0.88.0. See [`## PUT /entity`](#put-entity) and [`## DELETE /entity/{path...}`](#delete-entitypath).
-- **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — require reflection/meta module; not ported.
+- **Component mutation endpoints** (`PUT /component`, `DELETE /component`) — ✅ mutation shipped in v0.89.0. See [`## PUT /component/{entity}/{component}`](#put-componententitycomponent) and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent). `GET /component` (value read) not yet ported.
 - **Toggle endpoint** (`PUT /toggle`) — requires entity disabling (`Disabled` tag) and `CanToggle` trait; not ported.
 - **Multi-period aggregated stats (FlecsStats module)** — single-frame `GET /stats/world` and `GET /stats/pipeline` shipped in v0.86.0; multi-period aggregation (`?period=`) and the FlecsStats module are still not ported.
 - **Type-info / reflection endpoint** (`GET /type_info/{path}`) — depth-1 `reflect` walk shipped in v0.87.0; depth-N recursion, primitive-type annotations, and full meta-cursor parity not yet ported.
