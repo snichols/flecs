@@ -18,3 +18,7 @@ Fixed stale reference on docs/README.md line 109: updated "Join-order optimizati
 
 Added non-fragmenting parent storage row to root README.md feature table (line 218), citing SetParentStorage, IsParentStorage, v0.102.0, and O(1) reparenting — the sole gap flagged by the verify gate.
 
+## iterate iteration 6 (2026-05-15)
+
+Boosted main package coverage to 95.0% (requirement ≥95%). Added 10 targeted test functions covering: Reader/free HasID+OwnsID PS branches, observer table logger paths, EventKind.String, GetRef/GetPairRef nil paths, diamond-IsA cycle detection (getViaIsAByID seen-map), deferred SetPair zero-size, deferred RemoveID dead-entity, IsA cache invalidation via PS removeParentStoragePair, two-PS-rel migrateArchetypeOnly savedParents restore, and firstParentVia no-table/no-marker traversal. All tests pass -race -count=3. Pushed to snichols/issue-277.
+
