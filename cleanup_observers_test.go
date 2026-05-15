@@ -749,3 +749,48 @@ func TestOnDelete_BeforeTableReclamation(t *testing.T) {
 		t.Fatalf("OnTableDelete never fired; events: %v", order)
 	}
 }
+
+// ── WithRelationship + AndQuery coverage ─────────────────────────────────────
+
+func TestWithRelationship_PanicOnZero(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic from WithRelationship(0)")
+		}
+	}()
+	flecs.WithRelationship(0)
+}
+
+func TestOnDeleteTarget_AndQuery(t *testing.T) {
+	// WithRelationship(rel).AndQuery(With(posID)) — combines both filters.
+	// Observer should fire only for dependents that have coPos AND are under rel cascade.
+	w := flecs.New()
+
+	var rel, target, depWithPos, depNoPos flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		target = fw.NewEntity()
+		depWithPos = fw.NewEntity()
+		depNoPos = fw.NewEntity()
+	})
+	flecs.SetCleanupPolicy(w, rel, w.OnDeleteTarget(), w.DeleteAction())
+	posID := flecs.RegisterComponent[coPos](w)
+	w.Write(func(fw *flecs.Writer) {
+		fw.AddID(depWithPos, flecs.MakePair(rel, target))
+		flecs.Set(fw, depWithPos, coPos{X: 1})
+		fw.AddID(depNoPos, flecs.MakePair(rel, target))
+		// depNoPos has no coPos
+	})
+
+	var fired []flecs.ID
+	opts := flecs.WithRelationship(rel).AndQuery(flecs.With(posID))
+	flecs.OnDeleteTargetWithOptions(w, opts, func(_ *flecs.Reader, _ flecs.ID, dep flecs.ID, _ flecs.ID) {
+		fired = append(fired, dep)
+	})
+
+	w.Delete(target)
+
+	if len(fired) != 1 || fired[0] != depWithPos {
+		t.Fatalf("want only depWithPos; got %v", fired)
+	}
+}

@@ -283,11 +283,9 @@ w.Write(func(fw *flecs.Writer) {
 })
 ```
 
-### No Dedicated OnDelete / OnDeleteTarget Observer Events
+### OnDelete and OnDeleteTarget Observer Events
 
-There are no `OnDelete` or `OnDeleteTarget` observer events in either upstream C flecs or Go flecs. Those identifiers exist only as **cleanup-policy relationship traits** — they govern what happens to entities when a component entity or pair target is deleted, not as event kinds that observers can subscribe to.
-
-To react when an entity is deleted, subscribe to `EventOnRemove`. `EventOnRemove` fires before each component is removed from an entity, including during entity deletion. From upstream's own documentation (`ObserversManual.md:2273`): *"When a parent and its children are deleted, `OnRemove` observers will be invoked for children first."* The `observer.go:17` comment is explicit: *"EventOnRemove fires before a component is removed from an entity, including on entity deletion."*
+✅ **Shipped in v0.103.0.** Go flecs provides `EventOnDelete` and `EventOnDeleteTarget` as first-class observer event entities. See [OnDelete and OnDeleteTarget Events](#on-delete-and-on-delete-target) for the full API, dispatch ordering, and examples.
 
 Cleanup policies (what to do when a component entity or relationship target is deleted) are a separate concern; see [ComponentTraits.md § Cleanup traits (OnDelete / OnDeleteTarget)](ComponentTraits.md#cleanup-traits-ondelete--ondeletetarget).
 
@@ -1053,9 +1051,7 @@ The following features from C flecs are not yet available in the Go port. They a
 
 ### OnDelete / OnDeleteTarget Events
 
-C flecs fires `OnDelete` when a component entity itself is deleted, and `OnDeleteTarget` when a pair target is deleted. Neither event exists in Go flecs.
-
-**Workaround**: Manually call cleanup code before deleting component entities.
+✅ **Shipped in v0.103.0.** Go flecs now fires `EventOnDelete` when an entity is deleted and `EventOnDeleteTarget` when a pair target is deleted. See [OnDelete and OnDeleteTarget Events](#on-delete-and-on-delete-target) for the full API.
 
 ### OnTableDelete {#on-table-delete}
 
