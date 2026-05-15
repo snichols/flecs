@@ -6,3 +6,7 @@ Phase 16.47 Parent Hierarchy Storage complete: 17 files, 31 tests pass -race -co
 
 Created docs/ParentStorage.md; renamed all parent_storage_test.go functions to exact required names; added 13 missing tests + BenchmarkParentStorage_Reparent_FullArchetype; fixed cleanup.go (policyOnDeleteTargetRemove bit) and world.go deleteImmediate so parent-storage PanicAction and RemoveAction work correctly. All tests pass -race -count=3.
 
+## iterate iteration 3 (2026-05-15)
+
+Added ParentStorage trait section to docs/Relationships.md — new subsection under "Relationship traits" (between PairIsTag and Relationship performance) describing SetParentStorage/IsParentStorage as a relationship-level option for non-fragmenting hierarchy storage. Includes ToC entry, API example, query/observer/cleanup/snapshot behavior notes, and a when-to-use comparison table. This was the sole gap flagged by the verify gate.
+
