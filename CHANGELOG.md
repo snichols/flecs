@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.99.0 — 2026-05-15 — Phase 16.44: Join-order optimizer
+
+Adds a pure-performance join-order optimizer for multi-variable queries. At construction time
+the optimizer picks the root variable with the smallest estimated domain as the outermost
+(driver) join loop, mirroring the variable-reorder loop in
+`flecs/src/query/compiler/compiler.c:1002-1021`.
+
+### New API
+
+| Function / Method | Description |
+|---|---|
+| `(*Query).DriverVariable() string` | Returns the name of the chosen driver variable (`""` for non-variable queries) |
+| `(*Query).VariableOrder() []string` | Full variable evaluation order, driver first (`nil` for non-variable queries) |
+| `(*CachedQuery).DriverVariable() string` | Same for cached queries |
+| `(*CachedQuery).VariableOrder() []string` | Same for cached queries |
+
+### Optimizer semantics
+
+- **Typed-component variable** (`WithVar(C, "$X")`): domain ≈ `compIndex.Count(C)` tables; or sparse-set dense-slice length for Sparse/DontFragment components.
+- **Pair-target variable** (`WithPairTgtVar(R, "$X")` on `$this`): distinct targets across up to **256 sampled tables** (conservative lower bound; documented cap).
+- **Fixed-source pair target** (`With(R).Source(e).TgtVar("$X")`): domain = 1.
+- **Variable-source pair target**: domain = ∞ (cannot estimate statically).
+- **Free variable** (no constraining terms): domain = ∞ (pushed innermost).
+- Only **root variables** (in-degree 0 in the topo-sort dependency graph) are driver candidates; dependency order is preserved.
+- Falls back to first-defined-wins when no domain estimate is available.
+
+### Correctness guarantee
+
+The optimizer changes loop order only, never result correctness. Existing queries produce
+bit-for-bit identical result sets (set-equivalence; row order may differ when driver changes).
+
 ## v0.98.0 — 2026-05-15 — Phase 16.43: OnTableEmpty / OnTableFill events
 
 Adds two new built-in observer events for archetype table population transitions.

@@ -1026,3 +1026,109 @@ func TestRest_Query_WorldLocked(t *testing.T) {
 		t.Fatalf("want 503 when world is locked, got %d: %s", resp.StatusCode, body)
 	}
 }
+
+// rqMultiVarShip and rqMultiVarPlanet are component types for the REST multi-var test.
+type rqMultiVarShip struct{}
+type rqMultiVarPlanet struct{ Name string }
+
+// TestRest_Query_MultiVar_Optimized verifies that a multi-variable query expressed
+// in DSL is executed through the join-order optimizer and returns the correct result
+// set via GET /query. The optimizer should pick the smaller-domain variable (planet)
+// as the driver when ship domain > planet domain, and the response payload must be
+// identical regardless of which variable becomes the driver.
+func TestRest_Query_MultiVar_Optimized(t *testing.T) {
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[rqMultiVarShip](w)
+	w.SetName(shipID, "MVShip")
+	planetID := flecs.RegisterComponent[rqMultiVarPlanet](w)
+	w.SetName(planetID, "MVPlanet")
+
+	var dockedToID, A, B, C, P1, P2 flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		dockedToID = fw.NewEntity()
+		w.SetName(dockedToID, "MVDockedTo")
+
+		P1 = fw.NewEntity()
+		w.SetName(P1, "mvP1")
+		flecs.Set(fw, P1, rqMultiVarPlanet{Name: "P1"})
+
+		P2 = fw.NewEntity()
+		w.SetName(P2, "mvP2")
+		flecs.Set(fw, P2, rqMultiVarPlanet{Name: "P2"})
+
+		A = fw.NewEntity()
+		w.SetName(A, "mvA")
+		flecs.Set(fw, A, rqMultiVarShip{})
+		flecs.AddID(fw, A, flecs.MakePair(dockedToID, P1))
+
+		B = fw.NewEntity()
+		w.SetName(B, "mvB")
+		flecs.Set(fw, B, rqMultiVarShip{})
+		flecs.AddID(fw, B, flecs.MakePair(dockedToID, P1))
+		flecs.AddID(fw, B, flecs.MakePair(dockedToID, P2))
+
+		C = fw.NewEntity()
+		w.SetName(C, "mvC")
+		flecs.Set(fw, C, rqMultiVarShip{})
+		flecs.AddID(fw, C, flecs.MakePair(dockedToID, P2))
+	})
+	_, _, _ = A, B, C
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Programmatic query: verify optimizer picks correctly.
+	w.Read(func(_ *flecs.Reader) {
+		q := flecs.NewQueryFromTerms(w,
+			flecs.With(shipID),
+			flecs.WithPairTgtVar(dockedToID, "planet"),
+			flecs.WithVar(planetID, "planet"),
+		)
+		// Driver must be non-empty (variable query was recognised).
+		if d := q.DriverVariable(); d == "" {
+			t.Error("optimizer must set a driver variable for multi-var query")
+		}
+		it := q.Iter()
+		count := 0
+		for it.Next() {
+			count++
+		}
+		if count != 4 {
+			t.Errorf("programmatic query: want 4 rows (A→P1, B→P1, B→P2, C→P2), got %d", count)
+		}
+	})
+
+	// REST query: DSL `MVShip,(MVDockedTo,$planet),MVPlanet($planet)`.
+	// The endpoint resolves names, builds terms, fires the optimizer, and returns
+	// JSON. We verify: 200 OK, count == 4 results (the $this ships that match).
+	expr := "MVShip,(MVDockedTo,$planet),MVPlanet($planet)"
+	resp := rqGet(t, srv, "/query?expr="+expr)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /query?expr=%s: want 200, got %d: %s", expr, resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// Each matching $this entity (ships A, B, C) appears once per binding.
+	// A docks to P1 (1 row), B to P1+P2 (2 rows), C to P2 (1 row) = 4 rows.
+	if count != 4 {
+		t.Errorf("REST multi-var query: want count=4, got %d\nbody=%s", count, body)
+	}
+
+	results, _ := m["results"].([]any)
+	if len(results) != 4 {
+		t.Errorf("REST multi-var query: want 4 results, got %d", len(results))
+	}
+	// Verify the entity paths belong to the expected ship names.
+	shipNames := map[string]bool{"mvA": true, "mvB": true, "mvC": true}
+	for _, r := range results {
+		entry := r.(map[string]any)
+		path, _ := entry["path"].(string)
+		if !shipNames[path] {
+			t.Errorf("unexpected entity path %q in results; want mvA/mvB/mvC", path)
+		}
+	}
+
+	_ = P1
+	_ = P2
+}

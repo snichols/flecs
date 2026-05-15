@@ -295,7 +295,7 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Parallel system dispatch | ✅ (`SetParallel`, `SetWriteSet`, `SetWorkerCount`; per-phase disjoint write-set batching) | ✅ |
 | Multi-threaded system dispatch | ✅ (`SetMultiThreaded`; within-system row-range split across all workers; in-place updates scale linearly; deferred mutations serialize on shared queue until Phase 11.0) | ✅ |
 | REST API addon (minimal) | ✅ (`NewRESTHandler`, read-only inspection + snapshot) | ✅ |
-| Query variables ($Var) | ✅ multi-variable (`WithVar`, `WithPairTgtVar`, `SrcVar`, `TgtVar`, `Var`; 16-variable cap; join-order optimization Phase 16.27) | ✅ |
+| Query variables ($Var) | ✅ multi-variable (`WithVar`, `WithPairTgtVar`, `SrcVar`, `TgtVar`, `Var`; 16-variable cap; join-order optimizer v0.99.0 / Phase 16.44) | ✅ |
 | Table-graph traversal queries | ❌ deferred | ✅ |
 
 See [ROADMAP.md](ROADMAP.md) for the full list of deferred work.
