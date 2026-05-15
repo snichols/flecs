@@ -10,3 +10,7 @@ Created docs/ParentStorage.md; renamed all parent_storage_test.go functions to e
 
 Added ParentStorage trait section to docs/Relationships.md — new subsection under "Relationship traits" (between PairIsTag and Relationship performance) describing SetParentStorage/IsParentStorage as a relationship-level option for non-fragmenting hierarchy storage. Includes ToC entry, API example, query/observer/cleanup/snapshot behavior notes, and a when-to-use comparison table. This was the sole gap flagged by the verify gate.
 
+## iterate iteration 4 (2026-05-15)
+
+Fixed stale reference on docs/README.md line 109: updated "Join-order optimization deferred to Phase 16.27" to "shipped in v0.99.0 (Phase 16.44)".
+
