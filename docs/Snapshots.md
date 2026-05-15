@@ -328,3 +328,13 @@ if err != nil {
     log.Printf("snapshot write interrupted after %d bytes: %v", n, err)
 }
 ```
+
+## Schema versioning and migration _(v0.112.0)_
+
+Binary snapshots carry a **schema version** that is matched against the world's
+declared schema version on restore. If the snapshot's version is older than the
+world's, a registered migration chain transforms the data before it is
+materialized — allowing old save files to be loaded without manual conversion.
+
+See [docs/SnapshotMigration.md](SnapshotMigration.md) for the full API reference,
+chain migration recipe, atomicity guarantee, and byte-rewrite examples.
