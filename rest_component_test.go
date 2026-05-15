@@ -531,3 +531,291 @@ func TestRESTPutDynamicBodyReadError(t *testing.T) {
 		t.Fatalf("PUT dynamic body read error: want 400, got %d; body: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestRest_GetComponent_Typed — entity has Position{X:1,Y:2}, GET returns {"X":1,"Y":2}.
+func TestRest_GetComponent_Typed(t *testing.T) {
+	w, e, srv := newComponentWorld(t)
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, rcPos{X: 1, Y: 2}) })
+
+	resp := restDo(t, srv, "GET", "/component/actor/Pos", "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET typed component: want 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type want application/json, got %q", ct)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control want no-store, got %q", cc)
+	}
+	var got rcPos
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal body: %v; body: %s", err, body)
+	}
+	if got.X != 1 || got.Y != 2 {
+		t.Errorf("GET typed: want {1 2}, got %+v", got)
+	}
+}
+
+// TestRest_GetComponent_PairComponent — entity has (Likes, Bob) with payload, GET via Likes~Bob.
+func TestRest_GetComponent_PairComponent(t *testing.T) {
+	w, e, srv := newComponentWorld(t)
+
+	var rel, tgt flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		rel = fw.NewEntity()
+		w.SetName(rel, "Likes")
+		tgt = fw.NewEntity()
+		w.SetName(tgt, "Bob")
+		fw.SetPairByID(e, rel, tgt, rcPairVal{N: 77})
+	})
+
+	resp := restDo(t, srv, "GET", "/component/actor/Likes~Bob", "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET pair component: want 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	var got rcPairVal
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal pair body: %v; body: %s", err, body)
+	}
+	if got.N != 77 {
+		t.Errorf("GET pair: want N=77, got N=%d", got.N)
+	}
+}
+
+// TestRest_GetComponent_Tag — zero-size component carried by entity, GET returns {} with 200.
+func TestRest_GetComponent_Tag(t *testing.T) {
+	w, e, srv := newComponentWorld(t)
+
+	var tagID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		tagID = fw.NewEntity()
+		w.SetName(tagID, "MyGetTag")
+		fw.AddID(e, tagID)
+	})
+	_ = tagID
+
+	resp := restDo(t, srv, "GET", "/component/actor/MyGetTag", "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET tag component: want 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed != "{}" {
+		t.Errorf("GET tag: want {}, got %q", trimmed)
+	}
+}
+
+// TestRest_GetComponent_Dynamic_Marshaler — registered marshaler output flows through.
+func TestRest_GetComponent_Dynamic_Marshaler(t *testing.T) {
+	w := flecs.New()
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		dynID := flecs.RegisterDynamicComponentWithMarshaler(fw, "DynM4", 4, 4,
+			func(ptr unsafe.Pointer) (json.RawMessage, error) {
+				b := *(*[4]byte)(ptr)
+				return json.Marshal(map[string]int{"sum": int(b[0]) + int(b[1]) + int(b[2]) + int(b[3])})
+			},
+			func(_ json.RawMessage, _ unsafe.Pointer) error { return nil },
+		)
+		w.SetName(dynID, "DynM4")
+		e = fw.NewEntity()
+		w.SetName(e, "actor")
+	})
+	_ = e
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Set the component bytes via PUT, then GET via custom marshaler path.
+	data := []byte{1, 2, 3, 4}
+	b64 := base64.StdEncoding.EncodeToString(data)
+	putBody, _ := json.Marshal(b64)
+	putResp := restDo(t, srv, "PUT", "/component/actor/DynM4", string(putBody))
+	readBody(t, putResp)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT: want 200, got %d", putResp.StatusCode)
+	}
+
+	resp := restDo(t, srv, "GET", "/component/actor/DynM4", "")
+	rb := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET dynamic marshaler: want 200, got %d; body: %s", resp.StatusCode, rb)
+	}
+	var got map[string]int
+	if err := json.Unmarshal(rb, &got); err != nil {
+		t.Fatalf("unmarshal dynamic marshaler body: %v; body: %s", err, rb)
+	}
+	if got["sum"] != 10 {
+		t.Errorf("GET dynamic marshaler: want sum=10, got sum=%d", got["sum"])
+	}
+}
+
+// TestRest_GetComponent_Dynamic_NoMarshaler — base64 of raw bytes returned as JSON string.
+func TestRest_GetComponent_Dynamic_NoMarshaler(t *testing.T) {
+	_, e, srv := newComponentWorld(t)
+
+	data := []byte{0xAA, 0xBB, 0xCC, 0xDD}
+	b64 := base64.StdEncoding.EncodeToString(data)
+	putBody, _ := json.Marshal(b64)
+
+	// Set the component via PUT so the bytes are stored.
+	putResp := restDo(t, srv, "PUT", "/component/actor/Dyn4", string(putBody))
+	readBody(t, putResp)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT: want 200, got %d", putResp.StatusCode)
+	}
+
+	resp := restDo(t, srv, "GET", "/component/actor/Dyn4", "")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET dynamic no-marshaler: want 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	var gotStr string
+	if err := json.Unmarshal(body, &gotStr); err != nil {
+		t.Fatalf("unmarshal dynamic body: %v; body: %s", err, body)
+	}
+	wantB64 := base64.StdEncoding.EncodeToString(data)
+	if gotStr != wantB64 {
+		t.Errorf("GET dynamic no-marshaler: want %q, got %q", wantB64, gotStr)
+	}
+	_ = e
+}
+
+// TestRest_GetComponent_EntityMissing — entity path unresolved → 404.
+func TestRest_GetComponent_EntityMissing(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	resp := restDo(t, srv, "GET", "/component/nosuchentity/Pos", "")
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET entity missing: want 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestRest_GetComponent_ComponentNotRegistered — component path unresolved → 404.
+func TestRest_GetComponent_ComponentNotRegistered(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	resp := restDo(t, srv, "GET", "/component/actor/NoSuchComp", "")
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET component not registered: want 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestRest_GetComponent_EntityLacksComponent — entity + component both exist, but entity doesn't carry it → 404.
+func TestRest_GetComponent_EntityLacksComponent(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	// actor exists, Vel is registered, but actor has no Vel component.
+	resp := restDo(t, srv, "GET", "/component/actor/Vel", "")
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET entity lacks component: want 404, got %d", resp.StatusCode)
+	}
+}
+
+// TestRest_GetComponent_MalformedPath — path with invalid percent encoding → 400.
+func TestRest_GetComponent_MalformedPath(t *testing.T) {
+	w := flecs.New()
+	handler := flecs.NewRESTHandler(w)
+	// %25ZZ in the URL: %25 decodes to '%', so PathValue receives "%ZZ".
+	// url.PathUnescape("%ZZ") fails (Z is not a valid hex digit) → 400.
+	req := httptest.NewRequest("GET", "/component/%25ZZ/Pos", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("GET malformed path: want 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRest_GetComponent_BadMethod — non-GET/PUT/DELETE verb on component route → 405.
+func TestRest_GetComponent_BadMethod(t *testing.T) {
+	_, _, srv := newComponentWorld(t)
+
+	resp := restDo(t, srv, "POST", "/component/actor/Pos", "")
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET bad method: want 405, got %d", resp.StatusCode)
+	}
+}
+
+// TestRest_GetComponent_ConcurrentReadsDuringWrite — race test: many concurrent GETs
+// while a goroutine drives PUT/DELETE; no data races, every GET returns a valid status.
+func TestRest_GetComponent_ConcurrentReadsDuringWrite(t *testing.T) {
+	w, e, srv := newComponentWorld(t)
+	w.Write(func(fw *flecs.Writer) { flecs.Set(fw, e, rcPos{X: 0, Y: 0}) })
+
+	const readers = 20
+	const writes = 10
+	var wg sync.WaitGroup
+	wg.Add(readers + writes)
+
+	for range readers {
+		go func() {
+			defer wg.Done()
+			resp := restDo(t, srv, "GET", "/component/actor/Pos", "")
+			body := readBody(t, resp)
+			sc := resp.StatusCode
+			if sc != http.StatusOK && sc != http.StatusNotFound {
+				t.Errorf("concurrent GET: unexpected status %d; body: %s", sc, body)
+			}
+		}()
+	}
+	for i := range writes {
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				r := restDo(t, srv, "PUT", "/component/actor/Pos", `{"X":1,"Y":1}`)
+				readBody(t, r)
+			} else {
+				r := restDo(t, srv, "DELETE", "/component/actor/Pos", "")
+				readBody(t, r)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestRest_GetComponent_DuringTeardown — 503 when world has exclusive access from another goroutine.
+func TestRest_GetComponent_DuringTeardown(t *testing.T) {
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rcPos](w)
+	w.SetName(posID, "Pos")
+
+	var e flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		e = fw.NewEntity()
+		w.SetName(e, "actor")
+		flecs.Set(fw, e, rcPos{X: 1, Y: 2})
+	})
+	_ = e
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	defer srv.Close()
+
+	// Claim exclusive access from the test goroutine so the HTTP handler goroutine
+	// (a different goroutine) triggers the exclusive-access panic → 503.
+	w.ExclusiveAccessBegin("teardown")
+	defer w.ExclusiveAccessEnd(false)
+
+	resp := restDo(t, srv, "GET", "/component/actor/Pos", "")
+	readBody(t, resp)
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET during teardown: want 503, got %d", resp.StatusCode)
+	}
+}
