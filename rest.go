@@ -48,6 +48,7 @@ import (
 //	GET /type_info/{path}                    — reflection schema for a named component (200, 404)
 //	PUT /entity                              — create or claim entity; JSON body {id?,name?,parent?} (200, 400, 404, 409, 503)
 //	DELETE /entity/{path...}                 — delete entity by dot-separated path (200, 400, 404, 503)
+//	GET /component/{entity}/{component}      — read live component value as JSON; Cache-Control: no-store (200, 400, 404, 405, 503)
 //	PUT /component/{entity}/{component}      — set or add a component on an entity; body is JSON (200, 400, 404, 413, 503)
 //	DELETE /component/{entity}/{component}   — remove a component from an entity (200, 404, 503)
 //	PUT /toggle/{entity}                     — toggle Disabled tag; ?enabled=true/false/omit-to-flip (200, 400, 404, 503)
@@ -69,6 +70,7 @@ func NewRESTHandler(w *World) http.Handler {
 	var writeMu sync.Mutex
 	mux.HandleFunc("PUT /entity", restPutEntity(w, &writeMu))
 	mux.HandleFunc("DELETE /entity/{path...}", restDeleteEntity(w, &writeMu))
+	mux.HandleFunc("GET /component/{entity}/{component}", restGetComponent(w))
 	mux.HandleFunc("PUT /component/{entity}/{component}", restPutComponent(w, &writeMu))
 	mux.HandleFunc("DELETE /component/{entity}/{component}", restDeleteComponent(w, &writeMu))
 	mux.HandleFunc("PUT /toggle/{entity}", restPutToggle(w, &writeMu))
@@ -764,6 +766,97 @@ func restDeleteComponent(w *World, writeMu *sync.Mutex) http.HandlerFunc {
 			return
 		}
 		rw.WriteHeader(http.StatusOK)
+	}
+}
+
+func restGetComponent(w *World) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		entityPath, err := url.PathUnescape(r.PathValue("entity"))
+		if err != nil {
+			writeError(rw, http.StatusBadRequest, "malformed entity path")
+			return
+		}
+		componentPath, err := url.PathUnescape(r.PathValue("component"))
+		if err != nil {
+			writeError(rw, http.StatusBadRequest, "malformed component path")
+			return
+		}
+
+		var (
+			entityFound bool
+			compFound   bool
+			hasComp     bool
+			rawBody     json.RawMessage
+			readErr     error
+		)
+
+		var panicVal any
+		func() {
+			defer func() { panicVal = recover() }()
+			w.Read(func(fr *Reader) {
+				e, compID, _, _, _, ef, cf := resolveComponentPaths(fr, entityPath, componentPath)
+				entityFound, compFound = ef, cf
+				if !ef || !cf {
+					return
+				}
+				if !fr.HasID(e, compID) {
+					return
+				}
+				hasComp = true
+
+				ti, hasInfo := w.registry.LookupByID(compID)
+				if !hasInfo || ti.Size == 0 {
+					rawBody = json.RawMessage("{}")
+					return
+				}
+				if ti.Type == nil {
+					// Dynamic component
+					ptr := GetIDPtr(fr, e, compID)
+					if ptr == nil {
+						return
+					}
+					if hooks, ok := w.dynamicMarshalers[compID]; ok {
+						rawBody, readErr = hooks.marshal(ptr)
+					} else {
+						b64 := base64.StdEncoding.EncodeToString(unsafe.Slice((*byte)(ptr), ti.Size))
+						rawBody, readErr = json.Marshal(b64)
+					}
+					return
+				}
+				// Typed component
+				v, ok := fr.GetByID(e, compID)
+				if !ok {
+					return
+				}
+				rawBody, readErr = json.Marshal(v)
+			})
+		}()
+
+		if panicVal != nil {
+			writeError(rw, http.StatusServiceUnavailable, "world unavailable")
+			return
+		}
+		if !entityFound {
+			writeError(rw, http.StatusNotFound, "entity not found")
+			return
+		}
+		if !compFound {
+			writeError(rw, http.StatusNotFound, "component not found")
+			return
+		}
+		if !hasComp {
+			writeError(rw, http.StatusNotFound, "entity does not have component")
+			return
+		}
+		if readErr != nil {
+			writeError(rw, http.StatusInternalServerError, "failed to marshal component")
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Header().Set("Cache-Control", "no-store")
+		rw.WriteHeader(http.StatusOK)
+		_, _ = rw.Write(rawBody)
+		_, _ = rw.Write([]byte("\n"))
 	}
 }
 

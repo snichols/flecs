@@ -893,6 +893,55 @@ curl -X PUT http://localhost:8080/component/hero/ChildOf~village
 
 ---
 
+## GET /component/{entity}/{component}
+
+Reads the live value of a component on an entity and returns it as JSON. Mirrors
+`MarshalJSON`'s per-component serialization rules so that snapshot reads and single-component
+reads stay byte-for-byte consistent.
+
+> **Pair encoding.** Same `~` separator as `PUT /component` — see above.
+
+```
+GET /component/{entity}/{component}
+→ 200 OK  application/json  Cache-Control: no-store
+→ 400 Bad Request          malformed path (invalid percent-encoding in path segment)
+→ 404 Not Found            entity path unresolved, component path unresolved,
+                           or entity does not carry the component
+→ 405 Method Not Allowed   verb other than GET, PUT, or DELETE on this route
+→ 503 Service Unavailable  unexpected internal panic
+```
+
+### Response shape per component kind
+
+| Kind | Detection | Response body |
+|---|---|---|
+| Tag | no `TypeInfo` OR `TypeInfo.Size == 0` | `{}` |
+| Typed data / typed pair | `TypeInfo.Type != nil` | `json.Marshal(value)` of the registered Go type |
+| Dynamic with marshaler | `TypeInfo.Type == nil`, marshaler registered | marshaler output (arbitrary JSON) |
+| Dynamic (no marshaler) | `TypeInfo.Type == nil`, no marshaler | JSON string of base64-encoded raw bytes |
+
+### Curl
+
+```
+# Read a typed component
+curl http://localhost:8080/component/hero/Position
+# → {"X":10.0,"Y":20.0}
+
+# Read a tag (zero-size component)
+curl http://localhost:8080/component/hero/Warrior
+# → {}
+
+# Read a dynamic component (returns base64 JSON string)
+curl http://localhost:8080/component/hero/Dyn4
+# → "AAAAAA=="
+
+# Read a typed pair
+curl http://localhost:8080/component/hero/Likes~Village
+# → {"N":42}
+```
+
+---
+
 ## DELETE /component/{entity}/{component}
 
 Removes a component from an entity. Resolves both paths and calls `fw.RemoveID(e, id)`.
@@ -952,19 +1001,18 @@ flecs. Each callout below explains what the C endpoint does and why it is absent
 
 ### Component mutation endpoints
 
-> **Partially ported in Go flecs (v0.89.0).** `PUT /component/{entity}/{component}` (set
-> or add a component value) and `DELETE /component/{entity}/{component}` (remove a
-> component) are now implemented — see [`## PUT /component/{entity}/{component}`](#put-componententitycomponent)
+> **Fully ported in Go flecs (v0.92.0).** The complete component-mutation arc is now
+> implemented:
+> - `PUT /component/{entity}/{component}` (set or add) — v0.89.0
+> - `DELETE /component/{entity}/{component}` (remove) — v0.89.0
+> - `GET /component/{entity}/{component}` (read live value) — v0.92.0 (this phase)
+>
+> See [`## GET /component/{entity}/{component}`](#get-componententitycomponent),
+> [`## PUT /component/{entity}/{component}`](#put-componententitycomponent),
 > and [`## DELETE /component/{entity}/{component}`](#delete-componententitycomponent)
-> above. Go flecs deliberately diverges from C upstream: path-segment encoding (consistent
-> with `DELETE /entity/{path...}`), JSON body (not `?value=` query parameter), and `~` as
-> the pair separator (avoids URL-encoded parentheses). All three divergences are documented
-> in the PUT section above.
->
-> Not yet ported: `GET /component/<path>?component=X` (read one component value) — requires
-> `ecs_ptr_to_json` / value-encoding support not yet ported to Go flecs.
->
-> Go workaround for reads: use `flecs.Get[T]` directly.
+> above. Go flecs deliberately diverges from C upstream: path-segment encoding, JSON body
+> (not `?value=` query parameter), and `~` as the pair separator. All divergences are
+> documented in the PUT section above.
 
 ### Toggle endpoint
 

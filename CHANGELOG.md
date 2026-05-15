@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.92.0 — 2026-05-15 — Phase 16.37: REST GET /component (read live component value)
+
+Completes the REST component-mutation arc by adding the read side:
+`GET /component/{entity}/{component}` returns the live value of a single component on a
+single entity as JSON, mirroring `MarshalJSON`'s per-component serialization rules.
+
+### API additions
+
+- **`GET /component/{entity}/{component}`** — read a component's live value.
+  - `200 OK` with `Content-Type: application/json` and `Cache-Control: no-store`.
+  - Tag (zero-size): `{}`.
+  - Typed component or typed pair: `json.Marshal(value)`.
+  - Dynamic with registered marshaler: marshaler output.
+  - Dynamic without marshaler: JSON string of base64-encoded raw bytes.
+  - `400` on malformed path (invalid percent-encoding in path segment).
+  - `404` if entity unresolved, component unresolved, or entity does not carry the component.
+  - `405` on any verb other than GET, PUT, or DELETE.
+  - `503` on unexpected internal panic (mirrors PUT/DELETE).
+
+### Implementation
+
+- New `restGetComponent(w *World) http.HandlerFunc` in `rest.go`; registered via `mux.HandleFunc("GET /component/{entity}/{component}", ...)`.
+- Uses `w.Read` (no `writeMu`); pair encoding reuses `resolveComponentPaths` (Phase 16.34).
+- Serialization mirrors `marshal.go` paths verbatim for typed, dynamic-with-marshaler, and dynamic-without-marshaler components.
+
+### Tests
+
+12 new tests in `rest_component_test.go`: typed, pair, tag, dynamic marshaler, dynamic no-marshaler, entity missing, component not registered, entity lacks component, malformed path, bad method, concurrent reads during write (race), and during teardown (503).
+
+### Documentation updates
+
+- `docs/FlecsRemoteApi.md` — new `## GET /component/{entity}/{component}` section; updated "Component mutation endpoints" callout from partial to fully ported.
+- `docs/README.md` — updated REST gaps line to reflect v0.92.0 value-read landing.
+- `ROADMAP.md` — bumped "Shipped (through v0.92.0)"; added Phase 16.37 entry.
+- `README.md` — updated REST feature row.
+
 ## v0.91.0 — 2026-05-15 — Phase 16.36: Timer addon (entity-based Timer + RateFilter)
 
 Adds the Timer addon: entity-based `Timer` and `RateFilter` components that drive shared system tick rates via `(*System).SetTickSource(e)`.
