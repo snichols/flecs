@@ -101,10 +101,17 @@ func restQuery(w *World) http.HandlerFunc {
 					return
 				}
 
-				q := NewQueryFromTerms(w, terms...)
-				it := q.Iter()
+				// Build one or more execution sets.
+				// When no TermAnd anchor is present the engine panics, so we either
+				// split OR groups into per-member sub-queries (unioned by entity ID)
+				// or prepend the built-in Name component as a synthetic anchor for
+				// pure-predicate queries ($this == e, $this ~ pattern).
+				execSets := restBuildExecSets(w, terms)
+				needDedup := len(execSets) > 1
 
 				// Collect field-capable term IDs (TermAnd only, non-wildcard).
+				// Field specs are derived from the original terms so synthetic
+				// anchors added by restBuildExecSets are never exposed as fields.
 				type fieldSpec struct {
 					id  ID
 					key string
@@ -141,34 +148,48 @@ func restQuery(w *World) http.HandlerFunc {
 				}
 
 				var results []queryResultEntry
-				matchIdx := 0 // 0-based index across all matched entities
+				matchIdx := 0 // 0-based index across all matched (unique) entities
+				var seen map[ID]bool
+				if needDedup {
+					seen = make(map[ID]bool)
+				}
 
-				for it.Next() {
-					for _, e := range it.Entities() {
-						inWindow := matchIdx >= offset && (matchIdx-offset) < limit
-						if inWindow {
-							entry := queryResultEntry{
-								Entity: int64(e),
-								Path:   w.PathOf(e),
+				for _, execTerms := range execSets {
+					q := NewQueryFromTerms(w, execTerms...)
+					it := q.Iter()
+					for it.Next() {
+						for _, e := range it.Entities() {
+							if needDedup {
+								if seen[e] {
+									continue
+								}
+								seen[e] = true
 							}
+							inWindow := matchIdx >= offset && (matchIdx-offset) < limit
+							if inWindow {
+								entry := queryResultEntry{
+									Entity: int64(e),
+									Path:   w.PathOf(e),
+								}
 
-							if includeFields && len(fieldSpecs) > 0 {
-								fields := make(map[string]json.RawMessage)
-								for _, fs := range fieldSpecs {
-									raw, ok := marshalComponentForQuery(w, fr, e, fs.id)
-									if !ok {
-										continue
+								if includeFields && len(fieldSpecs) > 0 {
+									fields := make(map[string]json.RawMessage)
+									for _, fs := range fieldSpecs {
+										raw, ok := marshalComponentForQuery(w, fr, e, fs.id)
+										if !ok {
+											continue
+										}
+										fields[fs.key] = raw
 									}
-									fields[fs.key] = raw
+									if len(fields) > 0 {
+										entry.Fields = fields
+									}
 								}
-								if len(fields) > 0 {
-									entry.Fields = fields
-								}
-							}
 
-							results = append(results, entry)
+								results = append(results, entry)
+							}
+							matchIdx++
 						}
-						matchIdx++
 					}
 				}
 
@@ -196,6 +217,65 @@ func restQuery(w *World) http.HandlerFunc {
 
 		writeJSON(rw, http.StatusOK, resp)
 	}
+}
+
+// restBuildExecSets returns the execution term sets for the REST query handler.
+//
+// The engine requires at least one TermAnd term unless every original term is a
+// *From term (AndFrom/OrFrom/NotFrom), in which case the engine's allFromInput
+// bypass handles the query.  For all other anchor-free cases we synthesise valid
+// sets:
+//
+//   - OR-only queries: one sub-query per OR member with that member promoted to
+//     TermAnd; non-OR terms (TermNot, TermScope, …) are propagated to each set.
+//     The handler unions entity results across sets, deduplicating by ID.
+//
+//   - Pure-predicate queries (TermEq / TermNotEq / TermNameMatch only): a
+//     single synthetic With(nameID) anchor is prepended so the engine iterates
+//     all named entities; predicate filters then select the matching subset.
+func restBuildExecSets(w *World, terms []Term) [][]Term {
+	hasAnd := false
+	allFrom := true
+	for _, t := range terms {
+		if t.Kind == TermAnd {
+			hasAnd = true
+		}
+		if t.Kind != TermAndFrom && t.Kind != TermOrFrom && t.Kind != TermNotFrom {
+			allFrom = false
+		}
+	}
+	if hasAnd || allFrom {
+		// Normal query: TermAnd anchor present, or all-*From (engine handles it).
+		return [][]Term{terms}
+	}
+
+	var orIDs []ID
+	var otherTerms []Term
+	for _, t := range terms {
+		if t.Kind == TermOr {
+			orIDs = append(orIDs, t.ID)
+		} else {
+			otherTerms = append(otherTerms, t)
+		}
+	}
+
+	if len(orIDs) > 0 {
+		sets := make([][]Term, len(orIDs))
+		for i, orID := range orIDs {
+			sub := make([]Term, 0, 1+len(otherTerms))
+			sub = append(sub, With(orID))
+			sub = append(sub, otherTerms...)
+			sets[i] = sub
+		}
+		return sets
+	}
+
+	// Pure predicate: anchor on the built-in Name component so the engine can
+	// iterate named entities and let the predicate terms filter the result set.
+	anchored := make([]Term, 0, 1+len(terms))
+	anchored = append(anchored, With(w.nameID))
+	anchored = append(anchored, terms...)
+	return [][]Term{anchored}
 }
 
 // marshalComponentForQuery returns the JSON encoding of compID on entity e.

@@ -578,6 +578,406 @@ func rqFieldsKeys(fields map[string]any) []string {
 	return keys
 }
 
+// ── v2 REST integration tests ────────────────────────────────────────────────
+
+// rqEntityPaths returns the set of "path" strings from a results array.
+func rqEntityPaths(t *testing.T, results []any) map[string]bool {
+	t.Helper()
+	paths := make(map[string]bool, len(results))
+	for _, r := range results {
+		entry := r.(map[string]any)
+		if p, ok := entry["path"].(string); ok && p != "" {
+			paths[p] = true
+		}
+	}
+	return paths
+}
+
+// Component types exclusive to v2 REST tests.
+type rq2Ship struct{}
+type rq2Planet struct{ Name string }
+
+func TestRest_Query_Or(t *testing.T) {
+	// "Position || Velocity" — returns union of entities with either component.
+	_, srv := rqSetup(t)
+	resp := rqGet(t, srv, "/query?expr=Position+%7C%7C+Velocity")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// archer (both), mage (Position only) — disabled entity skipped by engine
+	if count < 2 {
+		t.Errorf("want ≥2 results for Position||Velocity union, got count=%d", count)
+	}
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["archer"] {
+		t.Error("archer (Position+Velocity) must appear in OR union")
+	}
+	if !paths["mage"] {
+		t.Error("mage (Position only) must appear in OR union")
+	}
+}
+
+func TestRest_Query_ScopeGroup(t *testing.T) {
+	// "Position, !(Velocity, Tagged)" — entities with Position AND NOT (Velocity AND Tagged).
+	// archer has Velocity (no Tagged) → !(V,T) = NOT(V AND T) = NOT false = true → included
+	// mage   has Tagged  (no Velocity) → !(V,T) = NOT false = true → included
+	// We add a "both" entity (Velocity + Tagged) to verify it is excluded.
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+	velID := flecs.RegisterComponent[rqVel](w)
+	w.SetName(velID, "Velocity")
+	tagID := flecs.RegisterComponent[rqTag](w)
+	w.SetName(tagID, "Tagged")
+
+	w.Write(func(fw *flecs.Writer) {
+		e1 := fw.NewEntity()
+		w.SetName(e1, "posOnly")
+		flecs.Set(fw, e1, rqPos{X: 1})
+
+		e2 := fw.NewEntity()
+		w.SetName(e2, "posVel")
+		flecs.Set(fw, e2, rqPos{X: 2})
+		flecs.Set(fw, e2, rqVel{DX: 1})
+
+		e3 := fw.NewEntity()
+		w.SetName(e3, "posTagged")
+		flecs.Set(fw, e3, rqPos{X: 3})
+		flecs.AddID(fw, e3, tagID)
+
+		// This entity has Position + Velocity + Tagged → must be excluded by scope
+		e4 := fw.NewEntity()
+		w.SetName(e4, "posVelTagged")
+		flecs.Set(fw, e4, rqPos{X: 4})
+		flecs.Set(fw, e4, rqVel{DX: 2})
+		flecs.AddID(fw, e4, tagID)
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=Position,+!(Velocity,+Tagged)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if paths["posVelTagged"] {
+		t.Error("posVelTagged must be excluded by !(Velocity, Tagged) scope group")
+	}
+	if !paths["posOnly"] {
+		t.Error("posOnly must be included (Position, not Velocity+Tagged)")
+	}
+	if !paths["posVel"] {
+		t.Error("posVel must be included (Position+Velocity but not Tagged)")
+	}
+}
+
+func TestRest_Query_SourceBinding(t *testing.T) {
+	// "Velocity, Position(playerEntity)" — matches entities with Velocity and
+	// reads Position from playerEntity (fixed source, snapshot-at-iter-start).
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+	velID := flecs.RegisterComponent[rqVel](w)
+	w.SetName(velID, "Velocity")
+
+	w.Write(func(fw *flecs.Writer) {
+		player := fw.NewEntity()
+		w.SetName(player, "playerEntity")
+		flecs.Set(fw, player, rqPos{X: 5, Y: 5})
+
+		npc1 := fw.NewEntity()
+		w.SetName(npc1, "npc1")
+		flecs.Set(fw, npc1, rqVel{DX: 1})
+
+		npc2 := fw.NewEntity()
+		w.SetName(npc2, "npc2")
+		flecs.Set(fw, npc2, rqVel{DX: 2})
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Source binding: reads Position from playerEntity, not from iterated entity.
+	resp := rqGet(t, srv, "/query?expr=Velocity,+Position(playerEntity)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// npc1 and npc2 have Velocity; playerEntity has Position but no Velocity
+	if count < 2 {
+		t.Errorf("want ≥2 results (npc1, npc2 have Velocity), got count=%d", count)
+	}
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["npc1"] || !paths["npc2"] {
+		t.Errorf("npc1 and npc2 must appear; got paths: %v", paths)
+	}
+}
+
+func TestRest_Query_OptionalTerm(t *testing.T) {
+	// "Position, ?Velocity" — all entities with Position are returned regardless
+	// of whether they have Velocity.
+	_, srv := rqSetup(t)
+	resp := rqGet(t, srv, "/query?expr=Position,+%3FVelocity")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	// archer has Position+Velocity; mage has Position only.
+	// Both should appear (optional Velocity does not exclude).
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["archer"] {
+		t.Error("archer must appear in Position,?Velocity query")
+	}
+	if !paths["mage"] {
+		t.Error("mage (no Velocity) must still appear when Velocity is optional")
+	}
+}
+
+func TestRest_Query_TraversalUp(t *testing.T) {
+	// (ChildOf, root).Up — returns entities whose nearest ChildOf-ancestor has
+	// (ChildOf, root); i.e., grandchildren of root.
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+
+	w.Write(func(fw *flecs.Writer) {
+		root := fw.NewEntity()
+		w.SetName(root, "root")
+
+		child := fw.NewEntity()
+		w.SetName(child, "childOfRoot")
+		flecs.AddID(fw, child, flecs.MakePair(w.ChildOf(), root))
+
+		grandchild := fw.NewEntity()
+		w.SetName(grandchild, "grandchildOfRoot")
+		flecs.AddID(fw, grandchild, flecs.MakePair(w.ChildOf(), child))
+		flecs.Set(fw, grandchild, rqPos{X: 1})
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=(ChildOf,+root).Up")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// grandchild's nearest ChildOf-ancestor (child) has (ChildOf, root) → matches
+	if count == 0 {
+		t.Errorf("want ≥1 result for (ChildOf, root).Up traversal, got 0")
+	}
+	paths := rqEntityPaths(t, m["results"].([]any))
+	// Entity paths in this world are hierarchical (parent.child.grandchild).
+	if !paths["root.childOfRoot.grandchildOfRoot"] {
+		t.Errorf("grandchildOfRoot must appear via .Up traversal; got paths: %v", paths)
+	}
+}
+
+func TestRest_Query_Variable(t *testing.T) {
+	// SpaceShip, (DockedTo, $planet) — returns ships with their docking variable bound.
+	w := flecs.New()
+	shipID := flecs.RegisterComponent[rq2Ship](w)
+	w.SetName(shipID, "SpaceShip")
+	planetID := flecs.RegisterComponent[rq2Planet](w)
+	w.SetName(planetID, "Planet")
+
+	w.Write(func(fw *flecs.Writer) {
+		dockedTo := fw.NewEntity()
+		w.SetName(dockedTo, "DockedTo")
+
+		p1 := fw.NewEntity()
+		w.SetName(p1, "P1")
+		flecs.Set(fw, p1, rq2Planet{Name: "P1"})
+
+		p2 := fw.NewEntity()
+		w.SetName(p2, "P2")
+		flecs.Set(fw, p2, rq2Planet{Name: "P2"})
+
+		shipA := fw.NewEntity()
+		w.SetName(shipA, "ShipA")
+		flecs.Set(fw, shipA, rq2Ship{})
+		flecs.AddID(fw, shipA, flecs.MakePair(dockedTo, p1))
+
+		shipB := fw.NewEntity()
+		w.SetName(shipB, "ShipB")
+		flecs.Set(fw, shipB, rq2Ship{})
+		flecs.AddID(fw, shipB, flecs.MakePair(dockedTo, p2))
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Query: SpaceShip, (DockedTo, $planet), Planet($planet)
+	resp := rqGet(t, srv, "/query?expr=SpaceShip,+(DockedTo,+%24planet),+Planet(%24planet)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	count := int(m["count"].(float64))
+	// ShipA→P1 and ShipB→P2: two docking pairs
+	if count < 2 {
+		t.Errorf("want ≥2 results for variable join (ship→planet), got count=%d", count)
+	}
+}
+
+func TestRest_Query_Equality_Entity(t *testing.T) {
+	// "$this == hero" — returns only the hero entity.
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+
+	w.Write(func(fw *flecs.Writer) {
+		hero := fw.NewEntity()
+		w.SetName(hero, "hero")
+		flecs.Set(fw, hero, rqPos{X: 1})
+
+		villain := fw.NewEntity()
+		w.SetName(villain, "villain")
+		flecs.Set(fw, villain, rqPos{X: 2})
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=%24this+%3D%3D+hero")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	results := m["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("$this == hero should return exactly 1 result, got %d", len(results))
+	}
+	entry := results[0].(map[string]any)
+	if entry["path"] != "hero" {
+		t.Errorf("expected result path 'hero', got %v", entry["path"])
+	}
+}
+
+func TestRest_Query_NameMatch(t *testing.T) {
+	// "$this ~ \"arch\"" — returns entities whose name contains "arch".
+	_, srv := rqSetup(t)
+	resp := rqGet(t, srv, "/query?expr=%24this+%7E+%22arch%22")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["archer"] {
+		t.Errorf("archer must match $this ~ \"arch\"; got paths: %v", paths)
+	}
+	if paths["mage"] {
+		t.Errorf("mage must NOT match $this ~ \"arch\"")
+	}
+}
+
+func TestRest_Query_AndFrom(t *testing.T) {
+	// "AndFrom(preset)" — entities that have ALL components from preset's type.
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+
+	var preset flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		preset = fw.NewEntity()
+		w.SetName(preset, "preset")
+		flecs.Set(fw, preset, rqPos{X: 0}) // preset has Position
+
+		e1 := fw.NewEntity()
+		w.SetName(e1, "hasPos")
+		flecs.Set(fw, e1, rqPos{X: 1}) // has all preset components
+
+		e2 := fw.NewEntity()
+		w.SetName(e2, "noPos") // no components — won't match AndFrom
+	})
+	_ = preset
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=AndFrom(preset)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["hasPos"] {
+		t.Errorf("hasPos must appear in AndFrom(preset) results; paths: %v", paths)
+	}
+}
+
+func TestRest_Query_ComplexCompound(t *testing.T) {
+	// "Position || Velocity, !(Tagged)" — (Position OR Velocity) AND NOT Tagged.
+	// Combined OR + scope group in one expression.
+	w := flecs.New()
+	posID := flecs.RegisterComponent[rqPos](w)
+	w.SetName(posID, "Position")
+	velID := flecs.RegisterComponent[rqVel](w)
+	w.SetName(velID, "Velocity")
+	tagID := flecs.RegisterComponent[rqTag](w)
+	w.SetName(tagID, "Tagged")
+
+	w.Write(func(fw *flecs.Writer) {
+		// posOnly: matches OR group (has Position), not Tagged → included
+		e1 := fw.NewEntity()
+		w.SetName(e1, "posOnly")
+		flecs.Set(fw, e1, rqPos{X: 1})
+
+		// velOnly: matches OR group (has Velocity), not Tagged → included
+		e2 := fw.NewEntity()
+		w.SetName(e2, "velOnly")
+		flecs.Set(fw, e2, rqVel{DX: 1})
+
+		// posTagged: matches OR group (has Position), has Tagged → excluded by scope
+		e3 := fw.NewEntity()
+		w.SetName(e3, "posTagged")
+		flecs.Set(fw, e3, rqPos{X: 3})
+		flecs.AddID(fw, e3, tagID)
+
+		// neither: no Position or Velocity → excluded by OR group
+		e4 := fw.NewEntity()
+		w.SetName(e4, "neither")
+	})
+
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	resp := rqGet(t, srv, "/query?expr=Position+%7C%7C+Velocity,+!(Tagged)")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", resp.StatusCode, body)
+	}
+	m := rqDecodeResponse(t, body)
+	paths := rqEntityPaths(t, m["results"].([]any))
+	if !paths["posOnly"] {
+		t.Error("posOnly must be included (has Position, not Tagged)")
+	}
+	if !paths["velOnly"] {
+		t.Error("velOnly must be included (has Velocity, not Tagged)")
+	}
+	if paths["posTagged"] {
+		t.Error("posTagged must be excluded by !(Tagged) scope")
+	}
+	if paths["neither"] {
+		t.Error("neither must be excluded (no Position or Velocity)")
+	}
+}
+
 func TestRest_Query_OffsetInvalid(t *testing.T) {
 	_, srv := rqSetup(t)
 	resp := rqGet(t, srv, "/query?expr=Position&offset=-1")

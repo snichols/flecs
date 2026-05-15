@@ -98,7 +98,7 @@ the world API.
 | GET | `/snapshot` | Full world snapshot (JSON) |
 | PUT | `/snapshot` | Load a world snapshot |
 | GET | `/type_info/{path}` | Reflection schema for a named component; `Cache-Control: max-age=300` |
-| GET | `/query` | Query DSL: evaluate FQL v1 expression; returns matched entities + fields |
+| GET | `/query` | Query DSL: evaluate FQL v2 expression; returns matched entities + fields |
 | PUT | `/entity` | Create or claim an entity (JSON body); returns `{ id, name }` |
 | DELETE | `/entity/{path...}` | Delete an entity by dot-separated path |
 
@@ -670,9 +670,9 @@ if resp.StatusCode != http.StatusNoContent {
 
 ## GET /query
 
-Evaluates a Flecs Query Language v1 expression and returns matched entities with optional
-typed-component field values as JSON (v0.95.0). See [QueryDSL.md](QueryDSL.md) for the
-full grammar reference.
+Evaluates a Flecs Query Language v2 expression and returns matched entities with optional
+typed-component field values as JSON (v0.95.0 shipped v1; v0.96.0 extended to v2). See
+[QueryDSL.md](QueryDSL.md) for the full v2 grammar reference.
 
 ```
 GET /query?expr=<urlencoded-expression>[&limit=N][&offset=N][&fields=true|false]
@@ -685,7 +685,7 @@ GET /query?expr=<urlencoded-expression>[&limit=N][&offset=N][&fields=true|false]
 
 | Parameter | Default | Constraints |
 |-----------|---------|-------------|
-| `expr` | — | **Required.** URL-encoded FQL v1 expression. |
+| `expr` | — | **Required.** URL-encoded FQL v2 expression. |
 | `limit` | `256` | Max `4096`. Non-integer or negative → 400. |
 | `offset` | `0` | Non-integer or negative → 400. |
 | `fields` | `true` | `true` or `false`. Other values → 400. |
@@ -738,8 +738,29 @@ curl "http://localhost:8080/query?expr=Position"
 # AND query with NOT
 curl "http://localhost:8080/query?expr=Position%2C%20!Disabled"
 
+# OR query
+curl "http://localhost:8080/query?expr=Position%20%7C%7C%20Velocity"
+
 # Pair query with pagination
 curl "http://localhost:8080/query?expr=(ChildOf%2C%20scene)&limit=20&offset=40"
+
+# Optional term (fields only when present)
+curl "http://localhost:8080/query?expr=Position%2C%20%3FVelocity"
+
+# Equality predicate (exact entity)
+curl "http://localhost:8080/query?expr=%24this%20%3D%3D%20hero"
+
+# Name-match predicate
+curl 'http://localhost:8080/query?expr=$this+~+"unit"'
+
+# Traversal Up (entity or ancestor carries Position)
+curl "http://localhost:8080/query?expr=Position.Up"
+
+# Source binding (reads Position from fixed entity "hero")
+curl "http://localhost:8080/query?expr=Position(hero)"
+
+# Type-list expansion
+curl "http://localhost:8080/query?expr=AndFrom(prefab)"
 
 # Field values suppressed
 curl "http://localhost:8080/query?expr=Position&fields=false"
@@ -1272,12 +1293,12 @@ response body saves a follow-up read and tells the client the new state directly
 
 ### Query execution endpoint
 
-> **Ported in Go flecs (v0.95.0, Phase 16.40).** `GET /query?expr=<expr>` is fully
-> implemented — see [`## GET /query`](#get-query) above. The Go implementation parses a
-> Flecs Query Language v1 subset (bare components, `,` AND, `!` NOT, `(R,T)` pairs,
-> `*`/`_` wildcards) and returns matched entities with typed field values. Streaming
-> (`chunked transfer`) and the full upstream FQL feature set are deferred to v2; see
-> [QueryDSL.md § Deferred features](QueryDSL.md#deferred-features-v2).
+> **Ported in Go flecs (v0.96.0, Phase 16.41).** `GET /query?expr=<expr>` is fully
+> implemented — see [`## GET /query`](#get-query) above. The Go implementation parses
+> Flecs Query Language v2 (AND/OR/NOT, scope groups, optional terms, traversal postfixes,
+> source binding, query variables, equality predicates, `AndFrom`/`OrFrom`/`NotFrom`) and
+> returns matched entities with typed field values. Streaming (`chunked transfer`) is
+> deferred; see [QueryDSL.md](QueryDSL.md) for the full v2 language reference.
 
 ### World dump endpoint
 
