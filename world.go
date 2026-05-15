@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1388,6 +1389,28 @@ func RegisterComponent[T any](w *World) ID {
 	if !ok {
 		info = component.Register[T](w.registry)
 	}
+	id := w.index.Alloc()
+	w.registry.AssociateID(info, id)
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "component registered",
+			slog.String("name", info.Name),
+			slog.Uint64("id", uint64(id)),
+			slog.Uint64("size", uint64(info.Size)))
+	}
+	return id
+}
+
+// RegisterComponentByType is the reflect.Type analog of [RegisterComponent].
+// It registers the Go type t as a component entity in w and returns its ID.
+// Idempotent: if t is already registered with a component ID, returns that ID.
+// Intended for reflection-based helpers (e.g. flectest.MustEntity) where the
+// type is only known at runtime.
+func RegisterComponentByType(w *World, t reflect.Type) ID {
+	w.checkExclusiveAccessWrite()
+	if info, ok := w.registry.LookupByReflectType(t); ok && info.Component != 0 {
+		return info.Component
+	}
+	info := w.registry.RegisterByReflectType(t)
 	id := w.index.Alloc()
 	w.registry.AssociateID(info, id)
 	if w.logger != nil {

@@ -642,6 +642,26 @@
 // invoked when an owner is set, so the un-claimed path costs ~1 ns total.
 // Goroutine IDs are obtained via github.com/petermattis/goid.
 //
+// # Testing
+//
+// The [github.com/snichols/flecs/flectest] subpackage provides testing.TB-aware
+// helpers for ECS tests. Import it only from _test.go files:
+//
+//	import "github.com/snichols/flecs/flectest"
+//
+//	func TestHero(t *testing.T) {
+//	    w := flectest.NewWorld(t)
+//	    hero := flectest.MustEntity(t, w, "hero", HP{100})
+//	    flectest.AssertAlive(t, w, hero)
+//	    flectest.AssertComponentValue[HP](t, w, hero, HP{100})
+//	}
+//
+// Key helpers: [flectest.NewWorld], [flectest.NewWorldWith], [flectest.MustEntity],
+// [flectest.MustChild], [flectest.AssertAlive], [flectest.AssertComponentValue],
+// [flectest.AssertSnapshotGolden], [flectest.RequireRoundTrip].
+//
+// See [docs/Testing.md] for the full reference.
+//
 // # Conceptual Documentation
 //
 // For topic-level guides with worked Go examples, see the docs/ directory:
@@ -649,6 +669,7 @@
 //   - [docs/Quickstart.md] — start here; covers world, entities, components, queries,
 //     hierarchies, prefabs, systems, and observers.
 //   - [docs/README.md] — full docs index, survey table, and feature-gap list vs. upstream C.
+//   - [docs/Testing.md] — flectest subpackage reference.
 //
 // See https://github.com/SanderMertens/flecs for the upstream C implementation.
 package flecs
