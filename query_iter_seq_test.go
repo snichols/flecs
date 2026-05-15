@@ -677,6 +677,44 @@ func TestCachedQueryAllContext_CanceledMidIteration(t *testing.T) {
 	}
 }
 
+func TestCachedQueryAllContext_TimeoutFires(t *testing.T) {
+	// Mirror of TestQueryAllContext_TimeoutFires for CachedQuery.
+	// Create entities in a single table; use a pre-fired timeout so the
+	// deadline is already exceeded when iteration begins. Verify that the
+	// first yield delivers DeadlineExceeded and no panic occurs.
+	w := flecs.New()
+	var posID flecs.ID
+	w.Write(func(fw *flecs.Writer) {
+		posID = flecs.RegisterComponent[seqPos](w)
+		for i := range 2000 {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, seqPos{float64(i)})
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+	time.Sleep(2 * time.Millisecond) // let the timeout fire before we start
+
+	cq := flecs.NewCachedQuery(w, posID)
+	var gotErr error
+	w.Read(func(r *flecs.Reader) {
+		for _, err := range flecs.CachedQueryAllContext(ctx, cq, r) {
+			if err != nil {
+				gotErr = err
+				break
+			}
+		}
+	})
+
+	if gotErr == nil {
+		t.Fatal("expected a deadline error but got nil")
+	}
+	if !errors.Is(gotErr, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", gotErr)
+	}
+}
+
 // ── Pair / Triple / Quad helper type tests ───────────────────────────────────
 
 func TestPair_FieldAccess(t *testing.T) {
