@@ -14,6 +14,7 @@ See the [Quickstart](Quickstart.md) for a hands-on introduction. See [EntitiesCo
 - [Operators](#operators)
 - [Iteration](#iteration)
 - [Typed Iteration](#typed-iteration)
+- [Range-over-func Iteration](#range-over-func-iteration)
 - [Pairs in Queries](#pairs-in-queries)
 - [Relationship Traversal](#relationship-traversal)
 - [Inheritable Components](#inheritable-components)
@@ -510,6 +511,159 @@ w.Read(func(fr *flecs.Reader) {
 ```
 
 `Each1`–`Each4` always use uncached queries. For cached queries, change detection, or traversal terms, use `NewCachedQueryFromTerms` with `Iter` directly.
+
+See also: [Range-over-func Iteration](#range-over-func-iteration) for the Go 1.23+ `iter.Seq2` alternative.
+
+---
+
+## Range-over-func Iteration
+
+Go 1.23+ range-over-func (`iter.Seq` / `iter.Seq2`) lets you write standard
+`for … range` loops over query results. This is equivalent in performance to
+`Each1`–`Each4` — both paths drive the same `Query.Iter()` / `QueryIter.Next()`
+/ `Field[T]` machinery — and adds idiomatic `break` / `continue` / `return`
+support.
+
+### Signatures
+
+```go
+// Bare entity-ID iteration.
+func QueryAll(q *Query, s scope) iter.Seq[ID]
+func CachedQueryAll(cq *CachedQuery, s scope) iter.Seq[ID]
+
+// Typed iteration (component pointers valid within yield body only).
+func All1[A any](s scope)             iter.Seq2[ID, *A]
+func All2[A, B any](s scope)          iter.Seq2[ID, Pair[A, B]]
+func All3[A, B, C any](s scope)       iter.Seq2[ID, Triple[A, B, C]]
+func All4[A, B, C, D any](s scope)    iter.Seq2[ID, Quad[A, B, C, D]]
+
+// Context-aware variants — yield (0, ctx.Err()) on cancellation, then stop.
+func QueryAllContext(ctx context.Context, q *Query, s scope)           iter.Seq2[ID, error]
+func CachedQueryAllContext(ctx context.Context, cq *CachedQuery, s scope) iter.Seq2[ID, error]
+
+// Helper structs for All2–All4.
+type Pair[A, B any]       struct { A *A; B *B }
+type Triple[A, B, C any]  struct { A *A; B *B; C *C }
+type Quad[A, B, C, D any] struct { A *A; B *B; C *C; D *D }
+```
+
+### Examples
+
+**Single-component loop:**
+
+```go
+type Position struct{ X, Y float32 }
+
+w.Read(func(r *flecs.Reader) {
+    for e, pos := range flecs.All1[Position](r) {
+        fmt.Printf("entity %v: (%.2f, %.2f)\n", e, pos.X, pos.Y)
+    }
+})
+```
+
+**Two-component loop (physics integration):**
+
+```go
+w.Read(func(r *flecs.Reader) {
+    for _, pv := range flecs.All2[Position, Velocity](r) {
+        pos, vel := pv.A, pv.B
+        pos.X += vel.DX
+        pos.Y += vel.DY
+    }
+})
+```
+
+**Bare entity-ID loop:**
+
+```go
+posID := flecs.RegisterComponent[Position](w)
+q := flecs.NewQuery(w, posID)
+
+w.Read(func(r *flecs.Reader) {
+    for e := range flecs.QueryAll(q, r) {
+        fmt.Println(e)
+    }
+})
+```
+
+**Context-aware loop:**
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+defer cancel()
+
+w.Read(func(r *flecs.Reader) {
+    for id, err := range flecs.QueryAllContext(ctx, q, r) {
+        if err != nil {
+            log.Println("cancelled:", err)
+            return
+        }
+        _ = id
+    }
+})
+```
+
+### Early-exit semantics
+
+Every loop level — the outer `it.Next()` table loop AND the inner per-entity
+loop — checks `yield`'s return value and returns immediately on `false`. This
+means `break`, `continue` from an outer loop, and `return` all work correctly
+with zero leaked iteration state:
+
+```go
+// Intra-table break: stops mid-table, remaining entities in that table skipped.
+w.Read(func(r *flecs.Reader) {
+    count := 0
+    for e, pos := range flecs.All1[Position](r) {
+        if pos.X > 100 { break } // stops cleanly
+        count++
+        _ = e
+    }
+})
+
+// Inter-table break: stop after exhausting the first table, before the second.
+w.Read(func(r *flecs.Reader) {
+    n := 0
+    for range flecs.QueryAll(q, r) {
+        n++
+        if n == tableSize { break } // second table never entered
+    }
+})
+```
+
+### Pointer-stability semantics
+
+The `*T` pointers yielded by `All1`–`All4` point directly into archetype table
+column memory. They are valid **only within the body of the yield call**. Any
+structural mutation that triggers a table migration — `AddID`, `RemoveID`,
+`Set[T]` on a new component, or `Delete` — will invalidate the pointer once
+the migration is flushed.
+
+Inside a `Write` scope, structural mutations are queued by the deferred command
+queue and flushed when the scope exits, so the pointer remains valid for the
+duration of the scope. Despite that, the recommended pattern is to dereference
+and stack-copy the value before queuing any mutation — this matches the
+recommendation for `Each1`–`Each4`:
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    for e, pos := range flecs.All1[Position](fw) {
+        val := *pos                           // stack copy — always safe
+        if val.X < 0 {
+            flecs.AddID(fw, e, deadTag)       // queued; pointer still valid here
+        }
+    }
+    // Scope exits → migrations flushed → pos is now stale (do not use after here)
+})
+```
+
+### Performance equivalence with Each\*
+
+`All1`–`All4` drive iteration through the same `Query.Iter()` / `it.Next()` /
+`Field[T]` path as `Each1`–`Each4`. The Inheritable (`upPtr`) and CanToggle
+(`IsRowEnabled`) branches are preserved verbatim. Benchmark results
+(`BenchmarkEach1_vs_All1`, 1 000-entity single-component workload) confirm that
+`All1` is within 5 % of `Each1` wall-clock per iteration.
 
 ---
 

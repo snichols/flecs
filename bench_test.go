@@ -1468,3 +1468,49 @@ func BenchmarkParallelSystems_Scaling(b *testing.B) {
 		})
 	}
 }
+
+// ---- Phase 16.52: iter.Seq / range-over-func benchmarks ----
+
+// BenchmarkEach1_vs_All1 compares Each1 and All1 on the same workload:
+// 1000 entities each with a single benchPos component. All1 should be within
+// 5% of Each1 wall-clock per iteration.
+func BenchmarkEach1_vs_All1(b *testing.B) {
+	const n = 1000
+	w := flecs.New()
+	w.Write(func(fw *flecs.Writer) {
+		for i := range n {
+			e := fw.NewEntity()
+			flecs.Set(fw, e, benchPos{X: float64(i), Y: float64(i)})
+		}
+	})
+
+	b.Run("Each1", func(b *testing.B) {
+		b.ResetTimer()
+		for range b.N {
+			count := 0
+			w.Read(func(r *flecs.Reader) {
+				flecs.Each1[benchPos](r, func(_ flecs.ID, _ *benchPos) {
+					count++
+				})
+			})
+			if count == 0 {
+				b.Fatal("no entities matched")
+			}
+		}
+	})
+
+	b.Run("All1", func(b *testing.B) {
+		b.ResetTimer()
+		for range b.N {
+			count := 0
+			w.Read(func(r *flecs.Reader) {
+				for range flecs.All1[benchPos](r) {
+					count++
+				}
+			})
+			if count == 0 {
+				b.Fatal("no entities matched")
+			}
+		}
+	})
+}

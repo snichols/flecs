@@ -1,9 +1,10 @@
 # Roadmap
 
-## Shipped (through v0.104.0)
+## Shipped (through v0.107.0)
 
 The following features are available in the current release:
 
+- **Range-over-func iteration _(v0.107.0)_** — `All1`/`All2`/`All3`/`All4` return `iter.Seq2[ID, *T]` (or `Pair`/`Triple`/`Quad` structs) for idiomatic `for … range` loops with full break support; `QueryAll`/`CachedQueryAll` for bare entity-ID iteration; `QueryAllContext`/`CachedQueryAllContext` for cancellation-aware variants. Inheritable and CanToggle semantics preserved.
 - **Archetype-based storage** — entities sharing the same component set are grouped into structure-of-arrays tables; no pointer chasing during iteration.
 - **Raw-ID API** — `AddID`, `RemoveID`, `HasID`, `OwnsID` for tag and pair manipulation without type parameters.
 - **Generic-typed API** — `Set[T]`, `Get[T]`, `Has[T]`, `Owns[T]`, `Remove[T]`, `RegisterComponent[T]` with full type safety.
