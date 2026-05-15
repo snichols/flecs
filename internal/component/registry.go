@@ -56,6 +56,23 @@ func Register[T any](r *Registry) *TypeInfo {
 	return info
 }
 
+// RegisterByReflectType is the reflect.Type analog of Register[T].
+// Idempotent: returns the existing *TypeInfo if t is already registered.
+func (r *Registry) RegisterByReflectType(t reflect.Type) *TypeInfo {
+	if info, ok := r.m[t]; ok {
+		return info
+	}
+	info := &TypeInfo{
+		Size:  t.Size(),
+		Align: uintptr(t.Align()),
+		Name:  t.String(),
+		Type:  t,
+	}
+	r.m[t] = info
+	r.order = append(r.order, t)
+	return info
+}
+
 // RegisterWithHooks records T in r with the provided hooks and returns its *TypeInfo.
 // If T was already registered, the existing TypeInfo's hooks are replaced with
 // the provided ones; subsequent calls with new hooks override prior hooks for

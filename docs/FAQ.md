@@ -257,6 +257,54 @@ No. `flecs.NewRESTHandler` returns a standard `http.Handler`; it only serves req
 
 ---
 
+## Testing
+
+### How do I write tests for ECS code?
+
+Import `github.com/snichols/flecs/flectest` from `_test.go` files:
+
+```go
+import "github.com/snichols/flecs/flectest"
+```
+
+`flectest` provides `testing.TB`-aware helpers so test failures point at the
+caller — not at helper internals:
+
+```go
+func TestHero(t *testing.T) {
+    w := flectest.NewWorld(t)
+
+    hero := flectest.MustEntity(t, w, "hero", HP{100}, Position{X: 1, Y: 2})
+
+    flectest.AssertAlive(t, w, hero)
+    flectest.AssertComponentValue[HP](t, w, hero, HP{100})
+    flectest.AssertName(t, w, hero, "hero")
+}
+```
+
+For golden snapshot testing, write the world to a file once and compare on
+future runs:
+
+```go
+func TestWorldSnapshot(t *testing.T) {
+    w := flectest.NewWorldWith(t, func(fw *flecs.Writer) {
+        e := fw.NewEntity()
+        fw.SetName(e, "hero")
+        flecs.Set(fw, e, Position{X: 1, Y: 2})
+    })
+    // First run: go test ./... -update  (writes the golden file)
+    // Subsequent runs: compare against the committed file
+    flectest.AssertSnapshotGolden(t, w, "testdata/world.golden.json")
+}
+```
+
+See [Testing.md](Testing.md) for the full API: lifecycle helpers (`NewWorld`,
+`NewWorldWith`), all assertion helpers, golden snapshot helpers
+(`AssertSnapshotGolden`, `RequireRoundTrip`), and the mock-TB pattern for
+testing test helpers themselves.
+
+---
+
 ## Errors and Panics
 
 ### What does a concurrent-mutation panic mean?

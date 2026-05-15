@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.110.0 — 2026-05-15 — Phase 16.55: flectest testing subpackage
+
+Fifth post-port-completion phase. Provides a `testing.TB`-aware helper package
+(`github.com/snichols/flecs/flectest`) for writing ECS tests, following the
+stdlib `net/http/httptest` pattern.
+
+### What changed
+
+- **New subpackage `flectest`** — import as `github.com/snichols/flecs/flectest`
+  from `_test.go` files only. No third-party dependencies; `testing` and `flag`
+  stay out of the root `flecs` import graph.
+- **Lifecycle helpers** — `NewWorld(tb)` / `NewWorldWith(tb, setup)` create a
+  fresh `*flecs.World` bound to the test's cleanup lifecycle.
+- **Entity assertion helpers** — `AssertAlive`, `AssertNotAlive`,
+  `AssertHasComponent[T]`, `AssertNoComponent[T]`,
+  `AssertComponentValue[T comparable]`, `AssertComponentValueFunc[T]`,
+  `AssertEntityCount`, `AssertQueryCount`.
+- **Hierarchy and relationship helpers** — `AssertParent`, `AssertNoParent`,
+  `AssertChildren` (order-independent set equality), `AssertHasPair`, `AssertTag`,
+  `AssertName`.
+- **Golden snapshot helpers** — `AssertSnapshotGolden(tb, w, goldenPath)` compares
+  `w.MarshalJSON()` against a committed JSON file; pass `-update` on the command
+  line to rewrite. `RequireRoundTrip(tb, w)` verifies a full JSON
+  serialise → deserialise → re-serialise round-trip.
+- **Builder helpers** — `MustEntity(tb, w, name, comps...)` /
+  `MustChild(tb, w, parent, name, comps...)` auto-register component types via
+  reflection (`flecs.RegisterComponentByType`) so callers never need to
+  pre-register.
+- **`flecs.RegisterComponentByType(w, t reflect.Type) ID`** — new public function
+  in the root package; registers a component by `reflect.Type` instead of a type
+  parameter. Used by `flectest.MustEntity` / `MustChild` and available for other
+  reflection-driven code.
+- **`docs/Testing.md`** — full flectest reference: scope parameter rationale,
+  all assertion APIs, golden snapshot workflow, `RequireRoundTrip` JSON constraint,
+  mock-TB pattern for testing test helpers.
+
+### Design notes
+
+- All helpers accept `*flecs.World` (not `*Reader`/`*Writer`) because the root
+  `flecs.scope` interface is unexported; external packages cannot name or implement
+  it.
+- `RequireRoundTrip` uses the JSON path (`MarshalJSON`/`UnmarshalJSON`) rather than
+  binary snapshots because `RestoreSnapshot` enforces a same-world identity token
+  that makes cross-world round-trip testing impossible by design.
+- Coverage: 95.1% for the `flectest` package (all paths including error branches).
+
+### New files
+
+- `flectest/flectest.go` — package implementation
+- `flectest/flectest_test.go` — external black-box tests
+- `flectest/flectest_internal_test.go` — internal white-box tests
+- `flectest/example_test.go` — runnable examples
+- `flectest/testdata/basic.golden.json` — golden file for `AssertSnapshotGolden` example
+- `docs/Testing.md` — flectest reference documentation
+
+---
+
 ## v0.109.0 — 2026-05-15 — Phase 16.54: Traversal iter.Seq adapters
 
 Fourth post-port-completion phase. Completes the `iter.Seq` adoption story by
