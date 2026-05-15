@@ -41,6 +41,25 @@
 //	    })
 //	})
 //
+// # Range-over-func Iteration
+//
+// Go 1.23+ range-over-func iteration (iter.Seq / iter.Seq2) is available via
+// [All1], [All2], [All3], [All4] for typed component access, and [QueryAll] /
+// [CachedQueryAll] for bare entity-ID iteration. Break is fully supported.
+//
+//	w.Read(func(r *flecs.Reader) {
+//	    for e, pos := range flecs.All1[Position](r) {
+//	        fmt.Println(e, pos.X, pos.Y)
+//	    }
+//	})
+//
+// Context-aware variants ([QueryAllContext], [CachedQueryAllContext]) yield
+// (id, nil) for each match and (0, ctx.Err()) on cancellation.
+//
+// The *T pointers yielded by All1–All4 point into table column memory and are
+// valid only within the yield call body. Dereference and stack-copy the value
+// before any structural mutation (Add/Remove/Set on a new component).
+//
 // # Pipelines and Systems
 //
 // [NewSystem] registers a [System] that runs on every [World.Progress] call in

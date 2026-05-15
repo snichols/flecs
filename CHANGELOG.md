@@ -1,5 +1,86 @@
 # Changelog
 
+## v0.107.0 — 2026-05-15 — Phase 16.52: iter.Seq / range-over-func for queries
+
+Second post-port-completion phase. Adds Go 1.23+ `iter.Seq` / `iter.Seq2`
+adapters so callers can write idiomatic `for ... range` loops over query results
+without sacrificing break support or the full Inheritable / CanToggle semantics.
+
+### What changed
+
+- **`All1[A](s scope) iter.Seq2[ID, *A]`** — yields each entity and a pointer
+  to its A component column slot.
+- **`All2[A, B](s scope) iter.Seq2[ID, Pair[A, B]]`** — yields entity and a
+  `Pair` struct holding `*A` and `*B`.
+- **`All3[A, B, C](s scope) iter.Seq2[ID, Triple[A, B, C]]`** — three
+  components via a `Triple` struct.
+- **`All4[A, B, C, D](s scope) iter.Seq2[ID, Quad[A, B, C, D]]`** — four
+  components via a `Quad` struct.
+- **`QueryAll(q *Query, s scope) iter.Seq[ID]`** — bare entity-ID iteration
+  over a `*Query`.
+- **`CachedQueryAll(cq *CachedQuery, s scope) iter.Seq[ID]`** — bare entity-ID
+  iteration over a `*CachedQuery`.
+- **`QueryAllContext(ctx, q, s) iter.Seq2[ID, error]`** — context-aware
+  variant; yields `(0, ctx.Err())` on cancellation and stops.
+- **`CachedQueryAllContext(ctx, cq, s) iter.Seq2[ID, error]`** — same for
+  cached queries.
+- **`Pair[A, B any]`** / **`Triple[A, B, C any]`** / **`Quad[A, B, C, D any]`**
+  — new generic struct types used as the second element of `iter.Seq2` returns.
+
+### New API
+
+```go
+// Bare entity-ID iteration.
+for e := range flecs.QueryAll(q, r) { ... }
+
+// Typed iteration — component pointers valid within the yield body only.
+for e, pos := range flecs.All1[Position](r) { ... }
+for e, pv  := range flecs.All2[Position, Velocity](r) {
+    pos, vel := pv.A, pv.B
+}
+
+// Context-aware — yields (0, ctx.Err()) on cancellation.
+for id, err := range flecs.QueryAllContext(ctx, q, r) {
+    if err != nil { return err }
+}
+```
+
+### Design notes
+
+- All adapters drive iteration through `Query.Iter()` / `QueryIter.Next()` /
+  `Field[T]` directly — the existing `Each` / `EachContext` callbacks are not
+  used, preserving their stable signatures and enabling early-exit via break.
+- Every loop level (outer `it.Next()` table loop AND inner per-entity loop)
+  checks `yield`'s return value and returns immediately on `false` — intra-table
+  AND inter-table breaks both stop cleanly.
+- Inheritable (`upPtr`) and CanToggle (`IsRowEnabled`) paths are preserved
+  verbatim from `Each1`–`Each4`.
+- Context checks use the same `ctxCheckInterval = 1024` table cadence as
+  `EachContext`, so `*AllContext` variants impose equivalent overhead.
+
+### New tests
+
+- `query_iter_seq_test.go` — 19 tests covering bare iteration, early-exit
+  (intra-table and inter-table break), typed 1–4 component yields, inheritable
+  shared-pointer path, CanToggle skip, pre-cancelled and mid-iteration context
+  cancellation, and Pair/Triple/Quad field access.
+- `queries_iter_examples_test.go` — runnable `Example*` functions for godoc.
+- `bench_test.go` — `BenchmarkEach1_vs_All1` (1 000-entity single-component
+  workload; All1 must be within 5 % of Each1 wall-clock).
+
+### Documentation
+
+- `docs/Queries.md` — new major section "Range-over-func iteration".
+- `doc.go` — package overview extended with a range-over-func example.
+- `README.md` — feature row added.
+
+### Breaking changes
+
+None. All additions are backward-compatible; existing `Each*`, `Iter`, and
+`Field[T]` APIs are unchanged.
+
+---
+
 ## v0.106.0 — 2026-05-15 — Phase 16.51: Go-idiomatic context.Context cancellation
 
 First post-port-completion phase. Adds cooperative `context.Context` cancellation
