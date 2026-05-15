@@ -1,4 +1,0 @@
-## iterate iteration 1 (2026-05-15)
-
-Phase 16.38 multi-period stats aggregation (v0.93.0): implemented MetricGauge/MetricCounter/StatsWindow/StatsPeriod types, WorldStatsAggregated/PipelineStatsAggregated structs, WorldStatsWindow/PipelineStatsWindow/StatsTick API, ring-buffer cascade (second→minute→hour every 60/3600 ticks), ?period= REST parameter on /stats/world and /stats/pipeline with 400 on unknown period and byte-identical back-compat on absent period. 13 new tests all pass, go vet/golangci-lint clean, -race -count=3 clean, 95.0% coverage. Docs updated: Stats.md multi-period section, FlecsRemoteApi.md ?period= table, docs/README.md 3 stale entries fixed (entity scoping, WriteOnce, entity/component mutation), CHANGELOG.md v0.93.0 entry, ROADMAP.md bumped to v0.93.0, README.md Stats row updated.
-
