@@ -214,6 +214,13 @@ type World struct {
 	statsAggPipeSec   pipelineAggWindows
 	statsAggPipeMin   pipelineAggWindows
 	statsAggPipeHour  pipelineAggWindows
+	// Extra counters captured in statsCommit for goroutine-safe expvar reads.
+	// Protected by statsMu; updated once per Progress call.
+	statsComponentCount   int
+	statsSystemCount      int
+	statsObserverCount    int
+	statsReclaimedTables  uint64
+	statsLastProgressWall float64 // unix seconds; 0 before first Progress
 	// builtinByName maps canonical built-in entity names (e.g. "ChildOf", "Disabled")
 	// to their entity IDs. Checked by LookupChild before the component scan so that
 	// built-in entities are DSL-resolvable without holding a Name component (which

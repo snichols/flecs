@@ -183,6 +183,11 @@ func (r *Registry) IDs() []ids.ID {
 	return out
 }
 
+// IDCount returns the number of registered component IDs (same set as IDs()).
+// Unlike Count (which returns the Go-type count), IDCount includes IDs added
+// via EnsureID (raw entity/pair tags).
+func (r *Registry) IDCount() int { return len(r.idOrder) }
+
 // RegisterPairDataByType is the reflect.Type analog of RegisterPairData[T].
 // It ensures that pairID is associated with a per-pair TypeInfo whose metadata
 // matches t, with Name "pair(<t.String()>)". Used by SetPairByID for dynamic

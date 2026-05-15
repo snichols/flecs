@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.111.0 — 2026-05-15 — Phase 16.56: expvar metrics integration
+
+Sixth post-port-completion phase. Publishes the Stats addon's counters as stdlib
+`expvar.Var` values so production deployments get `/debug/vars` metrics with
+**zero third-party dependencies**.
+
+### What changed
+
+- **New `PublishExpvar(w *World, prefix string) *ExpvarHandle`** — registers lazy
+  `expvar.Func` variables that re-read live world stats on each `/debug/vars` scrape.
+  Publishes `<prefix>` (whole-tree JSON), `<prefix>.entity_count`,
+  `<prefix>.table_count`, `<prefix>.component_count`, `<prefix>.system_count`,
+  `<prefix>.observer_count`, `<prefix>.frame_count`, `<prefix>.reclaimed_tables`,
+  `<prefix>.last_progress_seconds`, `<prefix>.phases`, `<prefix>.window_second`,
+  `<prefix>.window_minute`, `<prefix>.window_hour`. No background goroutine spawned.
+- **`(*ExpvarHandle).Unpublish()`** — nulls out published vars (emits JSON `null`);
+  names remain registered for process lifetime (expvar stdlib limitation, documented).
+- **`ExpvarMap(w *World) *expvar.Map`** — returns a live `*expvar.Map` without
+  touching the global registry; for custom mounting.
+- **New goroutine-safe snapshot fields** — `statsCommit` now captures
+  `statsComponentCount`, `statsSystemCount`, `statsObserverCount`,
+  `statsReclaimedTables`, and `statsLastProgressWall` under `statsMu` so all
+  expvar reads are race-free without requiring exclusive world access.
+- **`(*Registry).Count() int`** (`internal/component`) — allocation-free component count.
+- **New `docs/Observability.md`** — expvar reference: published-vars table,
+  `/debug/vars` wiring, Prometheus bridge note, Unpublish/no-deregister caveat,
+  scalar inter-variable skew trade-off, multi-world prefix guidance,
+  scrape-consistency model.
+- **`docs/Stats.md`** — cross-link to Observability.md.
+
+### Goroutine safety
+
+All published-var closures acquire `statsMu.RLock()`. The whole-tree `<prefix>` var
+takes a single lock for internal consistency. Scalar vars each take their own lock;
+minor inter-variable skew within one scrape is real and documented.
+
+### No new dependencies
+
+`expvar` is stdlib. `go.uber.org/goleak` was already an indirect test dependency
+(Phase 16.55). `go list -deps` shows no new third-party entry.
+
 ## v0.110.0 — 2026-05-15 — Phase 16.55: flectest testing subpackage
 
 Fifth post-port-completion phase. Provides a `testing.TB`-aware helper package
