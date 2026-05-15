@@ -2282,12 +2282,18 @@ func TestCovDeferredPolicyTags(t *testing.T) {
 	// Two commands per entity triggers batchForEntity, which executes the
 	// policy dispatch branches in cmd_queue.go's pass-1 loop.
 	w.Write(func(fw *flecs.Writer) {
-		flecs.AddID(fw, relExcl, w.Exclusive()); flecs.AddID(fw, relExcl, neutralTag)
-		flecs.AddID(fw, relSym, w.Symmetric()); flecs.AddID(fw, relSym, neutralTag)
-		flecs.AddID(fw, relAcyc, w.Acyclic()); flecs.AddID(fw, relAcyc, neutralTag)
-		flecs.AddID(fw, relTrav, w.Traversable()); flecs.AddID(fw, relTrav, neutralTag)
-		flecs.AddID(fw, relOC, w.OrderedChildren()); flecs.AddID(fw, relOC, neutralTag)
-		flecs.AddID(fw, compSparse, w.Sparse()); flecs.AddID(fw, compSparse, neutralTag)
+		flecs.AddID(fw, relExcl, w.Exclusive())
+		flecs.AddID(fw, relExcl, neutralTag)
+		flecs.AddID(fw, relSym, w.Symmetric())
+		flecs.AddID(fw, relSym, neutralTag)
+		flecs.AddID(fw, relAcyc, w.Acyclic())
+		flecs.AddID(fw, relAcyc, neutralTag)
+		flecs.AddID(fw, relTrav, w.Traversable())
+		flecs.AddID(fw, relTrav, neutralTag)
+		flecs.AddID(fw, relOC, w.OrderedChildren())
+		flecs.AddID(fw, relOC, neutralTag)
+		flecs.AddID(fw, compSparse, w.Sparse())
+		flecs.AddID(fw, compSparse, neutralTag)
 	})
 	// Verify at least one policy was applied.
 	w.Read(func(r *flecs.Reader) {
@@ -2363,7 +2369,6 @@ func TestCovSetByIDInHook(t *testing.T) {
 // which is a union-pair RemoveID.
 func TestCovUnionPairBatchRemove(t *testing.T) {
 	w := flecs.New()
-	type covUnionTag struct{}
 	var rel, tgt, e1 flecs.ID
 	w.Write(func(fw *flecs.Writer) {
 		rel = fw.NewEntity()
@@ -2447,9 +2452,10 @@ func TestCovCachedQueryPrefabSkip(t *testing.T) {
 
 // TestCovSparseBatchRemove covers two coverage gaps:
 // 1. cmd_queue.go:226 (sparse/DontFragment remove break in batchForEntity)
-//    - triggered when two commands for the same entity include Remove[Sparse]
+//   - triggered when two commands for the same entity include Remove[Sparse]
+//
 // 2. scope.go:692 (sparse remove returns false when entity lacks component)
-//    - triggered by calling Remove[Sparse] on an entity without the component
+//   - triggered by calling Remove[Sparse] on an entity without the component
 func TestCovSparseBatchRemove(t *testing.T) {
 	w := flecs.New()
 	type covSparseRm struct{ V int }
