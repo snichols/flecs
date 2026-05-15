@@ -688,13 +688,35 @@ func (cq *CachedQuery) EntityCount() int {
 	return n
 }
 
+// removeTable removes t from cq.tables if present. Called by the World during
+// table reclamation to unlink dead tables from all live cached queries.
+func (cq *CachedQuery) removeTable(t *table.Table) {
+	for i, ct := range cq.tables {
+		if ct == t {
+			cq.tables = append(cq.tables[:i], cq.tables[i+1:]...)
+			if cq.tableUpSources != nil {
+				cq.tableUpSources = append(cq.tableUpSources[:i], cq.tableUpSources[i+1:]...)
+			}
+			t.DecrRef() // balance the IncrRef from tryMatchTable
+			return
+		}
+	}
+}
+
 // Close marks the query as removed. Idempotent: safe to call multiple times.
 // After Close, Iter/Each/Terms/Count/EntityCount return empty results, and
 // future table-creation notifications are ignored. O(1), 0 allocs.
 func (cq *CachedQuery) Close() {
+	if cq.removed {
+		return
+	}
 	if cq.nameObserver != nil {
 		cq.nameObserver.Unsubscribe()
 		cq.nameObserver = nil
+	}
+	// Release table references held since construction / tryMatchTable.
+	for _, t := range cq.tables {
+		t.DecrRef()
 	}
 	cq.removed = true
 }
@@ -877,6 +899,7 @@ func (cq *CachedQuery) tryMatchTable(t *table.Table) {
 			return
 		}
 	}
+	t.IncrRef() // hold a reference so the table is not reclaimed while cached
 	cq.tables = append(cq.tables, t)
 	cq.tableUpSources = append(cq.tableUpSources, sources)
 	cq.tablesAdded = true

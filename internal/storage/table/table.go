@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snichols/flecs/internal/component"
@@ -47,6 +48,17 @@ type Table struct {
 	// Absence of an entry means all rows are enabled (lazy allocation: only created
 	// on the first DisableRow call). Keyed by component ID as it appears in sig.
 	bitsets map[ids.ID][]uint64
+	// Reclamation tracking fields (Phase 16.46).
+	// emptyTicks counts consecutive Progress ticks where Count() == 0.
+	// refCount is held by live queries/observers/iters; reclamation is skipped
+	// when refCount > 0. pinned suppresses reclamation unconditionally.
+	// dead is set after the table is reclaimed; pointer dereferences panic.
+	// reclaimEpoch records the last tick at which the table was reclaim-eligible.
+	emptyTicks   uint32
+	refCount     int32 // accessed via sync/atomic
+	reclaimEpoch uint64
+	pinned       bool
+	dead         bool
 }
 
 // New constructs a Table for the given sorted component-id signature.
@@ -101,6 +113,71 @@ func (t *Table) ColumnIndex(id ids.ID) int {
 // by CachedQuery.Changed() to detect whether a table was mutated between calls.
 func (t *Table) ChangeCount() uint64 { return t.changeCount }
 
+// Pin prevents this table from being reclaimed by the sweep, regardless of
+// emptyTicks or refCount. Idempotent.
+func (t *Table) Pin() { t.pinned = true }
+
+// Unpin re-enables reclamation eligibility. Idempotent.
+func (t *Table) Unpin() { t.pinned = false }
+
+// IsPinned reports whether the table is pinned against reclamation.
+func (t *Table) IsPinned() bool { return t.pinned }
+
+// IncrRef atomically increments the reference count. Called by queries,
+// observers, and open iterators that hold a pointer to this table.
+func (t *Table) IncrRef() { atomic.AddInt32(&t.refCount, 1) }
+
+// DecrRef atomically decrements the reference count. Panics if the count would
+// go negative (indicates a bug in the caller's ref-tracking).
+func (t *Table) DecrRef() {
+	if atomic.AddInt32(&t.refCount, -1) < 0 {
+		panic("table: DecrRef: refCount went negative")
+	}
+}
+
+// RefCount returns the current reference count. For testing only.
+func (t *Table) RefCount() int32 { return atomic.LoadInt32(&t.refCount) }
+
+// EmptyTicks returns the number of consecutive Progress ticks during which
+// the table had Count() == 0.
+func (t *Table) EmptyTicks() uint32 { return t.emptyTicks }
+
+// IncrEmptyTicks increments emptyTicks by one. Called by the reclamation
+// sweep for each table that is empty, not pinned, and has no live refs.
+func (t *Table) IncrEmptyTicks() { t.emptyTicks++ }
+
+// ResetEmptyTicks resets emptyTicks to zero. Called when a row is inserted
+// (in Append) and on snapshot restore.
+func (t *Table) ResetEmptyTicks() { t.emptyTicks = 0 }
+
+// SetReclaimEpoch records the last tick at which this table was
+// reclaim-eligible.
+func (t *Table) SetReclaimEpoch(epoch uint64) { t.reclaimEpoch = epoch }
+
+// ReclaimEpoch returns the last tick at which this table was reclaim-eligible.
+func (t *Table) ReclaimEpoch() uint64 { return t.reclaimEpoch }
+
+// IsDead reports whether this table has been reclaimed. Any access to a dead
+// table via a retained *Table pointer is a programming error; callers should
+// treat a true return as an internal panic trigger.
+func (t *Table) IsDead() bool { return t.dead }
+
+// MarkDead marks the table as reclaimed. After this call, retained *Table
+// pointers must not be used to read entity or component data.
+func (t *Table) MarkDead() { t.dead = true }
+
+// FreeColumns releases column storage back to the runtime, dropping all row
+// data. Called during reclamation after all observers have fired. The table
+// pointer itself remains allocated but dead==true; any subsequent data access
+// panics on the caller's side via IsDead checks.
+func (t *Table) FreeColumns() {
+	t.entities = nil
+	t.columns = nil
+	t.bitsets = nil
+	t.addEdges = nil
+	t.removeEdges = nil
+}
+
 // BumpChange increments the table's change counter. Called by the World after
 // a column write (Set[T], SetByID, SetPair[T], SetPairByID) on an entity that
 // already owned the component — structural changes are covered by Append and
@@ -112,6 +189,7 @@ func (t *Table) BumpChange() { t.changeCount++ }
 // All non-tag component columns are extended by one zero element.
 // Existing CanToggle bitsets are extended with the new row set to enabled (1).
 func (t *Table) Append(entity ids.ID) int {
+	t.emptyTicks = 0 // reset reclamation counter on first row insertion
 	row := len(t.entities)
 	t.entities = append(t.entities, entity)
 	for _, col := range t.columns {
@@ -245,15 +323,20 @@ func (t *Table) NextOnRemove(id ids.ID) (*Table, bool) {
 }
 
 // CacheAddEdge records that adding id to this table's signature leads to dst.
-// Idempotent if dst is the same pointer. Panics if a different *Table is already
-// cached for (t, +id) — this indicates a correctness bug upstream.
+// Idempotent if dst is the same pointer. Panics if a different, live *Table is
+// already cached for (t, +id) — this indicates a correctness bug upstream.
+// A stale dead-table entry is silently overwritten (reclamation may invalidate
+// cached destinations).
 // Not goroutine-safe; matches the Phase 1 single-threaded World invariant.
 func (t *Table) CacheAddEdge(id ids.ID, dst *Table) {
 	if t.addEdges == nil {
 		t.addEdges = make(map[ids.ID]*Table)
 	}
 	if existing, ok := t.addEdges[id]; ok && existing != dst {
-		panic("table: CacheAddEdge: conflicting destination for same (table, id)")
+		if !existing.dead {
+			panic("table: CacheAddEdge: conflicting destination for same (table, id)")
+		}
+		// Overwrite stale dead-table entry.
 	}
 	t.addEdges[id] = dst
 }
@@ -315,7 +398,10 @@ func (t *Table) CacheRemoveEdge(id ids.ID, dst *Table) {
 		t.removeEdges = make(map[ids.ID]*Table)
 	}
 	if existing, ok := t.removeEdges[id]; ok && existing != dst {
-		panic("table: CacheRemoveEdge: conflicting destination for same (table, id)")
+		if !existing.dead {
+			panic("table: CacheRemoveEdge: conflicting destination for same (table, id)")
+		}
+		// Overwrite stale dead-table entry.
 	}
 	t.removeEdges[id] = dst
 }

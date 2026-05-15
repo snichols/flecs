@@ -390,6 +390,11 @@ func (w *World) Progress(dt float32) {
 	w.frameCount++
 	w.time += dt
 
+	// Reclamation sweep: advance emptyTicks and free tables that have been empty
+	// for at least reclaimThreshold consecutive ticks. Runs before phase dispatch
+	// so no system sees a table that was just reclaimed.
+	w.reclaimDeadTables()
+
 	// Timer addon: advance all Timer and RateFilter entities ONCE per outer Progress,
 	// before any phase runs. OnFixedUpdate sub-steps do NOT re-tick timers.
 	addonDT := time.Duration(float64(dt) * float64(time.Second))

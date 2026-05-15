@@ -116,7 +116,7 @@ func ObserveWithOptions[T any](w *World, opts ObserverOptions, events []EventKin
 
 	if opts.source != 0 {
 		for _, ev := range events {
-			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill {
+			if ev == EventOnTableCreate || ev == EventOnTableEmpty || ev == EventOnTableFill || ev == EventOnTableDelete {
 				panic("flecs: ObserveWithOptions: WithSource is not compatible with table events; tables have no source entity semantics")
 			}
 		}

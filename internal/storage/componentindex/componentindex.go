@@ -65,6 +65,18 @@ func (idx *Index) Each(componentID ids.ID, fn func(*table.Table) bool) {
 	}
 }
 
+// RemoveTable removes t from the list for componentID. No-op if t is not in
+// the list. Used during table reclamation to unlink a dead table.
+func (idx *Index) RemoveTable(componentID ids.ID, t *table.Table) {
+	list := idx.m[componentID]
+	for i, existing := range list {
+		if existing == t {
+			idx.m[componentID] = append(list[:i], list[i+1:]...)
+			return
+		}
+	}
+}
+
 // Count returns the number of tables containing componentID. O(1).
 func (idx *Index) Count(componentID ids.ID) int {
 	return len(idx.m[componentID])

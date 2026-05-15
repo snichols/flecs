@@ -201,6 +201,55 @@ func OnTableFillWithOptions(w *World, opts ObserverOptions, fn func(fw *Writer, 
 	return obs
 }
 
+// OnTableDelete registers fn as an observer that fires synchronously before a
+// table is reclaimed by the sweep pass. The handler receives a *Reader (not
+// *Writer) because the table is mid-destruction: the signature is still readable
+// but the table must not receive new rows. Mutations to the world must be
+// issued via fw.Writer() — they are deferred through the standard write scope.
+//
+// WithYieldExisting is a no-op for OnTableDelete: there are no pre-existing
+// "deleted" events to replay at registration time.
+//
+// Returns an *Observer handle; call Unsubscribe to stop receiving events.
+func OnTableDelete(w *World, fn func(fr *Reader, t *Table)) *Observer {
+	return OnTableDeleteWithOptions(w, ObserverOptions{}, fn)
+}
+
+// OnTableDeleteWithOptions is OnTableDelete with additional options such as
+// WithQuery for component-signature filtering.
+//
+// If opts carries WithQuery(terms...), fn fires only for tables whose component
+// signature matches all specified terms.
+//
+// WithYieldExisting is a no-op: reclamation events have no pre-existing state.
+func OnTableDeleteWithOptions(w *World, opts ObserverOptions, fn func(fr *Reader, t *Table)) *Observer {
+	w.checkExclusiveAccessWrite()
+
+	callback := func(_ *Writer, _ ID, ptr unsafe.Pointer) {
+		fn(&w.readCapability, (*Table)(ptr))
+	}
+
+	obs := &Observer{w: w, enabled: true}
+	node := w.addObserverNode(tableCreateSentinelID, w.eventOnTableDeleteID, 0, callback)
+	node.observer = obs
+	if len(opts.filterTerms) > 0 {
+		node.multiFilter = &multiTermFilter{
+			filterTerms: append([]Term(nil), opts.filterTerms...),
+		}
+	}
+	obs.nodes = append(obs.nodes, node)
+
+	if w.logger != nil {
+		w.logger.LogAttrs(context.Background(), slog.LevelDebug, "observer registered",
+			slog.String("event", EventOnTableDelete.String()))
+	}
+
+	// WithYieldExisting is intentionally ignored for OnTableDelete: there is no
+	// meaningful state to replay (deleted tables no longer exist).
+
+	return obs
+}
+
 // dispatchTableObservers fires all active observers for (id, eventEntity) in
 // registration order, evaluating multi-term filters against the table's signature
 // rather than an entity. Used for OnTableEmpty and OnTableFill events.
