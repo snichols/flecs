@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -19,8 +20,9 @@ var snapshotMagic = [4]byte{0xF1, 0xEC, 0x53, 0x00}
 const snapshotFormatVersion = uint32(1)
 
 // firstSnapUserIndex is the first raw entity index owned by user code.
-// Built-in entities occupy indices 1–47; user entities start at 48.
-const firstSnapUserIndex = uint32(48)
+// Built-in entities occupy indices 1–72 (47 non-unit + 25 unit entities);
+// user entities start at index 73.
+const firstSnapUserIndex = uint32(73)
 
 // Snapshot holds a binary in-memory snapshot of a World's state. The blob is
 // opaque; use [Snapshot.Bytes] / [LoadSnapshot] for disk persistence. The
@@ -184,6 +186,7 @@ func (br *binReader) raw(n int) ([]byte, error) {
 //  7. Entity range
 //  8. Policies      (20 maps in fixed order)
 //  9. Ordered children
+// 10. Unit defs     (user-registered unit definitions)
 
 func snapshotSerialize(w *World) []byte {
 	bw := &binWriter{buf: &bytes.Buffer{}}
@@ -196,6 +199,7 @@ func snapshotSerialize(w *World) []byte {
 	serializeEntityRange(bw, w)
 	serializePolicies(bw, w)
 	serializeOrderedChildren(bw, w)
+	serializeUnitDefs(bw, w)
 	return bw.buf.Bytes()
 }
 
@@ -561,6 +565,7 @@ func serializeOrderedChildren(bw *binWriter, w *World) {
 //  8. Restore entity range
 //  9. Restore policies
 // 10. Restore ordered children
+// 11. Restore unit defs
 
 func snapshotDeserialize(w *World, blob []byte) error {
 	br := &binReader{data: blob}
@@ -590,6 +595,9 @@ func snapshotDeserialize(w *World, blob []byte) error {
 		return err
 	}
 	if err := deserializeOrderedChildren(br, w); err != nil {
+		return err
+	}
+	if err := deserializeUnitDefs(br, w); err != nil {
 		return err
 	}
 	w.inheritorCache = nil
@@ -1223,6 +1231,160 @@ func deserializeOrderedChildren(br *binReader, w *World) error {
 			w.orderedChildren = make(map[ID]*orderedChildList)
 		}
 		w.orderedChildren[parentIdx] = &orderedChildList{entries: children}
+	}
+	return nil
+}
+
+// ─── serializeUnitDefs ───────────────────────────────────────────────────────
+//
+// Format per unit:
+//   u64 entityID
+//   u8  nameLen; nameLen bytes (UTF-8)
+//   u8  symbolLen; symbolLen bytes
+//   f64 factor (8 bytes LE IEEE-754)
+//   u8  power (int8 as uint8)
+//   u64 base (0 if none)
+//   u64 over (0 if none)
+//   u32 numCount; numCount × u64 (numerator factor IDs)
+//   u32 denomCount; denomCount × u64 (denominator factor IDs)
+
+func serializeUnitDefs(bw *binWriter, w *World) {
+	var units []struct {
+		id ID
+		u  Unit
+	}
+	for id, u := range w.unitDefs {
+		if isBuiltinUnit(id) || id.Index() < firstSnapUserIndex {
+			continue
+		}
+		units = append(units, struct {
+			id ID
+			u  Unit
+		}{id, u})
+	}
+	bw.u32(uint32(len(units)))
+	for _, e := range units {
+		bw.id(e.id)
+		b := []byte(e.u.Name)
+		bw.u8(uint8(len(b)))
+		bw.raw(b)
+		s := []byte(e.u.Symbol)
+		bw.u8(uint8(len(s)))
+		bw.raw(s)
+		var f [8]byte
+		binary.LittleEndian.PutUint64(f[:], math.Float64bits(e.u.Factor))
+		bw.raw(f[:])
+		bw.u8(uint8(e.u.Power))
+		bw.id(e.u.Base)
+		bw.id(e.u.Over)
+		if cd, ok := w.compoundDefs[e.id]; ok {
+			bw.u32(uint32(len(cd.numerators)))
+			for _, fid := range cd.numerators {
+				bw.id(fid)
+			}
+			bw.u32(uint32(len(cd.denominators)))
+			for _, fid := range cd.denominators {
+				bw.id(fid)
+			}
+		} else {
+			bw.u32(0)
+			bw.u32(0)
+		}
+	}
+}
+
+// deserializeUnitDefs restores user-registered unit definitions from the snapshot.
+func deserializeUnitDefs(br *binReader, w *World) error {
+	for id := range w.unitDefs {
+		if !isBuiltinUnit(id) && id.Index() >= firstSnapUserIndex {
+			delete(w.unitDefs, id)
+		}
+	}
+	if w.compoundDefs != nil {
+		for id := range w.compoundDefs {
+			if !isBuiltinUnit(id) && id.Index() >= firstSnapUserIndex {
+				delete(w.compoundDefs, id)
+			}
+		}
+	}
+	count, err := br.u32()
+	if err != nil {
+		return err
+	}
+	for i := uint32(0); i < count; i++ {
+		entityID, err := br.id()
+		if err != nil {
+			return err
+		}
+		nameLen, err := br.u8()
+		if err != nil {
+			return err
+		}
+		nameBytes, err := br.raw(int(nameLen))
+		if err != nil {
+			return err
+		}
+		symLen, err := br.u8()
+		if err != nil {
+			return err
+		}
+		symBytes, err := br.raw(int(symLen))
+		if err != nil {
+			return err
+		}
+		fBytes, err := br.raw(8)
+		if err != nil {
+			return err
+		}
+		factor := math.Float64frombits(binary.LittleEndian.Uint64(fBytes))
+		powerByte, err := br.u8()
+		if err != nil {
+			return err
+		}
+		base, err := br.id()
+		if err != nil {
+			return err
+		}
+		over, err := br.id()
+		if err != nil {
+			return err
+		}
+		numCount, err := br.u32()
+		if err != nil {
+			return err
+		}
+		numIDs := make([]ID, numCount)
+		for j := range numIDs {
+			numIDs[j], err = br.id()
+			if err != nil {
+				return err
+			}
+		}
+		denomCount, err := br.u32()
+		if err != nil {
+			return err
+		}
+		denomIDs := make([]ID, denomCount)
+		for j := range denomIDs {
+			denomIDs[j], err = br.id()
+			if err != nil {
+				return err
+			}
+		}
+		w.unitDefs[entityID] = Unit{
+			Name:   string(nameBytes),
+			Symbol: string(symBytes),
+			Factor: factor,
+			Power:  int8(powerByte),
+			Base:   base,
+			Over:   over,
+		}
+		if numCount > 0 || denomCount > 0 {
+			w.compoundDefs[entityID] = &compoundDef{
+				numerators:   numIDs,
+				denominators: denomIDs,
+			}
+		}
 	}
 	return nil
 }

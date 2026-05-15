@@ -3,17 +3,21 @@ package flecs
 import "math"
 
 // Unit describes the properties of a unit entity.
-// Symbol is the short display string (e.g. "m", "km", "s").
-// Name is the human-readable label (e.g. "Meter", "KiloMeter", "Second").
+// Symbol is the short display string (e.g. "m", "km", "s", "m/s").
+// Name is the human-readable label (e.g. "Meter", "KiloMeter", "MeterPerSecond").
 // Base is the entity of the unit this one is derived from; zero for a root/SI unit.
 // Factor is the multiplier that converts one of this unit into one of the base unit
 // (e.g. 1000 for KiloMeter → Meter; 3600 for Hour → Second).
 // Root units carry Factor=1 and Base=0.
+// Over is the denominator unit for UnitQuotient-style compounds; zero otherwise.
+// Power is the exponent for UnitPower-style compounds; zero/1 means default (1).
 type Unit struct {
 	Symbol string
 	Name   string
 	Base   ID
 	Factor float64
+	Over   ID   // denominator unit (zero for non-quotient units)
+	Power  int8 // exponent; 0 = unset (treat as 1); non-zero for UnitPower compounds
 }
 
 // RegisterUnit registers a new unit entity and returns its ID.
@@ -45,26 +49,28 @@ func (fw *Writer) SetUnit(componentID ID, unitID ID) {
 	fw.scopeWorld().componentUnits[componentID] = unitID
 }
 
-// Convert converts value from fromUnit to toUnit by walking each unit's Base chain
-// to their common root. Returns ok=false when the units have different root bases
-// (incompatible physical dimensions) or when either ID is not a registered unit.
+// Convert converts value from fromUnit to toUnit. Both atomic and compound units are
+// supported. Returns ok=false when the units have incompatible physical dimensions
+// (different root-base exponent maps) or when either ID is not a registered unit.
 //
 // Special case: fromUnit == toUnit returns (value, true) with no lookup.
-// Multi-hop example: Day (Base=Hour, Factor=24) → Second resolves as
-// Day→Hour→Second, giving factor = 24×3600 = 86400.
+// Multi-hop atomic example: Day (Base=Hour, Factor=24) → Second = 86400.
+// Compound example: Convert(100, MeterPerSecond, KiloMeterPerHour) = 360.
 func Convert(w *World, value float64, fromUnit, toUnit ID) (float64, bool) {
 	if fromUnit == toUnit {
 		return value, true
 	}
-	fromFactor, fromRoot, ok := rootFactor(w, fromUnit)
+	visited := make(map[ID]bool)
+	fromExp, fromFactor, ok := siCanonical(w, fromUnit, 0, visited)
 	if !ok {
 		return 0, false
 	}
-	toFactor, toRoot, ok := rootFactor(w, toUnit)
+	clear(visited)
+	toExp, toFactor, ok := siCanonical(w, toUnit, 0, visited)
 	if !ok {
 		return 0, false
 	}
-	if fromRoot != toRoot {
+	if !expMapsEqual(fromExp, toExp) {
 		return 0, false
 	}
 	return value * fromFactor / toFactor, true
@@ -94,13 +100,15 @@ func rootFactor(w *World, unitID ID) (factor float64, root ID, ok bool) {
 	}
 }
 
-// bootstrapBuiltinUnits initializes unitDefs and componentUnits in w and
-// populates the 15 built-in unit definitions. Called from New() after all
-// built-in unit entity IDs (indices 48–62) have been allocated.
+// bootstrapBuiltinUnits initializes unitDefs, compoundDefs, and componentUnits in w and
+// populates the 25 built-in unit definitions (15 atomic + 10 compound).
+// Called from New() after all built-in unit entity IDs (indices 48–72) have been allocated.
 func bootstrapBuiltinUnits(w *World) {
-	w.unitDefs = make(map[ID]Unit, 20)
+	w.unitDefs = make(map[ID]Unit, 30)
 	w.componentUnits = make(map[ID]ID)
+	w.compoundDefs = make(map[ID]*compoundDef, 10)
 
+	// ── Atomic units (indices 48–62) ──────────────────────────────────────────
 	// Length
 	w.unitDefs[w.meterID] = Unit{Symbol: "m", Name: "Meter", Factor: 1}
 	w.unitDefs[w.kiloMeterID] = Unit{Symbol: "km", Name: "KiloMeter", Base: w.meterID, Factor: 1000}
@@ -114,37 +122,73 @@ func bootstrapBuiltinUnits(w *World) {
 	w.unitDefs[w.gramID] = Unit{Symbol: "g", Name: "Gram", Factor: 1}
 	w.unitDefs[w.kiloGramID] = Unit{Symbol: "kg", Name: "KiloGram", Base: w.gramID, Factor: 1000}
 	w.unitDefs[w.megaGramID] = Unit{Symbol: "Mg", Name: "MegaGram", Base: w.gramID, Factor: 1_000_000}
-	// Force, Energy, Frequency — opaque root units (no compound support in v1)
+	// Force, Energy, Frequency — opaque root units (compound aliases at indices 66–70)
 	w.unitDefs[w.newtonID] = Unit{Symbol: "N", Name: "Newton", Factor: 1}
 	w.unitDefs[w.jouleID] = Unit{Symbol: "J", Name: "Joule", Factor: 1}
 	w.unitDefs[w.hertzID] = Unit{Symbol: "Hz", Name: "Hertz", Factor: 1}
 	// Angle
 	w.unitDefs[w.radianID] = Unit{Symbol: "rad", Name: "Radian", Factor: 1}
 	w.unitDefs[w.degreeID] = Unit{Symbol: "°", Name: "Degree", Base: w.radianID, Factor: math.Pi / 180}
+
+	// ── Compound units (indices 63–72) ────────────────────────────────────────
+	// 63: MeterPerSecond = m/s
+	bootstrapCompound(w, w.meterPerSecondID, "MeterPerSecond", "",
+		[]ID{w.meterID}, []ID{w.secondID})
+	// 64: KiloMeterPerHour = km/h
+	bootstrapCompound(w, w.kiloMeterPerHourID, "KiloMeterPerHour", "",
+		[]ID{w.kiloMeterID}, []ID{w.hourID})
+	// 65: MeterPerSecondSquared = m/s²
+	bootstrapCompound(w, w.meterPerSecondSquaredID, "MeterPerSecondSquared", "",
+		[]ID{w.meterID}, []ID{w.secondID, w.secondID})
+	// 66: NewtonCompound = kg·m/s²
+	bootstrapCompound(w, w.newtonCompoundID, "NewtonCompound", "N",
+		[]ID{w.kiloGramID, w.meterID}, []ID{w.secondID, w.secondID})
+	// 67: JouleCompound = kg·m²/s²
+	bootstrapCompound(w, w.jouleCompoundID, "JouleCompound", "J",
+		[]ID{w.kiloGramID, w.meterID, w.meterID}, []ID{w.secondID, w.secondID})
+	// 68: Watt = kg·m²/s³
+	bootstrapCompound(w, w.wattID, "Watt", "W",
+		[]ID{w.kiloGramID, w.meterID, w.meterID}, []ID{w.secondID, w.secondID, w.secondID})
+	// 69: Pascal = kg/(m·s²)
+	bootstrapCompound(w, w.pascalID, "Pascal", "Pa",
+		[]ID{w.kiloGramID}, []ID{w.meterID, w.secondID, w.secondID})
+	// 70: HertzCompound = 1/s
+	bootstrapCompound(w, w.hertzCompoundID, "HertzCompound", "Hz",
+		nil, []ID{w.secondID})
+	// 71: RadianPerSecond = rad/s
+	bootstrapCompound(w, w.radianPerSecondID, "RadianPerSecond", "",
+		[]ID{w.radianID}, []ID{w.secondID})
+	// 72: Inverse — reciprocal helper entity (no compound def; opaque marker)
+	w.unitDefs[w.inverseID] = Unit{Symbol: "1/x", Name: "Inverse", Factor: 1}
 }
 
 // builtinUnitByIndex returns the world's built-in unit entity ID for the given
-// raw entity index (48–62). Returns 0 if the index does not correspond to a
+// raw entity index (48–72). Returns 0 if the index does not correspond to a
 // built-in unit.
 func (w *World) builtinUnitByIndex(idx uint32) ID {
-	if idx < 48 || idx > 62 {
+	if idx < 48 || idx > 72 {
 		return 0
 	}
-	units := [15]ID{
+	units := [25]ID{
+		// Atomic (48–62)
 		w.meterID, w.kiloMeterID, w.milliMeterID,
 		w.secondID, w.milliSecondID, w.minuteID, w.hourID,
 		w.gramID, w.kiloGramID, w.megaGramID,
 		w.newtonID, w.jouleID, w.hertzID,
 		w.radianID, w.degreeID,
+		// Compound (63–72)
+		w.meterPerSecondID, w.kiloMeterPerHourID, w.meterPerSecondSquaredID,
+		w.newtonCompoundID, w.jouleCompoundID, w.wattID, w.pascalID,
+		w.hertzCompoundID, w.radianPerSecondID, w.inverseID,
 	}
 	return units[idx-48]
 }
 
-// isBuiltinUnit reports whether unitID is one of the 15 built-in unit entities
-// (raw entity index 48–62).
+// isBuiltinUnit reports whether unitID is one of the 25 built-in unit entities
+// (raw entity index 48–72).
 func isBuiltinUnit(unitID ID) bool {
 	idx := unitID.Index()
-	return idx >= 48 && idx <= 62
+	return idx >= 48 && idx <= 72
 }
 
 // ── Built-in unit accessors ────────────────────────────────────────────────────
@@ -204,3 +248,45 @@ func (w *World) Radian() ID { return w.radianID }
 // Degree returns the ID of the built-in Degree angle unit entity (index 62).
 // Factor=math.Pi/180 relative to Radian (1° = π/180 rad).
 func (w *World) Degree() ID { return w.degreeID }
+
+// ── Built-in compound unit accessors (indices 63–72) ──────────────────────────
+
+// MeterPerSecond returns the built-in MeterPerSecond velocity unit entity (index 63).
+// Compound: m/s.
+func (w *World) MeterPerSecond() ID { return w.meterPerSecondID }
+
+// KiloMeterPerHour returns the built-in KiloMeterPerHour velocity unit entity (index 64).
+// Compound: km/h.
+func (w *World) KiloMeterPerHour() ID { return w.kiloMeterPerHourID }
+
+// MeterPerSecondSquared returns the built-in MeterPerSecondSquared acceleration unit entity (index 65).
+// Compound: m/s².
+func (w *World) MeterPerSecondSquared() ID { return w.meterPerSecondSquaredID }
+
+// NewtonCompound returns the built-in NewtonCompound force unit entity (index 66).
+// Compound: kg·m/s², Symbol="N".
+func (w *World) NewtonCompound() ID { return w.newtonCompoundID }
+
+// JouleCompound returns the built-in JouleCompound energy unit entity (index 67).
+// Compound: kg·m²/s², Symbol="J".
+func (w *World) JouleCompound() ID { return w.jouleCompoundID }
+
+// Watt returns the built-in Watt power unit entity (index 68).
+// Compound: kg·m²/s³, Symbol="W".
+func (w *World) Watt() ID { return w.wattID }
+
+// Pascal returns the built-in Pascal pressure unit entity (index 69).
+// Compound: kg/(m·s²), Symbol="Pa".
+func (w *World) Pascal() ID { return w.pascalID }
+
+// HertzCompound returns the built-in HertzCompound frequency unit entity (index 70).
+// Compound: 1/s, Symbol="Hz".
+func (w *World) HertzCompound() ID { return w.hertzCompoundID }
+
+// RadianPerSecond returns the built-in RadianPerSecond angular velocity unit entity (index 71).
+// Compound: rad/s.
+func (w *World) RadianPerSecond() ID { return w.radianPerSecondID }
+
+// Inverse returns the built-in Inverse reciprocal helper entity (index 72).
+// Opaque marker; use UnitPower(base, -1) to create typed reciprocal units.
+func (w *World) Inverse() ID { return w.inverseID }

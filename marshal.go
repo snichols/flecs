@@ -49,14 +49,26 @@ type jsonWorld struct {
 	CompUnits []jsonCompUnit `json:"comp_units,omitempty"`
 }
 
+// jsonUnitFactor represents one factor in a compound unit's numerator or denominator list.
+// Exactly one of Serial or BuiltinIdx is non-zero for each factor.
+type jsonUnitFactor struct {
+	Serial     int    `json:"serial,omitempty"`      // user unit entity serial
+	BuiltinIdx uint32 `json:"builtin_idx,omitempty"` // built-in unit raw index (48–72)
+}
+
 // jsonUnitDef is the serialised form of one user-registered unit entity.
 type jsonUnitDef struct {
-	EntitySerial   int     `json:"entity_serial"`
-	Symbol         string  `json:"symbol"`
-	Name           string  `json:"name"`
-	BaseSerial     int     `json:"base_serial,omitempty"`      // user-unit base entity serial
-	BaseBuiltinIdx uint32  `json:"base_builtin_idx,omitempty"` // built-in unit base raw index (48–62)
-	Factor         float64 `json:"factor"`
+	EntitySerial   int              `json:"entity_serial"`
+	Symbol         string           `json:"symbol"`
+	Name           string           `json:"name"`
+	BaseSerial     int              `json:"base_serial,omitempty"`      // user-unit base entity serial
+	BaseBuiltinIdx uint32           `json:"base_builtin_idx,omitempty"` // built-in unit base raw index (48–72)
+	Factor         float64          `json:"factor"`
+	OverSerial     int              `json:"over_serial,omitempty"`      // denominator unit serial (UnitQuotient)
+	OverBuiltinIdx uint32           `json:"over_builtin_idx,omitempty"` // denominator built-in index
+	Power          int8             `json:"power,omitempty"`            // exponent (UnitPower)
+	NumFactors     []jsonUnitFactor `json:"num_factors,omitempty"`      // compound numerator factors
+	DenomFactors   []jsonUnitFactor `json:"denom_factors,omitempty"`    // compound denominator factors
 }
 
 // jsonCompUnit maps one component to its unit.
@@ -214,22 +226,32 @@ func (w *World) MarshalJSON() ([]byte, error) {
 		w.DependsOn():          {},
 		w.EventMonitor():       {},
 		w.SlotOf():             {},
-		// Built-in unit entities (indices 48–62).
-		w.Meter():       {},
-		w.KiloMeter():   {},
-		w.MilliMeter():  {},
-		w.Second():      {},
-		w.MilliSecond(): {},
-		w.Minute():      {},
-		w.Hour():        {},
-		w.Gram():        {},
-		w.KiloGram():    {},
-		w.MegaGram():    {},
-		w.Newton():      {},
-		w.Joule():       {},
-		w.Hertz():       {},
-		w.Radian():      {},
-		w.Degree():      {},
+		// Built-in unit entities (indices 48–72).
+		w.Meter():                 {},
+		w.KiloMeter():             {},
+		w.MilliMeter():            {},
+		w.Second():                {},
+		w.MilliSecond():           {},
+		w.Minute():                {},
+		w.Hour():                  {},
+		w.Gram():                  {},
+		w.KiloGram():              {},
+		w.MegaGram():              {},
+		w.Newton():                {},
+		w.Joule():                 {},
+		w.Hertz():                 {},
+		w.Radian():                {},
+		w.Degree():                {},
+		w.MeterPerSecond():        {},
+		w.KiloMeterPerHour():      {},
+		w.MeterPerSecondSquared(): {},
+		w.NewtonCompound():        {},
+		w.JouleCompound():         {},
+		w.Watt():                  {},
+		w.Pascal():                {},
+		w.HertzCompound():         {},
+		w.RadianPerSecond():       {},
+		w.Inverse():               {},
 	}
 
 	var result []byte
@@ -546,7 +568,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 			})
 		}
 
-		// Serialize user-registered unit definitions. Built-in units (indices 48–62)
+		// Serialize user-registered unit definitions. Built-in units (indices 48–72)
 		// are excluded; they are re-created by New() at fixed indices on unmarshal.
 		var unitDefs []jsonUnitDef
 		for unitID, u := range w.unitDefs {
@@ -562,6 +584,7 @@ func (w *World) MarshalJSON() ([]byte, error) {
 				Symbol:       u.Symbol,
 				Name:         u.Name,
 				Factor:       u.Factor,
+				Power:        u.Power,
 			}
 			if u.Base != 0 {
 				if isBuiltinUnit(u.Base) {
@@ -569,6 +592,18 @@ func (w *World) MarshalJSON() ([]byte, error) {
 				} else if baseSerial, ok := m.idToSerial[u.Base]; ok {
 					def.BaseSerial = baseSerial
 				}
+			}
+			if u.Over != 0 {
+				if isBuiltinUnit(u.Over) {
+					def.OverBuiltinIdx = u.Over.Index()
+				} else if overSerial, ok := m.idToSerial[u.Over]; ok {
+					def.OverSerial = overSerial
+				}
+			}
+			// Serialize compound factor lists if present.
+			if cd, isCompound := w.compoundDefs[unitID]; isCompound {
+				def.NumFactors = serializeUnitFactors(cd.numerators, m.idToSerial, w)
+				def.DenomFactors = serializeUnitFactors(cd.denominators, m.idToSerial, w)
 			}
 			unitDefs = append(unitDefs, def)
 		}
@@ -915,7 +950,40 @@ func (w *World) UnmarshalJSON(data []byte) error {
 					return
 				}
 			}
-			w.unitDefs[unitID] = Unit{Symbol: ju.Symbol, Name: ju.Name, Base: base, Factor: ju.Factor}
+			var over ID
+			switch {
+			case ju.OverSerial != 0:
+				over, ok = serialToID[ju.OverSerial]
+				if !ok {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit over serial %d not found", ju.OverSerial)
+					return
+				}
+			case ju.OverBuiltinIdx != 0:
+				over = w.builtinUnitByIndex(ju.OverBuiltinIdx)
+				if over == 0 {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit over builtin index %d is not a built-in unit", ju.OverBuiltinIdx)
+					return
+				}
+			}
+			w.unitDefs[unitID] = Unit{Symbol: ju.Symbol, Name: ju.Name, Base: base, Factor: ju.Factor, Over: over, Power: ju.Power}
+
+			// Restore compound def if present.
+			if len(ju.NumFactors) > 0 || len(ju.DenomFactors) > 0 {
+				numIDs, err := resolveUnitFactors(ju.NumFactors, serialToID, w)
+				if err != nil {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit %d num_factors: %w", ju.EntitySerial, err)
+					return
+				}
+				denomIDs, err := resolveUnitFactors(ju.DenomFactors, serialToID, w)
+				if err != nil {
+					unmarshalErr = fmt.Errorf("flecs: unmarshal failed: unit %d denom_factors: %w", ju.EntitySerial, err)
+					return
+				}
+				if w.compoundDefs == nil {
+					w.compoundDefs = make(map[ID]*compoundDef)
+				}
+				w.compoundDefs[unitID] = &compoundDef{numerators: numIDs, denominators: denomIDs}
+			}
 		}
 
 		// Phase 6: restore component→unit mappings.
@@ -952,6 +1020,47 @@ func (w *World) UnmarshalJSON(data []byte) error {
 	})
 
 	return unmarshalErr
+}
+
+// serializeUnitFactors converts a list of compound unit factor IDs to jsonUnitFactor.
+func serializeUnitFactors(ids []ID, idToSerial map[ID]int, w *World) []jsonUnitFactor {
+	if len(ids) == 0 {
+		return nil
+	}
+	result := make([]jsonUnitFactor, 0, len(ids))
+	for _, id := range ids {
+		if isBuiltinUnit(id) {
+			result = append(result, jsonUnitFactor{BuiltinIdx: id.Index()})
+		} else if serial, ok := idToSerial[id]; ok {
+			result = append(result, jsonUnitFactor{Serial: serial})
+		}
+	}
+	return result
+}
+
+// resolveUnitFactors resolves a list of jsonUnitFactor to entity IDs during unmarshal.
+func resolveUnitFactors(factors []jsonUnitFactor, serialToID map[int]ID, w *World) ([]ID, error) {
+	if len(factors) == 0 {
+		return nil, nil
+	}
+	ids := make([]ID, 0, len(factors))
+	for _, f := range factors {
+		switch {
+		case f.Serial != 0:
+			id, ok := serialToID[f.Serial]
+			if !ok {
+				return nil, fmt.Errorf("factor serial %d not found", f.Serial)
+			}
+			ids = append(ids, id)
+		case f.BuiltinIdx != 0:
+			id := w.builtinUnitByIndex(f.BuiltinIdx)
+			if id == 0 {
+				return nil, fmt.Errorf("factor builtin index %d is not a built-in unit", f.BuiltinIdx)
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // unmarshalDynamic decodes a dynamic component value from raw JSON and calls

@@ -39,7 +39,7 @@ func mustMarshal(t *testing.T, w *flecs.World) []byte {
 }
 
 // nonDataEntities returns the set of IDs to exclude from user-entity counts:
-// the 62 built-in entities (including Degree at index 62) plus all
+// the 72 built-in entities (including Inverse at index 72) plus all
 // registered component entities.
 func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 	skip := map[flecs.ID]struct{}{
@@ -55,12 +55,15 @@ func nonDataEntities(w *flecs.World) map[flecs.ID]struct{} {
 		w.Wildcard(): {}, w.Any(): {},
 		w.EventOnAdd(): {}, w.EventOnSet(): {}, w.EventOnRemove(): {}, w.EventOnTableCreate(): {}, w.Event(): {},
 		w.DependsOn(): {}, w.EventMonitor(): {}, w.SlotOf(): {},
-		// Built-in unit entities (indices 48–62).
+		// Built-in unit entities (indices 48–72).
 		w.Meter(): {}, w.KiloMeter(): {}, w.MilliMeter(): {},
 		w.Second(): {}, w.MilliSecond(): {}, w.Minute(): {}, w.Hour(): {},
 		w.Gram(): {}, w.KiloGram(): {}, w.MegaGram(): {},
 		w.Newton(): {}, w.Joule(): {}, w.Hertz(): {},
 		w.Radian(): {}, w.Degree(): {},
+		w.MeterPerSecond(): {}, w.KiloMeterPerHour(): {}, w.MeterPerSecondSquared(): {},
+		w.NewtonCompound(): {}, w.JouleCompound(): {}, w.Watt(): {}, w.Pascal(): {},
+		w.HertzCompound(): {}, w.RadianPerSecond(): {}, w.Inverse(): {},
 	}
 	// Phase entities (indices 4-7) are no longer in the public API; use the
 	// test helper to access their IDs so they can be excluded from user counts.

@@ -1,19 +1,85 @@
 # Units addon
 
-The Units addon (Phase 16.30, v0.85.0) gives components typed unit semantics. A unit is a named entity carrying a `Symbol`, a `Name`, an optional `Base` (the parent unit in the derivation chain), and a `Factor` (the multiplier to convert one of this unit to one of its base). Components can be tagged with a unit so debug overlays, serializers, and conversion helpers can render values as `5.2 m/s` instead of raw numbers, and callers can convert between compatible units.
+The Units addon (Phase 16.30 / v0.85.0, extended in Phase 16.42 / v0.97.0) gives components typed unit semantics. A unit is a named entity carrying a `Symbol`, a `Name`, an optional `Base` (parent in the derivation chain), and a `Factor` (multiplier to convert to base). Components can be tagged with a unit so debug overlays, serializers, and conversion helpers can render values as `5.2 m/s` instead of raw numbers, and callers can convert between compatible units.
 
-## Declaring a unit
+## Declaring an atomic unit
 
-Built-in units are pre-registered at world creation. Call `w.Meter()`, `w.Second()`, etc. to obtain their IDs. Use `RegisterUnit` to add custom units:
+Built-in units are pre-registered at world creation. Use `RegisterUnit` to add custom atomic units:
 
 ```go
 w.Write(func(fw *flecs.Writer) {
-    // Register a Day unit derived from the built-in Hour.
     dayID = flecs.RegisterUnit(fw, "Day", "d", w.Hour(), 24)
 })
 ```
 
-Arguments: `name` (entity name + Unit.Name), `symbol` (short display string), `base` (parent unit entity; 0 for a root/SI unit), `factor` (multiplier to convert one of this unit into one of the base: `Factor=24` means "1 Day = 24 Hours"). Panics if factor == 0.
+Arguments: `name`, `symbol`, `base` (parent unit entity; 0 for a root/SI unit), `factor` (multiplier: `Factor=24` means "1 Day = 24 Hours"). Panics if factor == 0.
+
+## Compound units
+
+Compound units express products, quotients, and powers of existing units. They support dimensional analysis and multi-dimensional conversion.
+
+### Registration helpers
+
+| Function | Effect |
+|---|---|
+| `RegisterCompoundUnit(fw, name, num []ID, denom []ID)` | Full product/quotient; powers by repeating IDs |
+| `UnitProduct(fw, name, a, b)` | `a × b` |
+| `UnitQuotient(fw, name, num, denom)` | `num / denom` |
+| `UnitPower(fw, name, base, exponent)` | `base^exponent` (negative → reciprocal) |
+
+```go
+w.Write(func(fw *flecs.Writer) {
+    mps := flecs.UnitQuotient(fw, "MPS", w.Meter(), w.Second())          // m/s
+    ms2 := flecs.RegisterCompoundUnit(fw, "MS2",
+        []flecs.ID{w.Meter()},
+        []flecs.ID{w.Second(), w.Second()})                               // m/s²
+    nm  := flecs.UnitProduct(fw, "NewtonMeter", w.NewtonCompound(), w.Meter()) // N·m
+    invS := flecs.UnitPower(fw, "InvSecond", w.Second(), -1)             // 1/s
+})
+```
+
+Panics if any factor ID is zero, a cycle is detected (depth limit 8), or depth overflows.
+
+### Symbol composition
+
+Auto-generated display strings use `·` (U+00B7) for products and `/` for quotients. Exponents 2 and 3 use Unicode superscripts; higher use `^n`. An explicit `Symbol` set at registration overrides the auto-generated string.
+
+| Composition | Auto-symbol |
+|---|---|
+| `[Meter] / [Second]` | `m/s` |
+| `[Meter] / [Second, Second]` | `m/s²` |
+| `[KiloGram, Meter] / [Second, Second]` | `kg·m/s²` |
+| `[] / [Second]` | `1/s` |
+
+`w.UnitSymbol(unitID)` returns the symbol for both atomic and compound units (explicit override > auto-generated > atomic Symbol field).
+
+### Querying compound structure
+
+```go
+if flecs.IsCompound(w, unitID) {
+    nums, denoms := flecs.UnitFactors(w, unitID)
+}
+```
+
+### Conversion algorithm
+
+`Convert(w, value, fromUnit, toUnit)` supports both atomic and compound units.
+
+For each unit, `siCanonical` builds a map from root-base entity ID to net integer exponent and a cumulative float64 scale factor:
+- Atomic units: `{root: 1}`, factor = product of chain multipliers.
+- Compound units: sum numerator canonical maps minus denominator canonical maps; factor = product-of-numerator-factors / product-of-denominator-factors.
+
+Two units are compatible when their net-exponent maps are identical (same dimensions). The conversion factor is `fromFactor / toFactor`.
+
+```go
+// 100 m/s → km/h: fromFactor=1.0, toFactor=1000/3600 ≈ 0.2778 → result=360
+got, ok := flecs.Convert(w, 100, w.MeterPerSecond(), w.KiloMeterPerHour())
+// got == 360, ok == true
+
+// Dimensional mismatch
+_, ok = flecs.Convert(w, 1, w.Meter(), w.NewtonCompound())
+// ok == false
+```
 
 ## Tagging a component
 
@@ -25,44 +91,12 @@ distID := flecs.RegisterComponent[Distance](w)
 w.Write(func(fw *flecs.Writer) {
     fw.SetUnit(distID, w.Meter())
 })
-```
 
-Retrieve the unit later:
-
-```go
 unitID, ok := w.UnitFor(distID)
 // unitID == w.Meter(), ok == true
 ```
 
-## Converting between units
-
-`Convert(w, value, fromUnit, toUnit)` walks each unit's `Base` chain to find a common root. Returns `ok=false` for incompatible units (different root bases) or unknown unit IDs. Same-unit conversion short-circuits with no lookup.
-
-```go
-// 1 km = 1000 m
-v, ok := flecs.Convert(w, 1, w.KiloMeter(), w.Meter())
-// v == 1000, ok == true
-
-// 1 hour = 3600 seconds
-v, ok = flecs.Convert(w, 1, w.Hour(), w.Second())
-// v == 3600, ok == true
-
-// Multi-hop: Day → Hour → Second
-var dayID flecs.ID
-w.Write(func(fw *flecs.Writer) {
-    dayID = flecs.RegisterUnit(fw, "Day", "d", w.Hour(), 24)
-})
-v, ok = flecs.Convert(w, 1, dayID, w.Second())
-// v == 86400, ok == true
-
-// Incompatible units
-_, ok = flecs.Convert(w, 1, w.Meter(), w.Second())
-// ok == false
-```
-
-## Built-in unit set
-
-All 15 built-in units are allocated at world creation at fixed entity indices (48–62) and are never serialized (they are re-created by `New()`).
+## Built-in atomic units (indices 48–62)
 
 | Index | Accessor | Symbol | Quantity | Factor |
 |-------|----------|--------|----------|--------|
@@ -76,43 +110,71 @@ All 15 built-in units are allocated at world creation at fixed entity indices (4
 | 55 | `w.Gram()` | `g` | Mass | root |
 | 56 | `w.KiloGram()` | `kg` | Mass | 1000 × Gram |
 | 57 | `w.MegaGram()` | `Mg` | Mass | 1 000 000 × Gram |
-| 58 | `w.Newton()` | `N` | Force | root (opaque in v1) |
-| 59 | `w.Joule()` | `J` | Energy | root (opaque in v1) |
-| 60 | `w.Hertz()` | `Hz` | Frequency | root (opaque in v1) |
+| 58 | `w.Newton()` | `N` | Force | opaque root (see NewtonCompound) |
+| 59 | `w.Joule()` | `J` | Energy | opaque root (see JouleCompound) |
+| 60 | `w.Hertz()` | `Hz` | Frequency | opaque root (see HertzCompound) |
 | 61 | `w.Radian()` | `rad` | Angle | root |
 | 62 | `w.Degree()` | `°` | Angle | π/180 × Radian |
 
-Newton, Joule, and Hertz are opaque root units in v1; compound-unit semantics (`kg·m/s²`) are deferred to Phase 16.30.1.
+## Built-in compound units (indices 63–72)
+
+Shipped in Phase 16.42 / v0.97.0. User entities start at index 73.
+
+| Index | Accessor | Symbol | Composition | Use |
+|-------|----------|--------|-------------|-----|
+| 63 | `w.MeterPerSecond()` | `m/s` | m/s | velocity |
+| 64 | `w.KiloMeterPerHour()` | `km/h` | km/h | velocity |
+| 65 | `w.MeterPerSecondSquared()` | `m/s²` | m/s² | acceleration |
+| 66 | `w.NewtonCompound()` | `N` | kg·m/s² | force |
+| 67 | `w.JouleCompound()` | `J` | kg·m²/s² | energy |
+| 68 | `w.Watt()` | `W` | kg·m²/s³ | power |
+| 69 | `w.Pascal()` | `Pa` | kg/(m·s²) | pressure |
+| 70 | `w.HertzCompound()` | `Hz` | 1/s | frequency |
+| 71 | `w.RadianPerSecond()` | `rad/s` | rad/s | angular velocity |
+| 72 | `w.Inverse()` | `1/x` | opaque marker | reciprocal helper |
+
+`NewtonCompound`, `JouleCompound`, `HertzCompound` are full compound units with dimensional semantics; `w.Newton()`, `w.Joule()`, `w.Hertz()` remain opaque roots for backwards compatibility.
+
+Reciprocal units: use `UnitPower(base, -1)`:
+```go
+w.Write(func(fw *flecs.Writer) {
+    rpm := flecs.RegisterCompoundUnit(fw, "RPM", nil, []flecs.ID{w.Minute()}) // 1/min
+})
+```
 
 ## Marshal round-trip
 
-User-registered units and component→unit mappings survive `MarshalJSON` / `UnmarshalJSON`. Built-in units are not stored in the JSON (they are re-created at fixed indices by `New()`).
+User-registered units (atomic and compound) and component→unit mappings survive `MarshalJSON` / `UnmarshalJSON`. Built-in units are not stored in JSON (re-created at fixed indices by `New()`). Compound factor lists are serialized via `num_factors` / `denom_factors` in the unit def entry.
 
 ```go
-// Serialize
 data, _ := json.Marshal(w)
 
-// Restore in a new world
 w2 := flecs.New()
-flecs.RegisterComponent[Distance](w2) // must pre-register all component types
+flecs.RegisterComponent[Distance](w2)
 json.Unmarshal(data, w2)
-
-unitID, ok := w2.UnitFor(distID2)
-// unitID == w2.Meter(), ok == true
 ```
+
+## Snapshot round-trip
+
+User-registered unit definitions (atomic and compound) also survive binary snapshots (`TakeSnapshot` / `RestoreSnapshot`). The snapshot serializes unit defs in section 10 of the binary layout.
+
+## REST type-info integration
+
+When a component has a unit tag, the `/type_info/{path}` endpoint emits the unit's display symbol (from `UnitSymbol`) in the `unit` field. For compound units, the auto-generated or explicit symbol is returned (e.g. `"kg·m/s²"`), not just the unit entity name.
 
 ## Divergence from upstream C
 
 | Aspect | Go flecs | Upstream C |
 |--------|----------|------------|
 | Factor encoding | Single `float64` | `{factor int32, power int32}` |
-| Symbol normalization | User-supplied verbatim | Auto-populated from prefix + base |
-| Unit prefix entities | Not ported (Phase 16.30.1) | `EcsUnitPrefix` tree |
-| Compound units (`m/s`) | Not ported (Phase 16.30.1) | `over` numerator/denominator |
+| Symbol normalization | User-supplied / auto-generated | Auto-populated from prefix + base |
+| Unit prefix entities | Not ported | `EcsUnitPrefix` tree |
+| Compound units | ✅ Phase 16.42 | `over` numerator/denominator |
 | Quantity grouping | Not ported | `EcsQuantity` parent scoping |
 
-## Non-goals (v1)
+## Non-goals
 
-- **Compound units** — `MetersPerSecond` (`m/s`), `Joule` as `kg·m²/s²`, etc. are deferred to Phase 16.30.1. Callers wanting `m/s` register an opaque unit with `Symbol: "m/s"`, `Base: 0`, `Factor: 1`.
-- **Automatic conversion in formulas** — callers invoke `Convert` explicitly.
-- **SI vs. US-Customary enforcement** — both coexist freely; no conflict detection.
+- **Dimensional analysis at query time** — Go's type system enforces type-level distinction; no runtime dimensional checks on `Set[Position]`.
+- **SI prefix as compound components** — kilo-, milli- remain atomic (`KiloMeter`, `MilliMeter`).
+- **Implicit unit conversion in query results** — `Convert` is always explicit.
+- **Plain-text parser** — `"m/s"` string → unit ID; registration is API-only.

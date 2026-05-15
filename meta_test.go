@@ -20,8 +20,9 @@ import (
 // EventOnRemove(42), EventOnTableCreate(43), Event(44), DependsOn(45),
 // EventMonitor(46), SlotOf(47), Meter(48), KiloMeter(49), MilliMeter(50),
 // Second(51), MilliSecond(52), Minute(53), Hour(54), Gram(55), KiloGram(56),
-// MegaGram(57), Newton(58), Joule(59), Hertz(60), Radian(61), Degree(62).
-const builtinEntityCount = 62
+// MegaGram(57), Newton(58), Joule(59), Hertz(60), Radian(61), Degree(62),
+// and compound units MeterPerSecond(63)..Inverse(72).
+const builtinEntityCount = 72
 
 // ── Components() ─────────────────────────────────────────────────────────────
 

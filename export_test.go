@@ -136,3 +136,31 @@ func InjectUnitCycle(w *World, a, b ID) {
 	w.unitDefs[a] = uA
 	w.unitDefs[b] = uB
 }
+
+// InjectCompoundCycle injects a cycle into the compound unit registry so that
+// a's compound def now includes b as a factor. For compound cycle tests only.
+func InjectCompoundCycle(w *World, b, a ID) {
+	if w.compoundDefs == nil {
+		w.compoundDefs = make(map[ID]*compoundDef)
+	}
+	// Set a's compound def to reference b, creating a↔b cycle.
+	w.compoundDefs[a] = &compoundDef{numerators: []ID{b}}
+}
+
+// ZeroUnitSymbolForTest clears the Symbol field of unitID's unit def.
+// For testing UnitSymbol's autoSymbol fallback path (line 136) only.
+func ZeroUnitSymbolForTest(w *World, id ID) {
+	if u, ok := w.unitDefs[id]; ok {
+		u.Symbol = ""
+		w.unitDefs[id] = u
+	}
+}
+
+// InjectCompoundDefFull replaces id's compound def with the given num/denom lists.
+// For targeted siCanonical and validateCompound denom-cycle tests only.
+func InjectCompoundDefFull(w *World, id ID, num, denom []ID) {
+	if w.compoundDefs == nil {
+		w.compoundDefs = make(map[ID]*compoundDef)
+	}
+	w.compoundDefs[id] = &compoundDef{numerators: num, denominators: denom}
+}

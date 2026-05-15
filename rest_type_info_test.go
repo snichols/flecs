@@ -311,8 +311,8 @@ func TestRESTTypeInfoWithUnit(t *testing.T) {
 	if err := json.Unmarshal(body, &info); err != nil {
 		t.Fatalf("unmarshal: %v; body: %s", err, body)
 	}
-	if info.Unit != "Meter" {
-		t.Errorf("unit want %q, got %q", "Meter", info.Unit)
+	if info.Unit != "m" {
+		t.Errorf("unit want %q, got %q", "m", info.Unit)
 	}
 }
 
@@ -1125,7 +1125,42 @@ func TestRest_TypeInfo_UnitAnnotation_Nested(t *testing.T) {
 	if info.Kind != "struct" {
 		t.Errorf("kind want struct, got %q", info.Kind)
 	}
-	if info.Unit != "Meter" {
-		t.Errorf("unit want Meter, got %q", info.Unit)
+	if info.Unit != "m" {
+		t.Errorf("unit want m, got %q", info.Unit)
+	}
+}
+
+// tiForce is the component type used to test compound-unit annotation via the V2 REST path.
+type tiForce struct{ N float32 }
+
+// TestRest_TypeInfo_CompoundUnit_V2: V2 /type_info endpoint returns compound symbol (not entity name).
+// Verifies the fix for the V2 path which previously used fr.GetName (entity name "NewtonCompound")
+// instead of w.UnitSymbol (symbol "N").
+func TestRest_TypeInfo_CompoundUnit_V2(t *testing.T) {
+	w := flecs.New()
+	forceID := flecs.RegisterComponent[tiForce](w)
+	w.SetName(forceID, "tiForce")
+	w.Write(func(fw *flecs.Writer) {
+		fw.SetUnit(forceID, w.NewtonCompound())
+	})
+	srv := httptest.NewServer(flecs.NewRESTHandler(w))
+	t.Cleanup(srv.Close)
+
+	// Default (no ?depth=) → V2 path.
+	resp := restGet(t, srv, "/type_info/tiForce")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /type_info/tiForce: want 200, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	var info struct {
+		Unit string `json:"unit"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		t.Fatalf("unmarshal: %v; body: %s", err, body)
+	}
+	// Must be the compound symbol "N", not the entity name "NewtonCompound".
+	if info.Unit != "N" {
+		t.Errorf("unit want \"N\" (compound symbol), got %q", info.Unit)
 	}
 }
