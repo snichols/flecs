@@ -65,8 +65,8 @@ func TestSchemaVersion_OldSnapshotReadsAsZero(t *testing.T) {
 	v2bytes := make([]byte, len(v3bytes)-4)
 	copy(v2bytes[:4], v3bytes[:4])              // magic
 	binary.BigEndian.PutUint32(v2bytes[4:8], 2) // format version = 2
-	copy(v2bytes[8:16], v3bytes[8:16])           // worldID
-	copy(v2bytes[16:], v3bytes[20:])             // skip 4-byte schema version prefix
+	copy(v2bytes[8:16], v3bytes[8:16])          // worldID
+	copy(v2bytes[16:], v3bytes[20:])            // skip 4-byte schema version prefix
 
 	snap2, err := flecs.LoadSnapshot(v2bytes)
 	if err != nil {
@@ -365,8 +365,6 @@ func TestMigration_RewriteBytes_StructGrew(t *testing.T) {
 
 func TestMigration_ChainV1ToV4(t *testing.T) {
 	type A struct{ V int32 }
-	type B struct{ V int32 }
-	type C struct{ V int32 }
 	type D struct{ V int32 }
 
 	w1 := flecs.New()
@@ -419,7 +417,6 @@ func TestMigration_ChainV1ToV4(t *testing.T) {
 
 func TestMigration_ChainOrder_Deterministic(t *testing.T) {
 	type A struct{ V int32 }
-	type B struct{ V int32 }
 	type C struct{ V int32 }
 
 	w1 := flecs.New()
