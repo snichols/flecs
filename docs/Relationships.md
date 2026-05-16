@@ -516,7 +516,7 @@ q := flecs.NewQueryFromTerms(w, flecs.With(posID).Up(containedBy))
 _ = q
 ```
 
-For full traversal examples see [Queries.md — Traversal](Queries.md#traversal).
+For full traversal examples see [Queries.md — Relationship Traversal](Queries.md#relationship-traversal).
 
 ---
 

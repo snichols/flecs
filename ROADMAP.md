@@ -1,8 +1,10 @@
 # Roadmap
 
-## Shipped (through v0.112.0)
+## Shipped (through v0.113.0)
 
 The following features are available in the current release:
+
+- **documentation & API consistency hardening _(v0.113.0)_** — Phase 16.58. Zero new API surface. `docs/AUDIT.md` audit trail; `TestDocLinks` stdlib-only link-checker; `ExampleTakeSnapshot` and `ExampleWorld_ProgressContext` runnable examples; README stale-API fix (removed `w.Readonly`/`ReadonlyEnd` references); three broken doc anchors repaired; BENCH.md refreshed; godoc gap = 0 across root package and `flectest`. See [docs/AUDIT.md](docs/AUDIT.md).
 
 - **snapshot schema-version tagging and migration registry _(v0.112.0)_** — `w.SetSchemaVersion(v)` declares the world's current schema; the version is embedded in every binary snapshot (format v3). `w.RegisterMigration(from, to, fn)` registers steps that form a consecutive chain applied when the snapshot schema is older than the world schema. `*MigrationContext` exposes decoded snapshot data as component-name-keyed records; operations: `RenameComponent`, `DropComponent`, `AddComponent`, `EachComponent` (byte rewrite via `ComponentRecord.SetRaw`). Sentinel errors: `ErrMissingMigration` (chain gap) and `ErrSnapshotNewerThanWorld`. Atomicity: decode + migrate + validate before any world mutation; failed migrations leave the world unchanged. Format v2 snapshots still accepted (schema version defaults to 0). See [docs/SnapshotMigration.md](docs/SnapshotMigration.md).
 

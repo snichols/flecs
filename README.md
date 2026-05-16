@@ -180,29 +180,29 @@ modifiers. Non-inheritable components (the default) are unaffected.
 
 ### Concurrency model
 
-Outside `Progress`, the world is single-threaded by convention. For concurrent
-read access — for example, parallelising an expensive query across workers —
-wrap the read window in `w.Readonly(func() { ... })`:
+`w.Read(func(*flecs.Reader))` opens a shared-read scope backed by
+`sync.RWMutex`. Multiple goroutines may hold concurrent Read scopes — so
+parallelising an expensive query across workers is safe:
 
 ```go
-w.Readonly(func() {
+w.Read(func(fr *flecs.Reader) {
     var wg sync.WaitGroup
     for range numWorkers {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            flecs.Each1[Position](w, func(e flecs.ID, p *Position) { ... })
+            flecs.Each1[Position](fr, func(e flecs.ID, p *Position) { ... })
         }()
     }
     wg.Wait()
-}) // deferred writes (if any) are applied here
+})
 ```
 
-While the window is open, any goroutine that calls a mutator (`Set`, `Remove`,
-`Delete`, `AddID`, `RemoveID`, `SetPair`, `SetByID`) has its operation buffered
-in the deferred-command queue and applied when `ReadonlyEnd` is called.
-Readers take **no locks** — the readonly flag guarantees nothing mutates world
-state during the window, so all ECS tables are safe to read concurrently.
+`w.Write(func(*flecs.Writer))` acquires an exclusive write lock. Structural
+mutations inside the scope (`Set`, `Remove`, `Delete`, `AddID`, `RemoveID`,
+`SetPair`, `SetByID`) are transparently enqueued in the deferred-command queue
+and flushed when the scope exits. Nested `Write` calls from the same goroutine
+share the queue and flush only when the outermost `Write` returns.
 
 ---
 
@@ -236,8 +236,8 @@ state during the window, so all ECS tables are safe to read concurrently.
 | Entity ID ranges _(v0.71.0)_ | `RangeSet(fw, min, max)` / `RangeClear(fw)` / `RangeGet(scope)` / `RangeNew(fw, min, max)` — constrain `NewEntity` to a `[min, max)` slice for per-owner ID partitioning; one-shot allocation via `RangeNew`; JSON round-trip preserves range state |
 | Entity scoping _(v0.74.0)_ | `WithinScope(fw, parent, fn)` — push a parent so every `NewEntity` / `RangeNew` inside fn auto-receives `(ChildOf, parent)`; defer-based pop survives panics. `PushScope(fw, parent)` / `PopScope(fw, prev)` for cross-function-boundary callers. `GetScope(scope)` returns current top (0 on Reader). `MakeAlive` bypasses scope; `RangeNew` respects it. Stack resets at each top-level `w.Write` entry. |
 | Observer propagation along IsA _(v0.72.0)_ | `OnAdd`/`OnSet`/`OnRemove` and custom `Emit` propagate downward along IsA edges after the source-entity dispatch — once per transitive inheritor; DontInherit gate suppresses entirely; override gate (inheritor owns local copy) skips that inheritor; multi-term observers re-evaluate filter per inheritor; BFS cache with O(1) invalidation |
-| Deferred commands | `Defer`, `DeferBegin`, `DeferEnd` |
-| Readonly concurrency window | `w.Readonly(fn)`, `ReadonlyBegin`, `ReadonlyEnd` |
+| Deferred command queue | `w.Write(func(*Writer))` — mutations queued and flushed atomically on scope exit; safe during iteration |
+| Concurrent read scope | `w.Read(func(*Reader))` — shared `sync.RWMutex` read-lock; multiple goroutines may hold concurrent Read scopes |
 | Exclusive-access ownership assertion | `ExclusiveAccessBegin`, `ExclusiveAccessEnd` — always on; panics with `ErrExclusiveAccessViolation` on cross-goroutine violations; common case costs one `atomic.Load` per call |
 | NOT / Optional query terms | `NewQueryFromTerms`, `With`, `Without`, `Maybe`, `FieldMaybe` |
 | OR query terms | `Or`, `TermOr`, `FieldMaybe` on Or-group IDs |

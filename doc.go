@@ -381,6 +381,60 @@
 //	w2.UnmarshalJSON(data)
 //	// flecs.Get[Position](w2, restoredInst) returns Position{1, 1}.
 //
+// # Streaming Snapshots
+//
+// [World.TakeSnapshotTo] serializes the world directly to any [io.Writer]
+// without materializing an intermediate [*Snapshot] in memory. This is ideal
+// for streaming to a file, network connection, or pipe where the full payload
+// may be too large to buffer comfortably:
+//
+//	f, _ := os.Create("save.bin")
+//	defer f.Close()
+//	if _, err := w.TakeSnapshotTo(f); err != nil {
+//	    log.Fatal(err)
+//	}
+//
+// [World.TakeSnapshotToContext] adds cooperative cancellation: it checks the
+// context between serialization stages and returns ctx.Err() when cancelled.
+// A partial stream written to out before cancellation is incomplete and must
+// not be passed to [ReadSnapshotFrom]:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	n, err := w.TakeSnapshotToContext(ctx, f)
+//
+// Both methods hold the world read lock for the entire write duration. For very
+// large worlds where blocking writers is unacceptable, use [World.TakeSnapshot]
+// (which releases the lock quickly) and then stream the captured [*Snapshot]
+// out-of-lock via [(*Snapshot).WriteTo]:
+//
+//	snap := w.TakeSnapshot()
+//	go func() { snap.WriteTo(f) }() // world is no longer locked
+//
+// # Snapshot Migration
+//
+// [World.SetSchemaVersion] stamps a uint32 user schema version into every
+// snapshot produced by [World.TakeSnapshot] / [World.TakeSnapshotTo]. When
+// loading a snapshot whose schema version differs from the live world's version,
+// the registered migration chain is executed before the data is materialized:
+//
+//	w.SetSchemaVersion(2)
+//	w.RegisterMigration(1, 2, func(m *flecs.MigrationContext) error {
+//	    // rename "pkg.OldName" to "pkg.NewName" in the snapshot IR
+//	    return m.RenameComponent("pkg.OldName", "pkg.NewName")
+//	})
+//	_, err := w.LoadSnapshot(snap) // auto-migrates v1 → v2
+//
+// [World.RegisterMigration] registers a [MigrationFunc] that transforms a
+// [MigrationContext] — the neutral intermediate representation of decoded
+// snapshot tables. A MigrationFunc may rename, drop, add, or byte-rewrite
+// component records. Multiple steps may be chained; flecs finds and executes
+// the shortest path from snapshot version to world version automatically.
+//
+// Errors: loading fails with [ErrMissingMigration] when the path is incomplete,
+// and with [ErrSnapshotNewerThanWorld] when the snapshot was saved at a higher
+// version than the world understands.
+//
 // # Change Detection
 //
 // [CachedQuery.Changed] provides opt-in, per-table change detection so that
