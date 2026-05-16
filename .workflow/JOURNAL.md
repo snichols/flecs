@@ -1,8 +1,0 @@
-## iterate iteration 1 (2026-05-15)
-
-Phase 16.58 documentation & API consistency hardening (v0.113.0) complete. Deliverables: (1) godoc completeness audit — zero undocumented exported symbols; (2) TestDocLinks stdlib-only test in docs/docs_link_test.go verifying all internal doc links resolve — fixed broken anchor in Relationships.md and missing {#feature-gap-list} anchor in docs/README.md; (3) two new runnable examples: ExampleTakeSnapshot (example_snapshot_test.go) and ExampleWorld_ProgressContext (example_context_test.go); (4) README.md concurrency model section and feature table updated to current w.Read/w.Write API (removed stale w.Readonly, DeferBegin/DeferEnd references); (5) CHANGELOG.md v0.113.0 entry added, ROADMAP.md updated; (6) BENCH.md refreshed with 10 missing benchmark index entries and v0.113.0 baseline numbers; (7) docs/AUDIT.md created as audit trail. All checks pass: go vet, golangci-lint, go test -race -count=3, coverage 95.0% ≥95% threshold. Zero exported API surface change.
-
-## iterate iteration 2 (2026-05-15)
-
-Added "# Streaming Snapshots" and "# Snapshot Migration" sections to doc.go package overview, covering TakeSnapshotTo/TakeSnapshotToContext and SetSchemaVersion/RegisterMigration respectively. All tests pass: go vet clean, go test -race -count=1 passes across all packages.
-
